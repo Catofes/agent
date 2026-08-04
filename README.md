@@ -12,14 +12,21 @@ id,name
 2102,李四
 ```
 
-将名单保存到 `data/students.csv`，然后设置三个必填密钥：
+将名单保存到 `data/students.csv`，然后在项目根目录创建 `.env`：
+
+```dotenv
+DEEPSEEK_API_KEY='替换为真实 Key'
+ADMIN_PASSWORD='替换为教师口令'
+ANONYMOUS_HMAC_KEY='替换为独立的长随机字符串'
+```
+
+构建并运行二进制：
 
 ```bash
-export DEEPSEEK_API_KEY='替换为真实 Key'
-export ADMIN_PASSWORD='替换为教师口令'
-export ANONYMOUS_HMAC_KEY='替换为独立的长随机字符串'
 make run
 ```
+
+`make run` 会自动加载 `.env`、构建 `build/classroom-agent`，然后以前台方式运行。开发时如需直接执行源码，可使用 `make dev`。通过 `ENV_FILE` 可以指定其他环境文件，例如 `make run ENV_FILE=.env.production`。
 
 打开：
 
