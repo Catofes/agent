@@ -1,0 +1,7 @@
+/build/
+/data/*.db
+/data/*.db-*
+/data/backups/
+/.env
+/config.yaml
+*.log

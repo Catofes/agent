@@ -1,0 +1,15 @@
+# 当前版本通过同名环境变量或启动参数读取配置；此文件用于部署时核对。
+listen: ":8080"
+database_path: "data/app.db"
+students_csv: "data/students.csv"
+deepseek_base_url: "https://api.deepseek.com"
+deepseek_model: "deepseek-v4-flash"
+deepseek_api_key: "${DEEPSEEK_API_KEY}"
+admin_password: "${ADMIN_PASSWORD}"
+anonymous_hmac_key: "${ANONYMOUS_HMAC_KEY}"
+cookie_secure: false
+require_name_initial: false
+llm_concurrency: 40
+per_student_token_budget: 200000
+default_max_turns: 5
+max_tool_calls: 8
