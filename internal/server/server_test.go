@@ -38,7 +38,55 @@ func (directClient) Complete(_ context.Context, req agent.CompletionRequest) (ag
 	return out, nil
 }
 
+type blockingClient struct {
+	started  chan struct{}
+	canceled chan struct{}
+	start    sync.Once
+	stop     sync.Once
+}
+
+type delayedClient struct {
+	first   chan struct{}
+	release chan struct{}
+}
+
+func newDelayedClient() *delayedClient {
+	return &delayedClient{first: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (c *delayedClient) Complete(ctx context.Context, req agent.CompletionRequest) (agent.Completion, error) {
+	if err := req.OnDelta("先到"); err != nil {
+		return agent.Completion{}, err
+	}
+	close(c.first)
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return agent.Completion{}, ctx.Err()
+	}
+	if err := req.OnDelta("后到"); err != nil {
+		return agent.Completion{}, err
+	}
+	return agent.Completion{Content: "先到后到", Deltas: []string{"先到", "后到"}, TokensIn: 2, TokensOut: 2}, nil
+}
+
+func newBlockingClient() *blockingClient {
+	return &blockingClient{started: make(chan struct{}), canceled: make(chan struct{})}
+}
+
+func (c *blockingClient) Complete(ctx context.Context, _ agent.CompletionRequest) (agent.Completion, error) {
+	c.start.Do(func() { close(c.started) })
+	<-ctx.Done()
+	c.stop.Do(func() { close(c.canceled) })
+	return agent.Completion{}, ctx.Err()
+}
+
 func testServer(t *testing.T) (http.Handler, *store.Store) {
+	app, st := testServerWithClient(t, directClient{})
+	return app.Routes(), st
+}
+
+func testServerWithClient(t *testing.T, client agent.Client) (*Server, *store.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "app.db"))
@@ -55,13 +103,13 @@ func testServer(t *testing.T) (http.Handler, *store.Store) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{AdminPassword: "teacher-secret", AnonymousHMACKey: "hmac-secret", SessionTTL: time.Hour, LLMTimeout: time.Second, LLMConcurrency: 4, StudentTokenBudget: 1000, DefaultMaxTurns: 5, MinMaxTurns: 1, MaxMaxTurns: 8, MaxToolCalls: 4, MaxPersonaChars: 100, MaxSkillChars: 1000, MaxInputChars: 100, MaxOutputChars: 1000}
-	engine := agent.NewEngine(st, directClient{}, tools.NewRegistry(tools.Calculator{}), "fake", "hmac-secret", time.Second, 4)
+	engine := agent.NewEngine(st, client, tools.NewRegistry(tools.Calculator{}), "fake", "hmac-secret", time.Second, 4)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("student")}, "teacher.html": &fstest.MapFile{Data: []byte("teacher")}, "screen.html": &fstest.MapFile{Data: []byte("screen")}}
 	templates := fstest.MapFS{"quiz.md": &fstest.MapFile{Data: []byte("# template")}}
 	app := New(cfg, st, engine, web, templates, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(func() { st.Close() })
-	return app.Routes(), st
+	return app, st
 }
 
 type testClient struct {
@@ -281,6 +329,103 @@ func TestSpotlightBeforeAndAfterScreenConnect(t *testing.T) {
 	}
 }
 
+func TestShutdownClosesStreamsAndCancelsLLM(t *testing.T) {
+	client := newBlockingClient()
+	app, _ := testServerWithClient(t, client)
+	handler := app.Routes()
+	student := newClient(handler)
+	status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, conversation, _ := requestJSON(t, student, http.MethodPost, "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	teacher := newClient(handler)
+	status, _, _ = requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+
+	studentEvents, cancelStudent, studentDone := startHandlerStream(handler, http.MethodGet, "/api/events", student.cookie, nil)
+	defer cancelStudent()
+	wallEvents, cancelWall, wallDone := startHandlerStream(handler, http.MethodGet, "/api/teacher/wall", teacher.cookie, nil)
+	defer cancelWall()
+	screenEvents, cancelScreen, screenDone := startHandlerStream(handler, http.MethodGet, "/api/screen/events", nil, nil)
+	defer cancelScreen()
+	for name, stream := range map[string]*streamResponse{"student": studentEvents, "wall": wallEvents, "screen": screenEvents} {
+		waitFlush(t, name, stream)
+	}
+
+	chatBody, _ := json.Marshal(map[string]string{"conversation_id": conversation["id"].(string), "message": "等待模型"})
+	_, cancelChat, chatDone := startHandlerStream(handler, http.MethodPost, "/api/chat", student.cookie, chatBody)
+	defer cancelChat()
+	select {
+	case <-client.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("LLM request did not start")
+	}
+
+	started := time.Now()
+	app.Shutdown()
+	app.Shutdown()
+	deadline := time.After(2 * time.Second)
+	for name, done := range map[string]<-chan struct{}{"student": studentDone, "wall": wallDone, "screen": screenDone, "chat": chatDone, "llm": client.canceled} {
+		select {
+		case <-done:
+		case <-deadline:
+			t.Fatalf("%s did not stop within 2 seconds", name)
+		}
+	}
+	if elapsed := time.Since(started); elapsed >= 2*time.Second {
+		t.Fatalf("shutdown took %v", elapsed)
+	}
+	if got := app.studentHub.Count() + app.wallHub.Count() + app.screenHub.Count(); got != 0 {
+		t.Fatalf("shutdown left %d event subscribers", got)
+	}
+}
+
+func TestChatFlushesFirstDeltaBeforeCompletion(t *testing.T) {
+	client := newDelayedClient()
+	app, _ := testServerWithClient(t, client)
+	handler := app.Routes()
+	student := newClient(handler)
+	status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, conversation, _ := requestJSON(t, student, http.MethodPost, "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	body, _ := json.Marshal(map[string]string{"conversation_id": conversation["id"].(string), "message": "流式测试"})
+	stream, cancel, done := startHandlerStream(handler, http.MethodPost, "/api/chat", student.cookie, body)
+	defer cancel()
+	select {
+	case <-client.first:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first upstream delta did not arrive")
+	}
+	partial := string(stream.bytes())
+	if !strings.Contains(partial, `"type":"text_delta"`) || !strings.Contains(partial, `"delta":"先到"`) {
+		t.Fatalf("first delta was not flushed: %s", partial)
+	}
+	if strings.Contains(partial, "后到") || strings.Contains(partial, `"type":"turn_end"`) {
+		t.Fatalf("response completed before delayed upstream was released: %s", partial)
+	}
+	close(client.release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("chat did not finish after upstream release")
+	}
+	complete := string(stream.bytes())
+	if !strings.Contains(complete, `"delta":"后到"`) || !strings.Contains(complete, `"type":"turn_end"`) {
+		t.Fatalf("final stream is incomplete: %s", complete)
+	}
+}
+
 type streamResponse struct {
 	mu      sync.Mutex
 	header  http.Header
@@ -312,8 +457,22 @@ func (w *streamResponse) bytes() []byte {
 }
 
 func startScreenStream(handler http.Handler) (*streamResponse, context.CancelFunc, <-chan struct{}) {
+	return startHandlerStream(handler, http.MethodGet, "/api/screen/events", nil, nil)
+}
+
+func startHandlerStream(handler http.Handler, method, target string, cookie *http.Cookie, body []byte) (*streamResponse, context.CancelFunc, <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest(http.MethodGet, "/api/screen/events", nil).WithContext(ctx)
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req := httptest.NewRequest(method, target, reader).WithContext(ctx)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
 	w := newStreamResponse()
 	done := make(chan struct{})
 	go func() {
@@ -321,6 +480,15 @@ func startScreenStream(handler http.Handler) (*streamResponse, context.CancelFun
 		close(done)
 	}()
 	return w, cancel, done
+}
+
+func waitFlush(t *testing.T, name string, response *streamResponse) {
+	t.Helper()
+	select {
+	case <-response.flushed:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s stream did not flush", name)
+	}
 }
 
 func waitSSEJSON(t *testing.T, response *streamResponse, want int) map[string]any {

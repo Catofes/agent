@@ -170,6 +170,13 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := s.withShutdown(r.Context())
+	defer cancel()
+	r = r.WithContext(ctx)
+	if ctx.Err() != nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVER_SHUTTING_DOWN", "服务正在停止，请稍后重试")
+		return
+	}
 	p := principalOf(r)
 	run, err := s.Store.Run(r.Context(), p.Session.RunID)
 	if err != nil || run.Locked {
@@ -283,6 +290,8 @@ func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 	defer tick.Stop()
 	for {
 		select {
+		case <-s.shutdown.Done():
+			return
 		case ev, open := <-ch:
 			if !open {
 				return
@@ -346,6 +355,8 @@ func (s *Server) wallEvents(w http.ResponseWriter, r *http.Request) {
 	defer tick.Stop()
 	for {
 		select {
+		case <-s.shutdown.Done():
+			return
 		case _, open := <-ch:
 			if !open || !sendWall() {
 				return
@@ -521,6 +532,8 @@ func (s *Server) screenEvents(w http.ResponseWriter, r *http.Request) {
 	defer tick.Stop()
 	for {
 		select {
+		case <-s.shutdown.Done():
+			return
 		case state, open := <-ch:
 			if !open {
 				return

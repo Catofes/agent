@@ -57,25 +57,56 @@ func main() {
 	engine.TokenBudget = cfg.StudentTokenBudget
 	engine.MaxToolCalls = cfg.MaxToolCalls
 	engine.MaxOutputChars = cfg.MaxOutputChars
+	engine.MaxReasoningChars = cfg.MaxReasoningChars
 	engine.InputPricePerM = cfg.InputPricePerM
 	engine.OutputPricePerM = cfg.OutputPricePerM
 	webFS, _ := fs.Sub(assets, "web")
 	templateFS, _ := fs.Sub(assets, "data/templates")
 	app := server.New(cfg, st, engine, webFS, templateFS, logger)
 	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: app.Routes(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
-	stop := make(chan os.Signal, 1)
+	stop := make(chan os.Signal, 2)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(stop)
+	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("server started", "listen", cfg.ListenAddr, "version", version, "run_id", run.ID)
-		if e := httpServer.ListenAndServe(); e != nil && !errors.Is(e, http.ErrServerClosed) {
-			logger.Error("server stopped unexpectedly", "error", e)
-			os.Exit(1)
+		e := httpServer.ListenAndServe()
+		if errors.Is(e, http.ErrServerClosed) {
+			e = nil
 		}
+		serveErr <- e
 	}()
-	<-stop
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	_ = httpServer.Shutdown(ctx)
+	select {
+	case e := <-serveErr:
+		if e != nil {
+			logger.Error("server stopped unexpectedly", "error", e)
+		}
+		return
+	case sig := <-stop:
+		logger.Info("shutdown requested", "signal", sig.String())
+	}
+
+	app.Shutdown()
+	shutdownDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		shutdownDone <- httpServer.Shutdown(ctx)
+	}()
+	select {
+	case e := <-shutdownDone:
+		if e != nil {
+			logger.Error("graceful shutdown failed", "error", e)
+			if closeErr := httpServer.Close(); closeErr != nil {
+				logger.Error("force close after shutdown failure", "error", closeErr)
+			}
+		}
+	case sig := <-stop:
+		logger.Warn("second shutdown signal received; forcing close", "signal", sig.String())
+		if e := httpServer.Close(); e != nil {
+			logger.Error("force close failed", "error", e)
+		}
+	}
 	logger.Info("server stopped")
 }
 

@@ -16,7 +16,8 @@ import (
 
 type Message struct {
 	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
+	Content    string     `json:"content"`
+	Reasoning  string     `json:"reasoning_content,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
@@ -33,19 +34,22 @@ type ToolFunction struct {
 }
 
 type CompletionRequest struct {
-	Model    string
-	UserID   string
-	Messages []Message
-	Tools    []tools.Definition
-	OnDelta  func(string) error
+	Model            string
+	UserID           string
+	Messages         []Message
+	Tools            []tools.Definition
+	OnDelta          func(string) error
+	OnReasoningDelta func(string) error
 }
 
 type Completion struct {
-	Content   string
-	Deltas    []string
-	ToolCalls []ToolCall
-	TokensIn  int64
-	TokensOut int64
+	Content         string
+	Reasoning       string
+	Deltas          []string
+	ReasoningDeltas []string
+	ToolCalls       []ToolCall
+	TokensIn        int64
+	TokensOut       int64
 }
 
 type Client interface {
@@ -59,12 +63,11 @@ type DeepSeekClient struct {
 }
 
 func (c *DeepSeekClient) Complete(ctx context.Context, in CompletionRequest) (Completion, error) {
-	body := map[string]any{"model": in.Model, "messages": in.Messages, "stream": true, "stream_options": map[string]any{"include_usage": true}, "user": in.UserID}
+	body := map[string]any{"model": in.Model, "messages": in.Messages, "stream": true, "stream_options": map[string]any{"include_usage": true}, "user": in.UserID, "thinking": map[string]string{"type": "enabled"}, "reasoning_effort": "high"}
 	body["user_id"] = in.UserID
 	delete(body, "user")
 	if len(in.Tools) > 0 {
 		body["tools"] = in.Tools
-		body["tool_choice"] = "auto"
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -87,14 +90,14 @@ func (c *DeepSeekClient) Complete(ctx context.Context, in CompletionRequest) (Co
 		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return Completion{}, fmt.Errorf("provider status %d: %s", resp.StatusCode, sanitizeProviderError(limited))
 	}
-	return decodeStreamWithDelta(resp.Body, in.OnDelta)
+	return decodeStreamWithDelta(resp.Body, in.OnDelta, in.OnReasoningDelta)
 }
 
 func decodeStream(r io.Reader) (Completion, error) {
-	return decodeStreamWithDelta(r, nil)
+	return decodeStreamWithDelta(r, nil, nil)
 }
 
-func decodeStreamWithDelta(r io.Reader, onDelta func(string) error) (Completion, error) {
+func decodeStreamWithDelta(r io.Reader, onDelta, onReasoningDelta func(string) error) (Completion, error) {
 	type streamTool struct {
 		Index    int    `json:"index"`
 		ID       string `json:"id"`
@@ -108,6 +111,7 @@ func decodeStreamWithDelta(r io.Reader, onDelta func(string) error) (Completion,
 		Choices []struct {
 			Delta struct {
 				Content   string       `json:"content"`
+				Reasoning string       `json:"reasoning_content"`
 				ToolCalls []streamTool `json:"tool_calls"`
 			} `json:"delta"`
 		} `json:"choices"`
@@ -141,6 +145,15 @@ func decodeStreamWithDelta(r io.Reader, onDelta func(string) error) (Completion,
 			out.TokensOut = ch.Usage.Completion
 		}
 		for _, choice := range ch.Choices {
+			if choice.Delta.Reasoning != "" {
+				out.Reasoning += choice.Delta.Reasoning
+				out.ReasoningDeltas = append(out.ReasoningDeltas, choice.Delta.Reasoning)
+				if onReasoningDelta != nil {
+					if err := onReasoningDelta(choice.Delta.Reasoning); err != nil {
+						return Completion{}, err
+					}
+				}
+			}
 			if choice.Delta.Content != "" {
 				out.Content += choice.Delta.Content
 				out.Deltas = append(out.Deltas, choice.Delta.Content)

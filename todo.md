@@ -79,21 +79,21 @@
 
 #### F. `Ctrl+C` 退出被 SSE 长连接拖慢
 
-- [ ] `P0` 为服务建立全局 shutdown context；收到 `SIGINT/SIGTERM` 后先取消学生事件、教师状态墙、大屏 SSE 和在途聊天，再调用 HTTP graceful shutdown。
-- [ ] `P0` SSE handler 同时监听请求 context 与全局 shutdown context，停机时立即退出并释放订阅者；不得等待 15 秒超时才退出。
-- [ ] `P0` 检查并记录 `http.Server.Shutdown` 返回错误；首次信号优雅退出，必要时允许第二次 `Ctrl+C` 强制结束。
-- [ ] `P0` 增加停机测试：保持三类 SSE 连接和一个 fake LLM 请求时触发 shutdown，连接及时关闭、模型请求被取消，进程在 2 秒内结束且无 goroutine 泄漏。
+- [x] `P0` 为服务建立全局 shutdown context；收到 `SIGINT/SIGTERM` 后先取消学生事件、教师状态墙、大屏 SSE 和在途聊天，再调用 HTTP graceful shutdown。
+- [x] `P0` SSE handler 同时监听请求 context 与全局 shutdown context，停机时立即退出并释放订阅者；不得等待 15 秒超时才退出。
+- [x] `P0` 检查并记录 `http.Server.Shutdown` 返回错误；首次信号优雅退出，必要时允许第二次 `Ctrl+C` 强制结束。
+- [x] `P0` 增加停机测试：保持三类 SSE 连接和一个 fake LLM 请求时触发 shutdown，连接及时关闭、模型请求被取消，进程在 2 秒内结束且无 goroutine 泄漏。
 
 #### G. 对话流式输出颗粒度与视觉反馈
 
 - [x] `P0` DeepSeek 请求已设置 `stream: true`，服务端按上游 SSE delta 解析，并在每个前端 NDJSON 事件后调用 `Flush`；DeepSeek API 本身支持流式传输。
 - [ ] `P0` 增加分段时间观测，分别记录匿名化的“上游 delta 到达、服务端 flush、浏览器 read/绘制”时间，定位整段出现发生在模型、代理、网络还是前端渲染层。
-- [ ] `P0` 增加带延迟 fake upstream 的端到端测试，证明首个 `text_delta` 在整轮完成前到达浏览器，并覆盖多个 delta 被合并在同一个网络 chunk 的情况。
+- [ ] `P0` 增加带延迟 fake upstream 的端到端测试，证明首个 `text_delta` 在整轮完成前到达浏览器，并覆盖多个 delta 被合并在同一个网络 chunk 的情况。（服务端首段提前 flush 已覆盖；浏览器合并 chunk 的自动化用例待补。）
 - [ ] `P0` 核对实际部署代理是否关闭响应缓冲和压缩聚合；保留 `Cache-Control: no-transform`、`X-Accel-Buffering: no`，并完成局域网真机测试。
-- [ ] `P1` 前端使用短队列配合 `requestAnimationFrame` 渐进绘制合并到达的 delta，避免一整个段落同时跳出；设置队列上限，后台标签页或积压过多时立即追平，不人为拖慢答案完成时间。
-- [ ] `P0` 显式启用并解析 DeepSeek `reasoning_content`，通过独立的 `reasoning_delta` 事件流式发送；不得与最终正文 `text_delta` 或真实工具行动记录混在一起。
-- [ ] `P0` 学生端增加可折叠的“模型思考草稿”：生成时显示“正在思考”并允许展开，最终回答开始后默认收起；标注“这是模型生成的草稿，可能不准确”。
-- [ ] `P0` 思考内容按纯文本渲染并设置单轮长度上限；不得包含密钥、session、管理信息或服务端技术错误，客户端停止生成时同步停止思考流。
+- [x] `P1` 前端使用短队列配合 `requestAnimationFrame` 渐进绘制合并到达的 delta，避免一整个段落同时跳出；设置队列上限，后台标签页或积压过多时立即追平，不人为拖慢答案完成时间。
+- [x] `P0` 显式启用并解析 DeepSeek `reasoning_content`，通过独立的 `reasoning_delta` 事件流式发送；不得与最终正文 `text_delta` 或真实工具行动记录混在一起。
+- [x] `P0` 学生端增加可折叠的“模型思考草稿”：生成时显示“正在思考”并允许展开，最终回答开始后默认收起；标注“这是模型生成的草稿，可能不准确”。
+- [x] `P0` 思考内容按纯文本渲染并设置单轮长度上限；不得包含密钥、session、管理信息或服务端技术错误，客户端停止生成时同步停止思考流。
 - [ ] `P1` 决定思考草稿是否持久化；若持久化，必须支持刷新恢复、分页和删除，且独立于最终回答和 Memory，不把草稿重新作为历史上下文发送给模型。
 - [ ] `P1` 教师个体视图可按需展开思考草稿；公开大屏默认不展示，后续如允许展示必须由教师显式开启并经过长度截断。
 
@@ -137,7 +137,7 @@
 
 ## 2. SQLite 模型、迁移与名单导入
 
-- [x] `P0` 建立带版本号的迁移机制，创建设计方案中的表：`runs`、`students`、`sessions`、`designs`、`messages`、`usage`；v2 增加 `conversations` 并迁移历史消息。
+- [x] `P0` 建立带版本号的迁移机制，创建设计方案中的表：`runs`、`students`、`sessions`、`designs`、`messages`、`usage`；v2 增加 `conversations` 并迁移历史消息，v3 增加思考模式工具调用所需的私有协议元数据。
 - [x] `P0` 为实际功能补齐字段和约束：
   - `sessions` 增加 `created_at`、`last_seen_at`、`revoked_at`；
   - `messages` 为 `run_id + student_id + turn_id` 建索引；
@@ -259,6 +259,7 @@
   - `tool_start`：步骤、工具名、学生可读输入摘要；
   - `tool_result`：步骤、学生可读结果摘要、是否成功；
   - `text_delta`：正文增量；
+  - `reasoning_delta`：可折叠的模型思考草稿增量，与正文和工具行动分离；
   - `turn_end`：结束原因和本轮用量；
   - `error`：稳定错误码和友好文案。
 - [ ] `P0` 原始 tool call JSON 仅放在“技术细节”字段，限制长度并保持纯文本。

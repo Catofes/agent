@@ -75,6 +75,7 @@ type Message struct {
 	Role           string    `json:"role"`
 	Content        string    `json:"content"`
 	ToolCalls      string    `json:"tool_calls,omitempty"`
+	Reasoning      string    `json:"-"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -133,8 +134,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 2 {
-		return fmt.Errorf("database version %d is newer than supported version 2", version)
+	if version > 3 {
+		return fmt.Errorf("database version %d is newer than supported version 3", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -181,28 +182,17 @@ PRAGMA user_version = 1;`
 			return fmt.Errorf("migrate conversations: %w", err)
 		}
 	}
+	if version < 3 {
+		if err := s.migrateReasoning(ctx); err != nil {
+			return fmt.Errorf("migrate reasoning metadata: %w", err)
+		}
+	}
 	return nil
 }
 
 func (s *Store) migrateConversations(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(messages)`)
+	hasConversationID, err := s.tableHasColumn(ctx, "messages", "conversation_id")
 	if err != nil {
-		return err
-	}
-	hasConversationID := false
-	for rows.Next() {
-		var cid, notNull, pk int
-		var name, typ string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		if name == "conversation_id" {
-			hasConversationID = true
-		}
-	}
-	if err := rows.Close(); err != nil {
 		return err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -242,6 +232,48 @@ func (s *Store) migrateConversations(ctx context.Context) error {
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *Store) migrateReasoning(ctx context.Context) error {
+	hasReasoning, err := s.tableHasColumn(ctx, "messages", "reasoning_content")
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !hasReasoning {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN reasoning_content TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 3`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) tableHasColumn(ctx context.Context, table, column string) (bool, error) {
+	// Callers pass only migration-owned table names, never request data.
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (s *Store) EnsureActiveRun(ctx context.Context, id, name string) (Run, error) {
@@ -544,9 +576,9 @@ func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {
 		return Message{}, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `INSERT INTO messages(run_id,student_id,conversation_id,turn_id,role,content,tool_calls,created_at)
- SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM conversations WHERE run_id=? AND student_id=? AND id=?)`,
-		m.RunID, m.StudentID, m.ConversationID, m.TurnID, m.Role, m.Content, m.ToolCalls, formatTime(m.CreatedAt), m.RunID, m.StudentID, m.ConversationID)
+	res, err := tx.ExecContext(ctx, `INSERT INTO messages(run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,created_at)
+	 SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM conversations WHERE run_id=? AND student_id=? AND id=?)`,
+		m.RunID, m.StudentID, m.ConversationID, m.TurnID, m.Role, m.Content, m.ToolCalls, m.Reasoning, formatTime(m.CreatedAt), m.RunID, m.StudentID, m.ConversationID)
 	if err != nil {
 		return Message{}, err
 	}
@@ -573,7 +605,7 @@ func (s *Store) Messages(ctx context.Context, runID, studentID, conversationID s
 	if limit < 1 || limit > 500 {
 		limit = 200
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,created_at
  FROM messages WHERE run_id=? AND student_id=? AND conversation_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, conversationID, afterID, limit)
 	if err != nil {
 		return nil, err
@@ -585,7 +617,7 @@ func (s *Store) StudentMessages(ctx context.Context, runID, studentID string, af
 	if limit < 1 || limit > 1000 {
 		limit = 500
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,created_at
  FROM messages WHERE run_id=? AND student_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, afterID, limit)
 	if err != nil {
 		return nil, err
@@ -599,7 +631,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var created string
-		if err := rows.Scan(&m.ID, &m.RunID, &m.StudentID, &m.ConversationID, &m.TurnID, &m.Role, &m.Content, &m.ToolCalls, &created); err != nil {
+		if err := rows.Scan(&m.ID, &m.RunID, &m.StudentID, &m.ConversationID, &m.TurnID, &m.Role, &m.Content, &m.ToolCalls, &m.Reasoning, &created); err != nil {
 			return nil, err
 		}
 		m.CreatedAt, _ = parseTime(created)

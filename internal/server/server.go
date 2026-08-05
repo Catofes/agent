@@ -60,10 +60,29 @@ type Server struct {
 	screenHub  *Hub[screenState]
 	screenMu   sync.RWMutex
 	screen     screenState
+	shutdown   context.Context
+	cancel     context.CancelFunc
+	stopOnce   sync.Once
 }
 
 func New(cfg config.Config, st *store.Store, engine *agent.Engine, webFS, templates fs.FS, logger *slog.Logger) *Server {
-	return &Server{Config: cfg, Store: st, Agent: engine, WebFS: webFS, Templates: templates, Logger: logger, studentHub: NewHub[classroomEvent](), wallHub: NewHub[struct{}](), screenHub: NewHub[screenState](), screen: screenState{Empty: true}}
+	shutdown, cancel := context.WithCancel(context.Background())
+	return &Server{Config: cfg, Store: st, Agent: engine, WebFS: webFS, Templates: templates, Logger: logger, studentHub: NewHub[classroomEvent](), wallHub: NewHub[struct{}](), screenHub: NewHub[screenState](), screen: screenState{Empty: true}, shutdown: shutdown, cancel: cancel}
+}
+
+// Shutdown cancels server-owned long-running work before http.Server.Shutdown
+// waits for handlers to return. It is safe to call more than once.
+func (s *Server) Shutdown() {
+	s.stopOnce.Do(s.cancel)
+}
+
+func (s *Server) withShutdown(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(s.shutdown, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 func (s *Server) Routes() http.Handler {

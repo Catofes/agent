@@ -55,13 +55,14 @@ type Engine struct {
 	TokenBudget                     int64
 	MaxToolCalls                    int
 	MaxOutputChars                  int
+	MaxReasoningChars               int
 	InputPricePerM, OutputPricePerM float64
 	mu                              sync.Mutex
 	active                          map[string]bool
 }
 
 func NewEngine(st *store.Store, client Client, registry *tools.Registry, model, hmacKey string, timeout time.Duration, concurrency int) *Engine {
-	return &Engine{Store: st, Client: client, Tools: registry, Model: model, HMACKey: []byte(hmacKey), Timeout: timeout, Semaphore: make(chan struct{}, concurrency), active: map[string]bool{}}
+	return &Engine{Store: st, Client: client, Tools: registry, Model: model, HMACKey: []byte(hmacKey), Timeout: timeout, Semaphore: make(chan struct{}, concurrency), MaxReasoningChars: 12000, active: map[string]bool{}}
 }
 
 func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) error {
@@ -95,6 +96,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	defs := e.Tools.Definitions(req.Design.Tools)
 	var totalIn, totalOut int64
 	toolCount := 0
+	reasoningChars := 0
 	defer func() {
 		if totalIn+totalOut > 0 {
 			cost := float64(totalIn)/1e6*e.InputPricePerM + float64(totalOut)/1e6*e.OutputPricePerM
@@ -104,7 +106,18 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	for iteration := 1; iteration <= req.Design.MaxTurns; iteration++ {
 		streamedText := false
 		streamedChars := 0
-		completion, callErr := e.callWithRetry(ctx, CompletionRequest{Model: e.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, OnDelta: func(delta string) error {
+		completion, callErr := e.callWithRetry(ctx, CompletionRequest{Model: e.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, OnReasoningDelta: func(delta string) error {
+			remaining := e.MaxReasoningChars - reasoningChars
+			if remaining <= 0 {
+				return nil
+			}
+			delta = truncateRunes(delta, remaining)
+			if delta == "" {
+				return nil
+			}
+			reasoningChars += utf8.RuneCountInString(delta)
+			return emit(Event{Type: "reasoning_delta", Delta: delta})
+		}, OnDelta: func(delta string) error {
 			remaining := e.MaxOutputChars - streamedChars
 			if remaining <= 0 {
 				return nil
@@ -154,10 +167,10 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			return emit(Event{Type: "turn_end", TurnID: req.TurnID, Reason: "completed", TokensIn: totalIn, TokensOut: totalOut})
 		}
 		callJSON, _ := json.Marshal(completion.ToolCalls)
-		if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: completion.Content, ToolCalls: string(callJSON)}); err != nil {
+		if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: completion.Content, ToolCalls: string(callJSON), Reasoning: completion.Reasoning}); err != nil {
 			return err
 		}
-		messages = append(messages, Message{Role: "assistant", Content: completion.Content, ToolCalls: completion.ToolCalls})
+		messages = append(messages, Message{Role: "assistant", Content: completion.Content, Reasoning: completion.Reasoning, ToolCalls: completion.ToolCalls})
 		for _, call := range completion.ToolCalls {
 			toolCount++
 			if toolCount > e.MaxToolCalls {
@@ -197,9 +210,13 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 func (e *Engine) callWithRetry(ctx context.Context, req CompletionRequest) (Completion, error) {
 	var last error
 	originalDelta := req.OnDelta
+	originalReasoningDelta := req.OnReasoningDelta
 	streamed := false
 	if originalDelta != nil {
 		req.OnDelta = func(delta string) error { streamed = true; return originalDelta(delta) }
+	}
+	if originalReasoningDelta != nil {
+		req.OnReasoningDelta = func(delta string) error { streamed = true; return originalReasoningDelta(delta) }
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		callCtx, cancel := context.WithTimeout(ctx, e.Timeout)
@@ -243,6 +260,7 @@ func buildMessages(d store.Design, history []store.Message) []Message {
 		am := Message{Role: m.Role, Content: m.Content}
 		if m.Role == "assistant" && m.ToolCalls != "" {
 			_ = json.Unmarshal([]byte(m.ToolCalls), &am.ToolCalls)
+			am.Reasoning = m.Reasoning
 		}
 		if m.Role == "tool" {
 			am.ToolCallID = m.ToolCalls
