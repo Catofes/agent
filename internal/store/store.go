@@ -56,15 +56,26 @@ type Design struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type Conversation struct {
+	ID           string    `json:"id"`
+	RunID        string    `json:"-"`
+	StudentID    string    `json:"-"`
+	Title        string    `json:"title"`
+	MessageCount int       `json:"message_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 type Message struct {
-	ID        int64     `json:"id"`
-	RunID     string    `json:"-"`
-	StudentID string    `json:"-"`
-	TurnID    string    `json:"turn_id"`
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	ToolCalls string    `json:"tool_calls,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID             int64     `json:"id"`
+	RunID          string    `json:"-"`
+	StudentID      string    `json:"-"`
+	ConversationID string    `json:"conversation_id"`
+	TurnID         string    `json:"turn_id"`
+	Role           string    `json:"role"`
+	Content        string    `json:"content"`
+	ToolCalls      string    `json:"tool_calls,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type Usage struct {
@@ -118,6 +129,13 @@ func (s *Store) Close() error                   { return s.db.Close() }
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
 func (s *Store) migrate(ctx context.Context) error {
+	var version int
+	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		return fmt.Errorf("read database version: %w", err)
+	}
+	if version > 2 {
+		return fmt.Errorf("database version %d is newer than supported version 2", version)
+	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','ended')),
@@ -152,10 +170,78 @@ CREATE TABLE IF NOT EXISTS usage(
  PRIMARY KEY(run_id,student_id), FOREIGN KEY(run_id,student_id) REFERENCES students(run_id,id)
 );
 PRAGMA user_version = 1;`
-	if _, err := s.db.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("migrate database: %w", err)
+	if version == 0 {
+		if _, err := s.db.ExecContext(ctx, schema); err != nil {
+			return fmt.Errorf("migrate database to version 1: %w", err)
+		}
+		version = 1
+	}
+	if version < 2 {
+		if err := s.migrateConversations(ctx); err != nil {
+			return fmt.Errorf("migrate conversations: %w", err)
+		}
 	}
 	return nil
+}
+
+func (s *Store) migrateConversations(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(messages)`)
+	if err != nil {
+		return err
+	}
+	hasConversationID := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "conversation_id" {
+			hasConversationID = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS conversations(
+ id TEXT NOT NULL, run_id TEXT NOT NULL, student_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '新对话',
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY(run_id,student_id,id), FOREIGN KEY(run_id,student_id) REFERENCES students(run_id,id)
+)`); err != nil {
+		return err
+	}
+	if !hasConversationID {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO conversations(id,run_id,student_id,title,created_at,updated_at)
+ SELECT 'legacy_' || min(id),run_id,student_id,'历史对话',min(created_at),max(created_at)
+ FROM messages WHERE conversation_id='' GROUP BY run_id,student_id`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET conversation_id=(
+ SELECT c.id FROM conversations c WHERE c.run_id=messages.run_id AND c.student_id=messages.student_id AND c.title='历史对话'
+ ORDER BY c.created_at LIMIT 1) WHERE conversation_id=''`); err != nil {
+		return err
+	}
+	for _, q := range []string{
+		`CREATE INDEX IF NOT EXISTS conversations_student_updated ON conversations(run_id,student_id,updated_at DESC,id)`,
+		`CREATE INDEX IF NOT EXISTS messages_conversation ON messages(run_id,student_id,conversation_id,id)`,
+		`PRAGMA user_version = 2`,
+	} {
+		if _, err = tx.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) EnsureActiveRun(ctx context.Context, id, name string) (Run, error) {
@@ -390,36 +476,145 @@ func (s *Store) SaveDesign(ctx context.Context, d Design) (Design, error) {
 	return d, err
 }
 
-func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {
-	m.CreatedAt = time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `INSERT INTO messages(run_id,student_id,turn_id,role,content,tool_calls,created_at) VALUES(?,?,?,?,?,?,?)`, m.RunID, m.StudentID, m.TurnID, m.Role, m.Content, m.ToolCalls, formatTime(m.CreatedAt))
-	if err != nil {
-		return Message{}, err
+func (s *Store) CreateConversation(ctx context.Context, c Conversation) (Conversation, error) {
+	now := time.Now().UTC()
+	c.CreatedAt, c.UpdatedAt = now, now
+	c.Title = strings.TrimSpace(c.Title)
+	if c.Title == "" {
+		c.Title = "新对话"
 	}
-	m.ID, _ = res.LastInsertId()
-	return m, nil
+	res, err := s.db.ExecContext(ctx, `INSERT INTO conversations(id,run_id,student_id,title,created_at,updated_at)
+ SELECT ?,?,?,?, ?,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`,
+		c.ID, c.RunID, c.StudentID, c.Title, formatTime(now), formatTime(now), c.RunID, c.StudentID)
+	if err != nil {
+		return Conversation{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Conversation{}, ErrNotFound
+	}
+	return c, nil
 }
 
-func (s *Store) Messages(ctx context.Context, runID, studentID string, afterID int64, limit int) ([]Message, error) {
-	if limit < 1 || limit > 500 {
-		limit = 200
+func (s *Store) Conversation(ctx context.Context, runID, studentID, conversationID string) (Conversation, error) {
+	var c Conversation
+	var created, updated string
+	err := s.db.QueryRowContext(ctx, `SELECT c.id,c.run_id,c.student_id,c.title,
+ (SELECT count(*) FROM messages m WHERE m.run_id=c.run_id AND m.student_id=c.student_id AND m.conversation_id=c.id),
+ c.created_at,c.updated_at FROM conversations c WHERE c.run_id=? AND c.student_id=? AND c.id=?`,
+		runID, studentID, conversationID).Scan(&c.ID, &c.RunID, &c.StudentID, &c.Title, &c.MessageCount, &created, &updated)
+	if err != nil {
+		return Conversation{}, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,turn_id,role,content,tool_calls,created_at FROM messages WHERE run_id=? AND student_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, afterID, limit)
+	c.CreatedAt, _ = parseTime(created)
+	c.UpdatedAt, _ = parseTime(updated)
+	return c, nil
+}
+
+func (s *Store) Conversations(ctx context.Context, runID, studentID string, limit int) ([]Conversation, error) {
+	if limit < 1 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.run_id,c.student_id,c.title,count(m.id),c.created_at,c.updated_at
+ FROM conversations c LEFT JOIN messages m ON m.run_id=c.run_id AND m.student_id=c.student_id AND m.conversation_id=c.id
+ WHERE c.run_id=? AND c.student_id=? GROUP BY c.run_id,c.student_id,c.id
+ ORDER BY c.updated_at DESC,c.id DESC LIMIT ?`, runID, studentID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Message
+	out := make([]Conversation, 0)
+	for rows.Next() {
+		var c Conversation
+		var created, updated string
+		if err := rows.Scan(&c.ID, &c.RunID, &c.StudentID, &c.Title, &c.MessageCount, &created, &updated); err != nil {
+			return nil, err
+		}
+		c.CreatedAt, _ = parseTime(created)
+		c.UpdatedAt, _ = parseTime(updated)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {
+	m.CreatedAt = time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Message{}, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `INSERT INTO messages(run_id,student_id,conversation_id,turn_id,role,content,tool_calls,created_at)
+ SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM conversations WHERE run_id=? AND student_id=? AND id=?)`,
+		m.RunID, m.StudentID, m.ConversationID, m.TurnID, m.Role, m.Content, m.ToolCalls, formatTime(m.CreatedAt), m.RunID, m.StudentID, m.ConversationID)
+	if err != nil {
+		return Message{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Message{}, ErrNotFound
+	}
+	m.ID, _ = res.LastInsertId()
+	title := ""
+	if m.Role == "user" {
+		title = conversationTitle(m.Content)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE conversations SET updated_at=?,title=CASE WHEN title='新对话' AND ?<>'' THEN ? ELSE title END
+ WHERE run_id=? AND student_id=? AND id=?`, formatTime(m.CreatedAt), title, title, m.RunID, m.StudentID, m.ConversationID); err != nil {
+		return Message{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Message{}, err
+	}
+	return m, nil
+}
+
+func (s *Store) Messages(ctx context.Context, runID, studentID, conversationID string, afterID int64, limit int) ([]Message, error) {
+	if limit < 1 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,created_at
+ FROM messages WHERE run_id=? AND student_id=? AND conversation_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, conversationID, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanMessages(rows)
+}
+
+func (s *Store) StudentMessages(ctx context.Context, runID, studentID string, afterID int64, limit int) ([]Message, error) {
+	if limit < 1 || limit > 1000 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,created_at
+ FROM messages WHERE run_id=? AND student_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanMessages(rows)
+}
+
+func scanMessages(rows *sql.Rows) ([]Message, error) {
+	defer rows.Close()
+	out := make([]Message, 0)
 	for rows.Next() {
 		var m Message
 		var created string
-		if err := rows.Scan(&m.ID, &m.RunID, &m.StudentID, &m.TurnID, &m.Role, &m.Content, &m.ToolCalls, &created); err != nil {
+		if err := rows.Scan(&m.ID, &m.RunID, &m.StudentID, &m.ConversationID, &m.TurnID, &m.Role, &m.Content, &m.ToolCalls, &created); err != nil {
 			return nil, err
 		}
 		m.CreatedAt, _ = parseTime(created)
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+func conversationTitle(v string) string {
+	v = strings.Join(strings.Fields(v), " ")
+	r := []rune(v)
+	if len(r) > 24 {
+		return string(r[:24]) + "…"
+	}
+	return v
 }
 
 func (s *Store) Usage(ctx context.Context, runID, studentID string) (Usage, error) {

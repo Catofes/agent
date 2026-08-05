@@ -86,6 +86,8 @@ func (s *Server) Routes() http.Handler {
 				r.Get("/design", s.getDesign)
 				r.Put("/design", s.saveDesign)
 				r.Get("/templates", s.listTemplates)
+				r.Get("/conversations", s.conversations)
+				r.Post("/conversations", s.createConversation)
 				r.Get("/messages", s.messages)
 				r.Post("/chat", s.chat)
 				r.Get("/events", s.studentEvents)

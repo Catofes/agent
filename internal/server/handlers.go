@@ -110,9 +110,54 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"templates": out})
 }
 
+func (s *Server) conversations(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	items, err := s.Store.Conversations(r.Context(), p.Session.RunID, p.Session.StudentID, 100)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取对话列表失败")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"conversations": items})
+}
+
+func (s *Server) createConversation(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	run, err := s.Store.Run(r.Context(), p.Session.RunID)
+	if err != nil || run.Locked {
+		writeError(w, 423, "CLASS_LOCKED", "老师已暂停课堂操作")
+		return
+	}
+	var in struct {
+		Title string `json:"title"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	in.Title = strings.TrimSpace(in.Title)
+	if runeLen(in.Title) > 80 {
+		writeError(w, 400, "TITLE_TOO_LONG", "对话标题不能超过 80 个字")
+		return
+	}
+	c, err := s.Store.CreateConversation(r.Context(), store.Conversation{ID: newID("conv_"), RunID: p.Session.RunID, StudentID: p.Session.StudentID, Title: in.Title})
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "新建对话失败")
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
+}
+
 func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
-	items, err := s.Store.Messages(r.Context(), p.Session.RunID, p.Session.StudentID, parseCursor(r.URL.Query().Get("cursor")), 200)
+	conversationID := strings.TrimSpace(r.URL.Query().Get("conversation_id"))
+	if conversationID == "" {
+		writeError(w, 400, "CONVERSATION_REQUIRED", "请选择一个对话")
+		return
+	}
+	if _, err := s.Store.Conversation(r.Context(), p.Session.RunID, p.Session.StudentID, conversationID); err != nil {
+		writeError(w, 404, "CONVERSATION_NOT_FOUND", "未找到该对话")
+		return
+	}
+	items, err := s.Store.Messages(r.Context(), p.Session.RunID, p.Session.StudentID, conversationID, parseCursor(r.URL.Query().Get("cursor")), 200)
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "读取对话失败")
 		return
@@ -132,12 +177,22 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Message string `json:"message"`
+		ConversationID string `json:"conversation_id"`
+		Message        string `json:"message"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
 	in.Message = strings.TrimSpace(in.Message)
+	in.ConversationID = strings.TrimSpace(in.ConversationID)
+	if in.ConversationID == "" {
+		writeError(w, 400, "CONVERSATION_REQUIRED", "请选择一个对话")
+		return
+	}
+	if _, err = s.Store.Conversation(r.Context(), p.Session.RunID, p.Session.StudentID, in.ConversationID); err != nil {
+		writeError(w, 404, "CONVERSATION_NOT_FOUND", "未找到该对话")
+		return
+	}
 	if in.Message == "" {
 		writeError(w, 400, "EMPTY_MESSAGE", "请输入任务")
 		return
@@ -172,7 +227,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	turnID := newID("turn_")
-	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, TurnID: turnID, Input: in.Message, Design: d}, emit)
+	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d}, emit)
 	if err != nil {
 		code, msg := agentError(err)
 		if !emitted {
@@ -324,13 +379,14 @@ func (s *Server) teacherStudent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取设计失败")
 		return
 	}
-	msgs, err := s.Store.Messages(r.Context(), run.ID, id, parseCursor(r.URL.Query().Get("cursor")), 500)
+	msgs, err := s.Store.StudentMessages(r.Context(), run.ID, id, parseCursor(r.URL.Query().Get("cursor")), 500)
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "读取对话失败")
 		return
 	}
 	usage, _ := s.Store.Usage(r.Context(), run.ID, id)
-	writeJSON(w, 200, map[string]any{"student": st, "design": d, "messages": msgs, "usage": usage})
+	conversations, _ := s.Store.Conversations(r.Context(), run.ID, id, 100)
+	writeJSON(w, 200, map[string]any{"student": st, "design": d, "conversations": conversations, "messages": msgs, "usage": usage})
 }
 
 func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
@@ -408,7 +464,7 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取设计失败")
 		return
 	}
-	all, err := s.Store.Messages(r.Context(), run.ID, in.ID, 0, 500)
+	all, err := s.Store.StudentMessages(r.Context(), run.ID, in.ID, 0, 500)
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "读取对话失败")
 		return
@@ -422,11 +478,22 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if turnID == "" {
+		writeError(w, http.StatusConflict, "NO_COMPLETE_TURN", "该学生还没有可投屏的完整回答")
+		return
+	}
 	var selected []store.Message
+	hasUser, hasFinal := false, false
 	for _, m := range all {
 		if m.TurnID == turnID {
 			selected = append(selected, m)
+			hasUser = hasUser || m.Role == "user"
+			hasFinal = hasFinal || (m.Role == "assistant" && m.ToolCalls == "")
 		}
+	}
+	if !hasUser || !hasFinal {
+		writeError(w, http.StatusConflict, "NO_COMPLETE_TURN", "指定回合尚未完成或不存在")
+		return
 	}
 	state := screenState{Name: st.Name, Persona: d.Persona, SkillMD: d.SkillMD, Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: selected, Empty: false}
 	s.screenMu.Lock()
@@ -443,13 +510,13 @@ func (s *Server) screenEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	id, ch := s.screenHub.Subscribe()
+	defer s.screenHub.Unsubscribe(id)
 	s.screenMu.RLock()
 	current := s.screen
 	s.screenMu.RUnlock()
 	sendSSE(w, "screen", current)
 	flusher.Flush()
-	id, ch := s.screenHub.Subscribe()
-	defer s.screenHub.Unsubscribe(id)
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
 	for {

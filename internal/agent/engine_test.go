@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,13 +52,16 @@ func TestEngineToolLoop(t *testing.T) {
 	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = st.CreateConversation(ctx, store.Conversation{ID: "conv", RunID: run.ID, StudentID: "2101"}); err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeClient{answers: []Completion{{ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: ToolFunction{Name: "calculator", Arguments: `{"expression":"23*17"}`}}}, TokensIn: 10, TokensOut: 2}, {Content: "结果是 391", Deltas: []string{"结果是 ", "391"}, TokensIn: 15, TokensOut: 4}}}
 	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 2)
 	engine.TokenBudget = 1000
 	engine.MaxToolCalls = 4
 	engine.MaxOutputChars = 1000
 	var events []Event
-	err = engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", TurnID: "turn", Input: "计算", Design: store.Design{Persona: "数学老师", SkillMD: "准确", Tools: []string{"calculator"}, MaxTurns: 3}}, func(e Event) error { events = append(events, e); return nil })
+	err = engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "计算", Design: store.Design{Persona: "数学老师", SkillMD: "准确", Tools: []string{"calculator"}, MaxTurns: 3}}, func(e Event) error { events = append(events, e); return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +74,7 @@ func TestEngineToolLoop(t *testing.T) {
 	if len(events) < 5 || events[len(events)-1].Type != "turn_end" {
 		t.Fatalf("events=%#v", events)
 	}
-	msgs, err := st.Messages(ctx, run.ID, "2101", 0, 20)
+	msgs, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,5 +84,54 @@ func TestEngineToolLoop(t *testing.T) {
 	u, err := st.Usage(ctx, run.ID, "2101")
 	if err != nil || u.TokensIn != 25 || u.TokensOut != 6 {
 		t.Fatalf("usage=%#v err=%v", u, err)
+	}
+}
+
+func TestEngineUsesLatestDesignAndOnlySelectedConversation(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvPath := filepath.Join(dir, "students.csv")
+	_ = os.WriteFile(csvPath, []byte("id,name\n2101,张三\n"), 0o600)
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"old", "fresh"} {
+		if _, err = st.CreateConversation(ctx, store.Conversation{ID: id, RunID: run.ID, StudentID: "2101"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = st.AddMessage(ctx, store.Message{RunID: run.ID, StudentID: "2101", ConversationID: "old", TurnID: "old_turn", Role: "user", Content: "旧对话里的秘密暗号"}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeClient{answers: []Completion{{Content: "新回答", Deltas: []string{"新回答"}, TokensIn: 5, TokensOut: 2}}}
+	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	design := store.Design{Persona: "全新人设", SkillMD: "全新技能规则", Tools: []string{}, MaxTurns: 2}
+	if err = engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "fresh", TurnID: "new_turn", Input: "新的任务", Design: design}, func(Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("requests=%d", len(fake.requests))
+	}
+	var joined string
+	for _, m := range fake.requests[0].Messages {
+		joined += "\n" + m.Content
+	}
+	for _, want := range []string{"全新人设", "全新技能规则", "新的任务"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("request misses %q: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "旧对话里的秘密暗号") {
+		t.Fatalf("old conversation leaked into request: %s", joined)
 	}
 }
