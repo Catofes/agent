@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -27,6 +28,14 @@ import (
 )
 
 type authKey struct{}
+
+const (
+	maxStudentIDChars    = 128
+	maxConversationChars = 64
+	maxTurnIDChars       = 64
+	maxTeacherPassChars  = 512
+)
+
 type principal struct {
 	Session store.Session
 	Student store.Student
@@ -44,8 +53,13 @@ type screenState struct {
 	SkillMD  string          `json:"skill_md,omitempty"`
 	Tools    []string        `json:"tools,omitempty"`
 	MaxTurns int             `json:"max_turns,omitempty"`
-	Messages []store.Message `json:"messages,omitempty"`
+	Messages []screenMessage `json:"messages,omitempty"`
 	Empty    bool            `json:"empty"`
+}
+
+type screenMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type Server struct {
@@ -172,6 +186,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = strings.TrimSpace(in.ID)
+	if in.ID == "" || runeLen(in.ID) > maxStudentIDChars || runeLen(strings.TrimSpace(in.NameInitial)) > 8 {
+		writeError(w, 401, "INVALID_LOGIN", "学号或校验信息不正确")
+		return
+	}
 	run, err := s.Store.ActiveRun(r.Context())
 	if err != nil {
 		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有可用课堂场次")
@@ -207,6 +225,11 @@ func (s *Server) teacherLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if runeLen(in.Password) > maxTeacherPassChars {
+		s.Logger.Warn("teacher login failed", "request_id", middleware.GetReqID(r.Context()))
+		writeError(w, 401, "INVALID_LOGIN", "口令不正确")
 		return
 	}
 	a, b := []byte(in.Password), []byte(s.Config.AdminPassword)
@@ -336,6 +359,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		writeError(w, 400, "INVALID_JSON", "请求格式不正确")
+		return false
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		writeError(w, 400, "INVALID_JSON", "请求只能包含一个 JSON 对象")
 		return false
 	}
 	return true

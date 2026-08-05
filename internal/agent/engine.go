@@ -21,6 +21,7 @@ var (
 	ErrBusy      = errors.New("chat already in progress")
 	ErrBudget    = errors.New("student token budget exceeded")
 	ErrTurnLimit = errors.New("agent turn limit reached")
+	ErrToolLimit = errors.New("agent tool call limit reached")
 )
 
 type Event struct {
@@ -95,12 +96,13 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	messages := buildMessages(req.Design, history)
 	defs := e.Tools.Definitions(req.Design.Tools)
 	var totalIn, totalOut int64
+	var unknownUsage int64
 	toolCount := 0
 	reasoningChars := 0
 	defer func() {
-		if totalIn+totalOut > 0 {
+		if totalIn+totalOut > 0 || unknownUsage > 0 {
 			cost := float64(totalIn)/1e6*e.InputPricePerM + float64(totalOut)/1e6*e.OutputPricePerM
-			_ = e.Store.AddUsage(context.Background(), req.RunID, req.StudentID, totalIn, totalOut, cost)
+			_ = e.Store.AddUsage(context.Background(), req.RunID, req.StudentID, totalIn, totalOut, unknownUsage, cost)
 		}
 	}()
 	for iteration := 1; iteration <= req.Design.MaxTurns; iteration++ {
@@ -135,9 +137,10 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		}
 		totalIn += completion.TokensIn
 		totalOut += completion.TokensOut
-		if totalIn+totalOut+u.TokensIn+u.TokensOut > e.TokenBudget {
-			return ErrBudget
+		if completion.TokensIn == 0 && completion.TokensOut == 0 {
+			unknownUsage++
 		}
+		budgetExceeded := totalIn+totalOut+u.TokensIn+u.TokensOut > e.TokenBudget
 		if len(completion.ToolCalls) == 0 {
 			content := truncateRunes(completion.Content, e.MaxOutputChars)
 			if !streamedText {
@@ -161,10 +164,22 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 				}
 			}
 			final := truncateRunes(completion.Content, e.MaxOutputChars)
-			if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: final}); err != nil {
+			if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: final, FinishReason: "completed"}); err != nil {
 				return err
 			}
 			return emit(Event{Type: "turn_end", TurnID: req.TurnID, Reason: "completed", TokensIn: totalIn, TokensOut: totalOut})
+		}
+		if budgetExceeded {
+			if err := e.saveTermination(ctx, req, "budget_exceeded", "本场次使用额度已用完，无法继续执行工具。请联系老师。"); err != nil {
+				return err
+			}
+			return ErrBudget
+		}
+		if toolCount+len(completion.ToolCalls) > e.MaxToolCalls {
+			if err := e.saveTermination(ctx, req, "tool_limit_reached", "Agent 已达到本轮工具调用上限，请缩小任务范围后重试。"); err != nil {
+				return err
+			}
+			return ErrToolLimit
 		}
 		callJSON, _ := json.Marshal(completion.ToolCalls)
 		if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: completion.Content, ToolCalls: string(callJSON), Reasoning: completion.Reasoning}); err != nil {
@@ -173,10 +188,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		messages = append(messages, Message{Role: "assistant", Content: completion.Content, Reasoning: completion.Reasoning, ToolCalls: completion.ToolCalls})
 		for _, call := range completion.ToolCalls {
 			toolCount++
-			if toolCount > e.MaxToolCalls {
-				return ErrTurnLimit
-			}
-			detail, _ := json.Marshal(call)
+			detail := technicalCallDetail(call)
 			summary := summarizeArguments(call.Function.Arguments)
 			if err := emit(Event{Type: "tool_start", Step: toolCount, Tool: call.Function.Name, Summary: summary, Detail: detail}); err != nil {
 				return err
@@ -204,7 +216,15 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			}
 		}
 	}
+	if err := e.saveTermination(ctx, req, "turn_limit_reached", "Agent 已达到最大模型步数，请缩小任务范围或提高最大步数后重试。"); err != nil {
+		return err
+	}
 	return ErrTurnLimit
+}
+
+func (e *Engine) saveTermination(ctx context.Context, req Request, reason, message string) error {
+	_, err := e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: message, FinishReason: reason})
+	return err
 }
 
 func (e *Engine) callWithRetry(ctx context.Context, req CompletionRequest) (Completion, error) {
@@ -278,10 +298,21 @@ func contains(v []string, want string) bool {
 	return false
 }
 func summarizeArguments(v string) string {
-	if len(v) > 160 {
-		return v[:160] + "…"
+	if utf8.RuneCountInString(v) > 160 {
+		return truncateRunes(v, 160) + "…"
 	}
 	return v
+}
+
+func technicalCallDetail(call ToolCall) json.RawMessage {
+	copy := call
+	copy.Function.Arguments = truncateRunes(copy.Function.Arguments, 1200)
+	raw, _ := json.Marshal(copy)
+	if len(raw) <= 2048 {
+		return raw
+	}
+	raw, _ = json.Marshal(map[string]string{"id": truncateRunes(copy.ID, 120), "type": truncateRunes(copy.Type, 40), "tool": truncateRunes(copy.Function.Name, 120), "detail": "技术细节过长，已截断"})
+	return raw
 }
 func truncateRunes(v string, max int) string {
 	if max <= 0 || utf8.RuneCountInString(v) <= max {

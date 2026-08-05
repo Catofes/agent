@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,9 +105,96 @@ func TestEngineToolLoop(t *testing.T) {
 	if msgs[1].Reasoning != "需要精确计算" {
 		t.Fatalf("tool protocol reasoning was not persisted: %#v", msgs[1])
 	}
+	if msgs[3].FinishReason != "completed" {
+		t.Fatalf("completion reason was not persisted: %#v", msgs[3])
+	}
 	u, err := st.Usage(ctx, run.ID, "2101")
 	if err != nil || u.TokensIn != 25 || u.TokensOut != 6 {
 		t.Fatalf("usage=%#v err=%v", u, err)
+	}
+}
+
+func TestEnginePersistsLimitReasons(t *testing.T) {
+	toolCall := ToolCall{ID: "c1", Type: "function", Function: ToolFunction{Name: "calculator", Arguments: `{"expression":"2+3"}`}}
+	tests := []struct {
+		name         string
+		answers      []Completion
+		maxTurns     int
+		maxTools     int
+		budget       int64
+		wantErr      error
+		wantReason   string
+		wantMessages int
+		wantUnknown  int64
+	}{
+		{name: "tool limit", answers: []Completion{{ToolCalls: []ToolCall{toolCall, {ID: "c2", Type: "function", Function: ToolFunction{Name: "calculator", Arguments: `{"expression":"4+5"}`}}}}}, maxTurns: 3, maxTools: 1, budget: 1000, wantErr: ErrToolLimit, wantReason: "tool_limit_reached", wantMessages: 2, wantUnknown: 1},
+		{name: "turn limit", answers: []Completion{{ToolCalls: []ToolCall{toolCall}}}, maxTurns: 1, maxTools: 3, budget: 1000, wantErr: ErrTurnLimit, wantReason: "turn_limit_reached", wantMessages: 4, wantUnknown: 1},
+		{name: "budget during tools", answers: []Completion{{ToolCalls: []ToolCall{toolCall}, TokensIn: 4, TokensOut: 3}}, maxTurns: 3, maxTools: 3, budget: 5, wantErr: ErrBudget, wantReason: "budget_exceeded", wantMessages: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, run := newEngineTestStore(t)
+			fake := &fakeClient{answers: tt.answers}
+			engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+			engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = tt.budget, tt.maxTools, 1000
+			err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "任务", Design: store.Design{Tools: []string{"calculator"}, MaxTurns: tt.maxTurns}}, func(Event) error { return nil })
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("err=%v want=%v", err, tt.wantErr)
+			}
+			messages, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+			if err != nil || len(messages) != tt.wantMessages {
+				t.Fatalf("messages=%#v err=%v", messages, err)
+			}
+			last := messages[len(messages)-1]
+			if last.FinishReason != tt.wantReason || strings.TrimSpace(last.Content) == "" {
+				t.Fatalf("termination=%#v", last)
+			}
+			usage, err := st.Usage(ctx, run.ID, "2101")
+			if err != nil || usage.UnknownCalls != tt.wantUnknown {
+				t.Fatalf("usage=%#v err=%v", usage, err)
+			}
+		})
+	}
+}
+
+func newEngineTestStore(t *testing.T) (*store.Store, store.Run) {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvPath := filepath.Join(t.TempDir(), "students.csv")
+	if err := os.WriteFile(csvPath, []byte("id,name\n2101,张三\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.CreateConversation(ctx, store.Conversation{ID: "conv", RunID: run.ID, StudentID: "2101"}); err != nil {
+		t.Fatal(err)
+	}
+	return st, run
+}
+
+func TestTechnicalToolDetailIsValidAndBounded(t *testing.T) {
+	call := ToolCall{ID: strings.Repeat("i", 3000), Type: "function", Function: ToolFunction{Name: strings.Repeat("工具", 1000), Arguments: strings.Repeat("中", 5000)}}
+	detail := technicalCallDetail(call)
+	if !json.Valid(detail) {
+		t.Fatalf("detail is invalid JSON: %q", detail)
+	}
+	if len(detail) > 2048 {
+		t.Fatalf("detail length=%d", len(detail))
+	}
+	summary := summarizeArguments(strings.Repeat("中", 200))
+	if !strings.HasSuffix(summary, "…") || len([]rune(summary)) != 161 {
+		t.Fatalf("summary was not rune-safe: %q", summary)
 	}
 }
 

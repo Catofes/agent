@@ -76,12 +76,14 @@ type Message struct {
 	Content        string    `json:"content"`
 	ToolCalls      string    `json:"tool_calls,omitempty"`
 	Reasoning      string    `json:"-"`
+	FinishReason   string    `json:"finish_reason,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
 type Usage struct {
 	TokensIn      int64   `json:"tokens_in"`
 	TokensOut     int64   `json:"tokens_out"`
+	UnknownCalls  int64   `json:"unknown_calls"`
 	Images        int64   `json:"images"`
 	Searches      int64   `json:"searches"`
 	EstimatedCost float64 `json:"estimated_cost"`
@@ -134,8 +136,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 3 {
-		return fmt.Errorf("database version %d is newer than supported version 3", version)
+	if version > 5 {
+		return fmt.Errorf("database version %d is newer than supported version 5", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -185,6 +187,16 @@ PRAGMA user_version = 1;`
 	if version < 3 {
 		if err := s.migrateReasoning(ctx); err != nil {
 			return fmt.Errorf("migrate reasoning metadata: %w", err)
+		}
+	}
+	if version < 4 {
+		if err := s.migrateFinishReason(ctx); err != nil {
+			return fmt.Errorf("migrate message finish reasons: %w", err)
+		}
+	}
+	if version < 5 {
+		if err := s.migrateUnknownUsage(ctx); err != nil {
+			return fmt.Errorf("migrate unknown usage counter: %w", err)
 		}
 	}
 	return nil
@@ -250,6 +262,48 @@ func (s *Store) migrateReasoning(ctx context.Context) error {
 		}
 	}
 	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 3`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) migrateFinishReason(ctx context.Context) error {
+	hasFinishReason, err := s.tableHasColumn(ctx, "messages", "finish_reason")
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !hasFinishReason {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN finish_reason TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 4`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) migrateUnknownUsage(ctx context.Context) error {
+	hasUnknownCalls, err := s.tableHasColumn(ctx, "usage", "unknown_calls")
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !hasUnknownCalls {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE usage ADD COLUMN unknown_calls INTEGER NOT NULL DEFAULT 0 CHECK(unknown_calls>=0)`); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 5`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -576,9 +630,9 @@ func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {
 		return Message{}, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `INSERT INTO messages(run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,created_at)
-	 SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM conversations WHERE run_id=? AND student_id=? AND id=?)`,
-		m.RunID, m.StudentID, m.ConversationID, m.TurnID, m.Role, m.Content, m.ToolCalls, m.Reasoning, formatTime(m.CreatedAt), m.RunID, m.StudentID, m.ConversationID)
+	res, err := tx.ExecContext(ctx, `INSERT INTO messages(run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,created_at)
+	 SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM conversations WHERE run_id=? AND student_id=? AND id=?)`,
+		m.RunID, m.StudentID, m.ConversationID, m.TurnID, m.Role, m.Content, m.ToolCalls, m.Reasoning, m.FinishReason, formatTime(m.CreatedAt), m.RunID, m.StudentID, m.ConversationID)
 	if err != nil {
 		return Message{}, err
 	}
@@ -605,7 +659,7 @@ func (s *Store) Messages(ctx context.Context, runID, studentID, conversationID s
 	if limit < 1 || limit > 500 {
 		limit = 200
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,created_at
  FROM messages WHERE run_id=? AND student_id=? AND conversation_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, conversationID, afterID, limit)
 	if err != nil {
 		return nil, err
@@ -617,7 +671,7 @@ func (s *Store) StudentMessages(ctx context.Context, runID, studentID string, af
 	if limit < 1 || limit > 1000 {
 		limit = 500
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,created_at
  FROM messages WHERE run_id=? AND student_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, afterID, limit)
 	if err != nil {
 		return nil, err
@@ -631,7 +685,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var created string
-		if err := rows.Scan(&m.ID, &m.RunID, &m.StudentID, &m.ConversationID, &m.TurnID, &m.Role, &m.Content, &m.ToolCalls, &m.Reasoning, &created); err != nil {
+		if err := rows.Scan(&m.ID, &m.RunID, &m.StudentID, &m.ConversationID, &m.TurnID, &m.Role, &m.Content, &m.ToolCalls, &m.Reasoning, &m.FinishReason, &created); err != nil {
 			return nil, err
 		}
 		m.CreatedAt, _ = parseTime(created)
@@ -651,14 +705,14 @@ func conversationTitle(v string) string {
 
 func (s *Store) Usage(ctx context.Context, runID, studentID string) (Usage, error) {
 	var u Usage
-	err := s.db.QueryRowContext(ctx, `SELECT tokens_in,tokens_out,images,searches,estimated_cost FROM usage WHERE run_id=? AND student_id=?`, runID, studentID).Scan(&u.TokensIn, &u.TokensOut, &u.Images, &u.Searches, &u.EstimatedCost)
+	err := s.db.QueryRowContext(ctx, `SELECT tokens_in,tokens_out,unknown_calls,images,searches,estimated_cost FROM usage WHERE run_id=? AND student_id=?`, runID, studentID).Scan(&u.TokensIn, &u.TokensOut, &u.UnknownCalls, &u.Images, &u.Searches, &u.EstimatedCost)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Usage{}, nil
 	}
 	return u, err
 }
-func (s *Store) AddUsage(ctx context.Context, runID, studentID string, in, out int64, cost float64) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO usage(run_id,student_id,tokens_in,tokens_out,estimated_cost) VALUES(?,?,?,?,?) ON CONFLICT(run_id,student_id) DO UPDATE SET tokens_in=tokens_in+excluded.tokens_in,tokens_out=tokens_out+excluded.tokens_out,estimated_cost=estimated_cost+excluded.estimated_cost`, runID, studentID, in, out, cost)
+func (s *Store) AddUsage(ctx context.Context, runID, studentID string, in, out, unknown int64, cost float64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO usage(run_id,student_id,tokens_in,tokens_out,unknown_calls,estimated_cost) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id,student_id) DO UPDATE SET tokens_in=tokens_in+excluded.tokens_in,tokens_out=tokens_out+excluded.tokens_out,unknown_calls=unknown_calls+excluded.unknown_calls,estimated_cost=estimated_cost+excluded.estimated_cost`, runID, studentID, in, out, unknown, cost)
 	return err
 }
 

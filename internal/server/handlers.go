@@ -153,6 +153,10 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "CONVERSATION_REQUIRED", "请选择一个对话")
 		return
 	}
+	if runeLen(conversationID) > maxConversationChars {
+		writeError(w, 400, "INVALID_CONVERSATION_ID", "对话标识不正确")
+		return
+	}
 	if _, err := s.Store.Conversation(r.Context(), p.Session.RunID, p.Session.StudentID, conversationID); err != nil {
 		writeError(w, 404, "CONVERSATION_NOT_FOUND", "未找到该对话")
 		return
@@ -194,6 +198,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	in.ConversationID = strings.TrimSpace(in.ConversationID)
 	if in.ConversationID == "" {
 		writeError(w, 400, "CONVERSATION_REQUIRED", "请选择一个对话")
+		return
+	}
+	if runeLen(in.ConversationID) > maxConversationChars {
+		writeError(w, 400, "INVALID_CONVERSATION_ID", "对话标识不正确")
 		return
 	}
 	if _, err = s.Store.Conversation(r.Context(), p.Session.RunID, p.Session.StudentID, in.ConversationID); err != nil {
@@ -254,6 +262,8 @@ func agentError(err error) (string, string) {
 		return "BUDGET_EXCEEDED", "本场次使用额度已用完，请联系老师"
 	case errors.Is(err, agent.ErrTurnLimit):
 		return "TURN_LIMIT_REACHED", "Agent 已达到最大步数，请调整任务后再试"
+	case errors.Is(err, agent.ErrToolLimit):
+		return "TOOL_LIMIT_REACHED", "Agent 已达到本轮工具调用上限，请缩小任务后再试"
 	case errors.Is(err, context.Canceled):
 		return "REQUEST_CANCELED", "生成已停止"
 	default:
@@ -378,6 +388,10 @@ func (s *Server) teacherStudent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
+	if id == "" || runeLen(id) > maxStudentIDChars {
+		writeError(w, 404, "STUDENT_NOT_FOUND", "未找到该学生")
+		return
+	}
 	st, err := s.Store.Student(r.Context(), run.ID, id)
 	if err != nil {
 		writeError(w, 404, "STUDENT_NOT_FOUND", "未找到该学生")
@@ -458,6 +472,12 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	in.ID = strings.TrimSpace(in.ID)
+	in.TurnID = strings.TrimSpace(in.TurnID)
+	if in.ID == "" || runeLen(in.ID) > maxStudentIDChars || runeLen(in.TurnID) > maxTurnIDChars {
+		writeError(w, 400, "INVALID_SPOTLIGHT", "投屏目标参数不正确")
+		return
+	}
 	run, err := s.Store.ActiveRun(r.Context())
 	if err != nil {
 		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
@@ -480,7 +500,7 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取对话失败")
 		return
 	}
-	turnID := strings.TrimSpace(in.TurnID)
+	turnID := in.TurnID
 	if turnID == "" {
 		for i := len(all) - 1; i >= 0; i-- {
 			if all[i].Role == "assistant" && all[i].ToolCalls == "" {
@@ -506,13 +526,41 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "NO_COMPLETE_TURN", "指定回合尚未完成或不存在")
 		return
 	}
-	state := screenState{Name: st.Name, Persona: d.Persona, SkillMD: d.SkillMD, Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: selected, Empty: false}
+	state := screenState{Name: st.Name, Persona: d.Persona, SkillMD: d.SkillMD, Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: publicScreenMessages(selected), Empty: false}
 	s.screenMu.Lock()
 	s.screen = state
 	s.screenMu.Unlock()
 	s.screenHub.Publish(state)
 	s.Logger.Info("spotlight changed", "run_id", run.ID, "student_id", st.ID, "turn_id", turnID)
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func publicScreenMessages(messages []store.Message) []screenMessage {
+	out := make([]screenMessage, 0, len(messages))
+	for _, message := range messages {
+		content := message.Content
+		if message.Role == "assistant" && message.ToolCalls != "" {
+			var calls []agent.ToolCall
+			_ = json.Unmarshal([]byte(message.ToolCalls), &calls)
+			names := make([]string, 0, len(calls))
+			for _, call := range calls {
+				if call.Function.Name != "" {
+					names = append(names, call.Function.Name)
+				}
+			}
+			action := "发起工具调用"
+			if len(names) > 0 {
+				action = "调用工具：" + strings.Join(names, "、")
+			}
+			if strings.TrimSpace(content) == "" {
+				content = action
+			} else {
+				content += "\n" + action
+			}
+		}
+		out = append(out, screenMessage{Role: message.Role, Content: content})
+	}
+	return out
 }
 
 func (s *Server) screenEvents(w http.ResponseWriter, r *http.Request) {

@@ -55,7 +55,7 @@ func TestStoreRunIsolationAndSessionReplacement(t *testing.T) {
 	if _, err = st.AddMessage(ctx, Message{RunID: run.ID, StudentID: "2101", ConversationID: conversation.ID, TurnID: "t1", Role: "user", Content: "hi"}); err != nil {
 		t.Fatal(err)
 	}
-	if err = st.AddUsage(ctx, run.ID, "2101", 10, 5, .1); err != nil {
+	if err = st.AddUsage(ctx, run.ID, "2101", 10, 5, 0, .1); err != nil {
 		t.Fatal(err)
 	}
 	run2, err := st.CreateRun(ctx, "run_two", "第二场", run.ID)

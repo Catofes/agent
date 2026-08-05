@@ -13,6 +13,18 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+type maxChunkReader struct {
+	r   io.Reader
+	max int
+}
+
+func (r maxChunkReader) Read(p []byte) (int, error) {
+	if len(p) > r.max {
+		p = p[:r.max]
+	}
+	return r.r.Read(p)
+}
+
 func TestDecodeStream(t *testing.T) {
 	stream := strings.Join([]string{
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"calcu","arguments":"{\"expression\":"}}]}}]}`,
@@ -69,5 +81,23 @@ func TestDeepSeekClientEnablesThinkingAndStreamsSeparateDeltas(t *testing.T) {
 	}
 	if reasoning != "草稿" || text != "答案" || got.Reasoning != reasoning || got.Content != text {
 		t.Fatalf("reasoning=%q text=%q completion=%#v", reasoning, text, got)
+	}
+}
+
+func TestDecodeStreamAcrossJSONAndUTF8ChunkBoundaries(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"choices":[{"delta":{"reasoning_content":"先想"}}]}`,
+		`data: {"choices":[{"delta":{"content":"中"}}]}`,
+		`data: {"choices":[{"delta":{"content":"文"}}]}`,
+		`data: [DONE]`, "",
+	}, "\n")
+	for _, max := range []int{1, 2, 7, len(stream)} {
+		got, err := decodeStream(maxChunkReader{r: strings.NewReader(stream), max: max})
+		if err != nil {
+			t.Fatalf("chunk size %d: %v", max, err)
+		}
+		if got.Reasoning != "先想" || got.Content != "中文" || len(got.Deltas) != 2 {
+			t.Fatalf("chunk size %d: %#v", max, got)
+		}
 	}
 }

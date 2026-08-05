@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -48,6 +49,43 @@ type blockingClient struct {
 type delayedClient struct {
 	first   chan struct{}
 	release chan struct{}
+}
+
+type concurrencyClient struct {
+	mu      sync.Mutex
+	current int
+	max     int
+}
+
+func (c *concurrencyClient) Complete(ctx context.Context, req agent.CompletionRequest) (agent.Completion, error) {
+	c.mu.Lock()
+	c.current++
+	if c.current > c.max {
+		c.max = c.current
+	}
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.current--
+		c.mu.Unlock()
+	}()
+	select {
+	case <-time.After(15 * time.Millisecond):
+	case <-ctx.Done():
+		return agent.Completion{}, ctx.Err()
+	}
+	if req.OnDelta != nil {
+		if err := req.OnDelta("并发回答"); err != nil {
+			return agent.Completion{}, err
+		}
+	}
+	return agent.Completion{Content: "并发回答", Deltas: []string{"并发回答"}, TokensIn: 2, TokensOut: 2}, nil
+}
+
+func (c *concurrencyClient) maximum() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.max
 }
 
 func newDelayedClient() *delayedClient {
@@ -87,6 +125,10 @@ func testServer(t *testing.T) (http.Handler, *store.Store) {
 }
 
 func testServerWithClient(t *testing.T, client agent.Client) (*Server, *store.Store) {
+	return testServerWithRoster(t, client, 2)
+}
+
+func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (*Server, *store.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "app.db"))
@@ -98,7 +140,18 @@ func testServerWithClient(t *testing.T, client agent.Client) (*Server, *store.St
 		t.Fatal(err)
 	}
 	csvPath := filepath.Join(dir, "students.csv")
-	_ = os.WriteFile(csvPath, []byte("id,name\n2101,张三\n2102,李四\n"), 0o600)
+	var roster strings.Builder
+	roster.WriteString("id,name\n")
+	for i := 1; i <= studentCount; i++ {
+		name := fmt.Sprintf("学生%d", i)
+		if i == 1 {
+			name = "张三"
+		} else if i == 2 {
+			name = "李四"
+		}
+		fmt.Fprintf(&roster, "%d,%s\n", 2100+i, name)
+	}
+	_ = os.WriteFile(csvPath, []byte(roster.String()), 0o600)
 	if _, err = st.ImportStudentsCSV(context.Background(), run.ID, csvPath); err != nil {
 		t.Fatal(err)
 	}
@@ -283,6 +336,45 @@ func TestPagesAreServed(t *testing.T) {
 	}
 }
 
+func TestJSONRequestsAreStrictAndBounded(t *testing.T) {
+	handler, _ := testServer(t)
+	for name, raw := range map[string]string{
+		"unknown field":  `{"id":"2101","extra":"x"}`,
+		"two objects":    `{"id":"2101"}{"id":"2102"}`,
+		"oversized body": `{"id":"` + strings.Repeat("1", 70<<10) + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(raw))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	student := newClient(handler)
+	status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, body, _ := requestJSON(t, student, http.MethodPost, "/api/chat", map[string]string{"conversation_id": strings.Repeat("c", maxConversationChars+1), "message": "任务"})
+	if status != http.StatusBadRequest || body["error"].(map[string]any)["code"] != "INVALID_CONVERSATION_ID" {
+		t.Fatalf("long conversation status=%d body=%v", status, body)
+	}
+
+	teacher := newClient(handler)
+	status, _, _ = requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, _, _ = requestJSON(t, teacher, http.MethodPost, "/api/teacher/spotlight", map[string]string{"id": "2101", "turn_id": strings.Repeat("t", maxTurnIDChars+1)})
+	if status != http.StatusBadRequest {
+		t.Fatalf("long spotlight status=%d", status)
+	}
+}
+
 func TestSpotlightBeforeAndAfterScreenConnect(t *testing.T) {
 	handler, _ := testServer(t)
 	teacher := newClient(handler)
@@ -304,28 +396,100 @@ func TestSpotlightBeforeAndAfterScreenConnect(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatal(status)
 	}
-	status, _, _ = requestJSON(t, student, "POST", "/api/chat", map[string]string{"conversation_id": conversation["id"].(string), "message": "展示我"})
+	status, _, firstRaw := requestJSON(t, student, "POST", "/api/chat", map[string]string{"conversation_id": conversation["id"].(string), "message": "第一轮作品"})
 	if status != http.StatusOK {
 		t.Fatal(status)
 	}
+	firstTurn := turnIDFromNDJSON(t, firstRaw)
+	status, _, secondRaw := requestJSON(t, student, "POST", "/api/chat", map[string]string{"conversation_id": conversation["id"].(string), "message": "第二轮作品"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	secondTurn := turnIDFromNDJSON(t, secondRaw)
+	if firstTurn == secondTurn {
+		t.Fatal("chat turns are not unique")
+	}
 
 	stream, cancel, done := startScreenStream(handler)
-	defer func() { cancel(); <-done }()
 	if initial := waitSSEJSON(t, stream, 1); initial["empty"] != true {
 		t.Fatalf("initial=%v", initial)
+	}
+	status, _, _ = requestJSON(t, teacher, "POST", "/api/teacher/spotlight", map[string]string{"id": "2101", "turn_id": firstTurn})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	if pushed := waitSSEJSON(t, stream, 2); pushed["name"] != "张三" || pushed["empty"] != false || !screenContains(pushed, "第一轮作品") || screenContains(pushed, "第二轮作品") {
+		t.Fatalf("pushed=%v", pushed)
+	} else {
+		assertPublicScreenFields(t, pushed)
 	}
 	status, _, _ = requestJSON(t, teacher, "POST", "/api/teacher/spotlight", map[string]string{"id": "2101", "turn_id": ""})
 	if status != http.StatusOK {
 		t.Fatal(status)
 	}
-	if pushed := waitSSEJSON(t, stream, 2); pushed["name"] != "张三" || pushed["empty"] != false {
-		t.Fatalf("pushed=%v", pushed)
+	latest := waitSSEJSON(t, stream, 3)
+	if !screenContains(latest, "第二轮作品") || screenContains(latest, "第一轮作品") {
+		t.Fatalf("default spotlight did not choose latest complete turn: %v", latest)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("disconnected screen stream did not close")
 	}
 
 	stream2, cancel2, done2 := startScreenStream(handler)
 	defer func() { cancel2(); <-done2 }()
-	if snapshot := waitSSEJSON(t, stream2, 1); snapshot["name"] != "张三" {
+	if snapshot := waitSSEJSON(t, stream2, 1); snapshot["name"] != "张三" || !screenContains(snapshot, "第二轮作品") {
 		t.Fatalf("snapshot=%v", snapshot)
+	}
+
+	student2 := newClient(handler)
+	status, _, _ = requestJSON(t, student2, "POST", "/api/login", map[string]string{"id": "2102"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, conversation2, _ := requestJSON(t, student2, "POST", "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	status, _, _ = requestJSON(t, student2, "POST", "/api/chat", map[string]string{"conversation_id": conversation2["id"].(string), "message": "李四的作品"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, _, _ = requestJSON(t, teacher, "POST", "/api/teacher/spotlight", map[string]string{"id": "2102", "turn_id": ""})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	if switched := waitSSEJSON(t, stream2, 2); switched["name"] != "李四" || !screenContains(switched, "李四的作品") {
+		t.Fatalf("screen did not switch students: %v", switched)
+	}
+}
+
+func turnIDFromNDJSON(t *testing.T, raw string) string {
+	t.Helper()
+	for _, line := range strings.Split(raw, "\n") {
+		var event agent.Event
+		if json.Unmarshal([]byte(line), &event) == nil && event.Type == "turn_start" && event.TurnID != "" {
+			return event.TurnID
+		}
+	}
+	t.Fatalf("turn_start missing from %q", raw)
+	return ""
+}
+
+func screenContains(screen map[string]any, want string) bool {
+	raw, _ := json.Marshal(screen["messages"])
+	return strings.Contains(string(raw), want)
+}
+
+func assertPublicScreenFields(t *testing.T, screen map[string]any) {
+	t.Helper()
+	raw, _ := json.Marshal(screen)
+	for _, forbidden := range []string{"student_id", "conversation_id", "turn_id", "tool_calls", "reasoning_content", "tokens_in", "tokens_out", "estimated_cost", "created_at"} {
+		if strings.Contains(string(raw), `"`+forbidden+`"`) {
+			t.Fatalf("public screen leaked %s: %s", forbidden, raw)
+		}
 	}
 }
 
@@ -383,6 +547,99 @@ func TestShutdownClosesStreamsAndCancelsLLM(t *testing.T) {
 	}
 	if got := app.studentHub.Count() + app.wallHub.Count() + app.screenHub.Count(); got != 0 {
 		t.Fatalf("shutdown left %d event subscribers", got)
+	}
+}
+
+func TestFiftyStudentsChatWithinGlobalConcurrencyLimit(t *testing.T) {
+	client := &concurrencyClient{}
+	app, st := testServerWithRoster(t, client, 50)
+	handler := app.Routes()
+	students := make([]*testClient, 50)
+	conversationIDs := make([]string, 50)
+	for i := range students {
+		students[i] = newClient(handler)
+		id := strconv.Itoa(2101 + i)
+		status, _, _ := requestJSON(t, students[i], http.MethodPost, "/api/login", map[string]string{"id": id})
+		if status != http.StatusOK {
+			t.Fatalf("login %s status=%d", id, status)
+		}
+		status, conversation, _ := requestJSON(t, students[i], http.MethodPost, "/api/conversations", map[string]string{})
+		if status != http.StatusCreated {
+			t.Fatalf("conversation %s status=%d", id, status)
+		}
+		conversationIDs[i] = conversation["id"].(string)
+	}
+	type result struct {
+		index  int
+		status int
+		raw    string
+	}
+	results := make(chan result, len(students))
+	var wg sync.WaitGroup
+	for i := range students {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			status, _, raw := requestJSON(t, students[i], http.MethodPost, "/api/chat", map[string]string{"conversation_id": conversationIDs[i], "message": "并发任务"})
+			results <- result{index: i, status: status, raw: raw}
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+	for got := range results {
+		if got.status != http.StatusOK || !strings.Contains(got.raw, `"type":"turn_end"`) {
+			t.Fatalf("student %d status=%d body=%s", got.index+1, got.status, got.raw)
+		}
+	}
+	if max := client.maximum(); max < 2 || max > 4 {
+		t.Fatalf("maximum LLM concurrency=%d want 2..4", max)
+	}
+	wall, err := st.Wall(context.Background(), "run")
+	if err != nil || len(wall) != 50 {
+		t.Fatalf("wall students=%d err=%v", len(wall), err)
+	}
+	for _, student := range wall {
+		if student.ChatTurns != 1 {
+			t.Fatalf("student %s turns=%d", student.ID, student.ChatTurns)
+		}
+	}
+}
+
+func TestSameStudentDoubleChatCreatesOneCompleteTurn(t *testing.T) {
+	client := newDelayedClient()
+	app, st := testServerWithClient(t, client)
+	handler := app.Routes()
+	student := newClient(handler)
+	status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, conversation, _ := requestJSON(t, student, http.MethodPost, "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	conversationID := conversation["id"].(string)
+	body, _ := json.Marshal(map[string]string{"conversation_id": conversationID, "message": "第一条"})
+	_, cancel, done := startHandlerStream(handler, http.MethodPost, "/api/chat", student.cookie, body)
+	defer cancel()
+	select {
+	case <-client.first:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first chat did not start")
+	}
+	status, errorBody, _ := requestJSON(t, student, http.MethodPost, "/api/chat", map[string]string{"conversation_id": conversationID, "message": "重复发送"})
+	if status != http.StatusConflict || errorBody["error"].(map[string]any)["code"] != "CHAT_IN_PROGRESS" {
+		t.Fatalf("duplicate status=%d body=%v", status, errorBody)
+	}
+	close(client.release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first chat did not complete")
+	}
+	messages, err := st.Messages(context.Background(), "run", "2101", conversationID, 0, 20)
+	if err != nil || len(messages) != 2 || messages[0].Content != "第一条" || messages[1].FinishReason != "completed" {
+		t.Fatalf("messages=%#v err=%v", messages, err)
 	}
 }
 
