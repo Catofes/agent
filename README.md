@@ -43,7 +43,19 @@ make run
 make test
 make check
 make build
+make release
+make smoke
 ```
+
+`make smoke` 会在临时目录中启动内置 fake LLM，并行模拟 50 名学生的登录、保存设计、工具对话、课堂锁定和 SSE 断线重连，最后输出 P50/P95、错误数、模型并发、goroutine 和内存指标。小规模真实 API 验证使用：
+
+```bash
+DEEPSEEK_API_KEY='...' make smoke-real
+```
+
+`smoke-real` 默认只运行 5 名学生，会产生真实模型费用；可直接运行 `go run ./cmd/smoke -h` 查看并发数、模型和超时等参数。
+
+`make release` 默认生成 `build/classroom-agent-linux-amd64` 及对应 `.sha256` 校验文件。可通过 `TARGET_OS` 和 `TARGET_ARCH` 改变目标，例如 `make release TARGET_OS=linux TARGET_ARCH=arm64`。
 
 发布产物为 `build/classroom-agent`。前端和三套 SKILL.md 模板已嵌入二进制；运行时仍需提供名单路径和 SQLite 可写目录：
 
@@ -54,6 +66,8 @@ make build
   -students=data/students.csv \
   -cookie-secure=false
 ```
+
+首次部署可以复制 `data/students.example.csv` 为实际名单，修改内容后再启动。
 
 所有参数都有对应的大写下划线环境变量。例如 `-llm-concurrency` 对应 `LLM_CONCURRENCY`。完整配置项参见 `config.example.yaml` 或执行：
 
@@ -68,6 +82,8 @@ make build
 - API Key、教师口令和匿名 HMAC 密钥只通过服务端环境变量或受保护的启动参数注入。
 - 定期复制 `data/app.db` 备份；SQLite 使用 WAL，在线备份时应使用 SQLite 备份工具或在停服后复制数据库及其 WAL 文件。
 - 每次公开课前通过教师端新建场次。新场次会复制名单，但不会复制设计、消息和用量。
+
+Nginx HTTPS 配置和流式检查步骤见 [HTTPS 反向代理部署](doc/HTTPS反向代理部署.md)。
 
 ## 当前边界
 

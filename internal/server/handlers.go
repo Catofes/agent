@@ -306,6 +306,8 @@ func statusForAgent(err error) int {
 
 func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
+	id, ch := s.studentHub.Subscribe()
+	defer s.studentHub.Unsubscribe(id)
 	run, err := s.Store.Run(r.Context(), p.Session.RunID)
 	if err != nil {
 		writeError(w, 401, "RUN_ENDED", "课堂场次已结束")
@@ -318,8 +320,6 @@ func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	sendSSE(w, "classroom", classroomEvent{Type: "classroom", Locked: run.Locked, RunID: run.ID})
 	flusher.Flush()
-	id, ch := s.studentHub.Subscribe()
-	defer s.studentHub.Unsubscribe(id)
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
 	for {
@@ -356,6 +356,8 @@ func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) wallEvents(w http.ResponseWriter, r *http.Request) {
+	id, ch := s.wallHub.Subscribe()
+	defer s.wallHub.Unsubscribe(id)
 	run, err := s.Store.ActiveRun(r.Context())
 	if err != nil {
 		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
@@ -383,8 +385,6 @@ func (s *Server) wallEvents(w http.ResponseWriter, r *http.Request) {
 	if !sendWall() {
 		return
 	}
-	id, ch := s.wallHub.Subscribe()
-	defer s.wallHub.Unsubscribe(id)
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
 	for {

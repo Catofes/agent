@@ -920,6 +920,129 @@ func TestChatFlushesFirstDeltaBeforeCompletion(t *testing.T) {
 	}
 }
 
+func TestChatDisconnectCancelsUpstreamAndLeavesNoAssistantFragment(t *testing.T) {
+	client := newBlockingClient()
+	app, st := testServerWithClient(t, client)
+	student := newClient(app.Routes())
+	status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, conversation, _ := requestJSON(t, student, http.MethodPost, "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	conversationID := conversation["id"].(string)
+	body, _ := json.Marshal(map[string]string{"conversation_id": conversationID, "message": "中途断开"})
+	_, cancel, done := startHandlerStream(app.Routes(), http.MethodPost, "/api/chat", student.cookie, body)
+
+	select {
+	case <-client.started:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("LLM request did not start")
+	}
+	cancel()
+	for name, signal := range map[string]<-chan struct{}{"handler": done, "upstream": client.canceled} {
+		select {
+		case <-signal:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s did not stop after client disconnect", name)
+		}
+	}
+
+	messages, err := st.Messages(context.Background(), "run", "2101", conversationID, 0, 20)
+	if err != nil || len(messages) != 1 || messages[0].Role != "user" {
+		t.Fatalf("disconnect persisted a partial assistant message: messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestStudentSSEReconnectRestoresSnapshotAndDisablesProxyBuffering(t *testing.T) {
+	app, _ := testServerWithClient(t, directClient{})
+	handler := app.Routes()
+	student := newClient(handler)
+	status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	teacher := newClient(handler)
+	status, _, _ = requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+
+	first, cancelFirst, firstDone := startHandlerStream(handler, http.MethodGet, "/api/events", student.cookie, nil)
+	initial := waitSSEJSON(t, first, 1)
+	if initial["locked"] != false || initial["run_id"] != "run" {
+		t.Fatalf("initial snapshot=%v", initial)
+	}
+	assertStreamingHeaders(t, first.header, "text/event-stream")
+	cancelFirst()
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("disconnected student SSE did not close")
+	}
+	if got := app.studentHub.Count(); got != 0 {
+		t.Fatalf("disconnected SSE left %d subscribers", got)
+	}
+
+	status, _, _ = requestJSON(t, teacher, http.MethodPost, "/api/teacher/lock", map[string]bool{"locked": true})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	second, cancelSecond, secondDone := startHandlerStream(handler, http.MethodGet, "/api/events", student.cookie, nil)
+	defer func() {
+		cancelSecond()
+		<-secondDone
+	}()
+	if snapshot := waitSSEJSON(t, second, 1); snapshot["locked"] != true || snapshot["run_id"] != "run" {
+		t.Fatalf("reconnect snapshot=%v", snapshot)
+	}
+}
+
+func TestChatResponseDisablesProxyBuffering(t *testing.T) {
+	client := newDelayedClient()
+	app, _ := testServerWithClient(t, client)
+	student := newClient(app.Routes())
+	status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, conversation, _ := requestJSON(t, student, http.MethodPost, "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	body, _ := json.Marshal(map[string]string{"conversation_id": conversation["id"].(string), "message": "缓冲头检查"})
+	stream, cancel, done := startHandlerStream(app.Routes(), http.MethodPost, "/api/chat", student.cookie, body)
+	defer cancel()
+	select {
+	case <-client.first:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first chat delta did not arrive")
+	}
+	assertStreamingHeaders(t, stream.header, "application/x-ndjson")
+	close(client.release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("chat did not finish")
+	}
+}
+
+func assertStreamingHeaders(t *testing.T, header http.Header, contentType string) {
+	t.Helper()
+	if !strings.HasPrefix(header.Get("Content-Type"), contentType) {
+		t.Fatalf("Content-Type=%q want prefix %q", header.Get("Content-Type"), contentType)
+	}
+	if !strings.Contains(header.Get("Cache-Control"), "no-transform") {
+		t.Fatalf("Cache-Control=%q does not disable transformation", header.Get("Cache-Control"))
+	}
+	if header.Get("X-Accel-Buffering") != "no" {
+		t.Fatalf("X-Accel-Buffering=%q", header.Get("X-Accel-Buffering"))
+	}
+}
+
 type streamResponse struct {
 	mu      sync.Mutex
 	header  http.Header

@@ -376,6 +376,35 @@ func TestTechnicalToolDetailIsValidAndBounded(t *testing.T) {
 	}
 }
 
+func TestBuildMessagesKeepsPromptLayersAndToolProtocol(t *testing.T) {
+	calls := `[{"id":"call_1","type":"function","function":{"name":"calculator","arguments":"{\"expression\":\"2+2\"}"}}]`
+	messages := buildMessages(store.Design{Persona: "耐心数学老师", SkillMD: "仅在精确计算时使用"}, []store.Message{
+		{Role: "user", Content: "计算 2+2"},
+		{Role: "assistant", Content: "", Reasoning: "需要精确计算", ToolCalls: calls},
+		{Role: "tool", Content: "结果：4", ToolCalls: "call_1"},
+	})
+	if len(messages) != 4 || messages[0].Role != "system" {
+		t.Fatalf("messages=%#v", messages)
+	}
+	for _, want := range []string{
+		"平台安全规则 > Soul > 当前任务相关的 Skill > 可用 Memory > 当前对话",
+		"耐心数学老师",
+		"仅在精确计算时使用",
+		"不适用时按 Soul 和通用能力正常回答",
+		"装备了工具也不代表必须调用",
+	} {
+		if !strings.Contains(messages[0].Content, want) {
+			t.Fatalf("system prompt misses %q: %s", want, messages[0].Content)
+		}
+	}
+	if len(messages[2].ToolCalls) != 1 || messages[2].ToolCalls[0].Function.Name != "calculator" || messages[2].Reasoning != "需要精确计算" {
+		t.Fatalf("assistant tool protocol=%#v", messages[2])
+	}
+	if messages[3].ToolCallID != "call_1" || messages[3].Content != "结果：4" {
+		t.Fatalf("tool message=%#v", messages[3])
+	}
+}
+
 func TestEngineUsesLatestDesignAndOnlySelectedConversation(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

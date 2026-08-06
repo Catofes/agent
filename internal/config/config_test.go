@@ -1,0 +1,71 @@
+package config
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestValidateAcceptsCompleteConfiguration(t *testing.T) {
+	cfg := validConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateReportsAllMissingSecrets(t *testing.T) {
+	cfg := validConfig()
+	cfg.AdminPassword = " "
+	cfg.DeepSeekAPIKey = ""
+	cfg.AnonymousHMACKey = "\t"
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("missing secrets were accepted")
+	}
+	for _, want := range []string{"ADMIN_PASSWORD", "DEEPSEEK_API_KEY", "ANONYMOUS_HMAC_KEY"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %s", err, want)
+		}
+	}
+}
+
+func TestValidateRejectsUnsafeLimits(t *testing.T) {
+	tests := map[string]func(*Config){
+		"zero concurrency":   func(c *Config) { c.LLMConcurrency = 0 },
+		"zero token budget":  func(c *Config) { c.StudentTokenBudget = 0 },
+		"zero tool calls":    func(c *Config) { c.MaxToolCalls = 0 },
+		"bad turn ordering":  func(c *Config) { c.DefaultMaxTurns = c.MaxMaxTurns + 1 },
+		"zero persona limit": func(c *Config) { c.MaxPersonaChars = 0 },
+		"zero skill limit":   func(c *Config) { c.MaxSkillChars = 0 },
+		"zero input limit":   func(c *Config) { c.MaxInputChars = 0 },
+		"zero output limit":  func(c *Config) { c.MaxOutputChars = 0 },
+		"zero reasoning":     func(c *Config) { c.MaxReasoningChars = 0 },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("invalid configuration was accepted")
+			}
+		})
+	}
+}
+
+func validConfig() Config {
+	return Config{
+		AdminPassword:      "teacher-secret",
+		DeepSeekAPIKey:     "provider-secret",
+		AnonymousHMACKey:   "anonymous-secret",
+		LLMConcurrency:     8,
+		StudentTokenBudget: 10_000,
+		DefaultMaxTurns:    5,
+		MinMaxTurns:        1,
+		MaxMaxTurns:        8,
+		MaxToolCalls:       4,
+		MaxPersonaChars:    4_000,
+		MaxSkillChars:      12_000,
+		MaxInputChars:      4_000,
+		MaxOutputChars:     16_000,
+		MaxReasoningChars:  12_000,
+	}
+}
