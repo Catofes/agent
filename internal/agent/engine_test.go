@@ -21,6 +21,25 @@ type fakeClient struct {
 	requests []CompletionRequest
 }
 
+type timeoutClient struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *timeoutClient) Complete(ctx context.Context, _ CompletionRequest) (Completion, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	<-ctx.Done()
+	return Completion{}, ctx.Err()
+}
+
+func (f *timeoutClient) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 func (f *fakeClient) Complete(_ context.Context, r CompletionRequest) (Completion, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -112,6 +131,165 @@ func TestEngineToolLoop(t *testing.T) {
 	if err != nil || u.TokensIn != 25 || u.TokensOut != 6 {
 		t.Fatalf("usage=%#v err=%v", u, err)
 	}
+}
+
+func TestEngineDirectAnswerUsesAnonymousIdentityAndNoUnselectedTools(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	fake := &fakeClient{answers: []Completion{{Content: "直接回答", Deltas: []string{"直接", "回答"}, TokensIn: 3, TokensOut: 2}}}
+	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	var events []Event
+	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "普通闲聊", Design: store.Design{Persona: "友好助手", MaxTurns: 2}}, func(event Event) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("requests=%d", len(fake.requests))
+	}
+	request := fake.requests[0]
+	if len(request.Tools) != 0 {
+		t.Fatalf("unselected tools were exposed: %#v", request.Tools)
+	}
+	if request.UserID == "" || request.UserID == "2101" || strings.Contains(request.UserID, run.ID) {
+		t.Fatalf("provider identity was not anonymized: %q", request.UserID)
+	}
+	if got := eventTypes(events); strings.Join(got, ",") != "turn_start,text_delta,text_delta,turn_end" {
+		t.Fatalf("events=%v", got)
+	}
+	messages, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+	if err != nil || len(messages) != 2 || messages[1].Content != "直接回答" || messages[1].FinishReason != "completed" {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestEngineSupportsConsecutiveToolIterations(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	call := func(id, expression string) ToolCall {
+		return ToolCall{ID: id, Type: "function", Function: ToolFunction{Name: "calculator", Arguments: `{"expression":"` + expression + `"}`}}
+	}
+	fake := &fakeClient{answers: []Completion{
+		{ToolCalls: []ToolCall{call("c1", "2+3")}, TokensIn: 2, TokensOut: 1},
+		{ToolCalls: []ToolCall{call("c2", "5*4")}, TokensIn: 3, TokensOut: 1},
+		{Content: "最终是 20", Deltas: []string{"最终是 ", "20"}, TokensIn: 4, TokensOut: 2},
+	}}
+	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	var events []Event
+	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "分两步算", Design: store.Design{Tools: []string{"calculator"}, MaxTurns: 3}}, func(event Event) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 3 {
+		t.Fatalf("requests=%d", len(fake.requests))
+	}
+	var starts, results int
+	for _, event := range events {
+		if event.Type == "tool_start" {
+			starts++
+		}
+		if event.Type == "tool_result" && event.Success != nil && *event.Success {
+			results++
+		}
+	}
+	if starts != 2 || results != 2 {
+		t.Fatalf("events=%#v", events)
+	}
+	messages, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+	if err != nil || len(messages) != 6 || messages[5].FinishReason != "completed" {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestEngineRejectsForgedUnselectedToolCall(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	forged := ToolCall{ID: "c1", Type: "function", Function: ToolFunction{Name: "calculator", Arguments: `{"expression":"2+2"}`}}
+	fake := &fakeClient{answers: []Completion{
+		{ToolCalls: []ToolCall{forged}, TokensIn: 2, TokensOut: 1},
+		{Content: "工具不可用", Deltas: []string{"工具不可用"}, TokensIn: 2, TokensOut: 1},
+	}}
+	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	var toolResult Event
+	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "不要工具", Design: store.Design{Tools: []string{}, MaxTurns: 2}}, func(event Event) error {
+		if event.Type == "tool_result" {
+			toolResult = event
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 2 || len(fake.requests[0].Tools) != 0 {
+		t.Fatalf("requests=%#v", fake.requests)
+	}
+	if toolResult.Success == nil || *toolResult.Success || !strings.Contains(toolResult.Summary, "未启用") {
+		t.Fatalf("forged tool result=%#v", toolResult)
+	}
+	messages, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+	if err != nil || len(messages) != 4 || !strings.Contains(messages[2].Content, "未启用") || strings.Contains(messages[2].Content, "结果：4") {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestEngineRetriesTimeoutOnce(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	fake := &timeoutClient{}
+	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", 10*time.Millisecond, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "超时任务", Design: store.Design{MaxTurns: 2}}, func(Event) error { return nil })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v", err)
+	}
+	if calls := fake.callCount(); calls != 2 {
+		t.Fatalf("calls=%d want=2", calls)
+	}
+	messages, dbErr := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+	if dbErr != nil || len(messages) != 1 || messages[0].Role != "user" {
+		t.Fatalf("messages=%#v err=%v", messages, dbErr)
+	}
+}
+
+func TestEngineClientInterruptStopsStreamingWithoutRetry(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	fake := &fakeClient{answers: []Completion{{Content: "不会完成", Deltas: []string{"第一段", "第二段"}}}}
+	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	disconnected := errors.New("client disconnected")
+	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "生成任务", Design: store.Design{MaxTurns: 2}}, func(event Event) error {
+		if event.Type == "text_delta" {
+			return disconnected
+		}
+		return nil
+	})
+	if !errors.Is(err, disconnected) {
+		t.Fatalf("err=%v", err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("streamed request was retried: %d", len(fake.requests))
+	}
+	messages, dbErr := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+	if dbErr != nil || len(messages) != 1 || messages[0].Role != "user" {
+		t.Fatalf("messages=%#v err=%v", messages, dbErr)
+	}
+}
+
+func eventTypes(events []Event) []string {
+	out := make([]string, len(events))
+	for i, event := range events {
+		out[i] = event.Type
+	}
+	return out
 }
 
 func TestEnginePersistsLimitReasons(t *testing.T) {

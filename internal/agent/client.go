@@ -38,6 +38,7 @@ type CompletionRequest struct {
 	UserID           string
 	Messages         []Message
 	Tools            []tools.Definition
+	BeforeCall       func(context.Context) error
 	OnDelta          func(string) error
 	OnReasoningDelta func(string) error
 }

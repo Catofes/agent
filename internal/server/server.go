@@ -73,6 +73,7 @@ type Server struct {
 	wallHub    *Hub[struct{}]
 	screenHub  *Hub[screenState]
 	screenMu   sync.RWMutex
+	controlMu  sync.RWMutex
 	screen     screenState
 	shutdown   context.Context
 	cancel     context.CancelFunc
@@ -106,7 +107,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/", s.page("index.html"))
 	r.Get("/teacher", s.page("teacher.html"))
 	r.Get("/screen", s.page("screen.html"))
-	r.Handle("/assets/*", http.FileServer(http.FS(s.WebFS)))
+	r.Handle("/assets/*", http.StripPrefix("/assets/", http.FileServer(http.FS(s.WebFS))))
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/login", s.login)
 		r.Post("/teacher/login", s.teacherLogin)

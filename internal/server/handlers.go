@@ -35,11 +35,6 @@ func (s *Server) getDesign(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) saveDesign(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
-	run, err := s.Store.Run(r.Context(), p.Session.RunID)
-	if err != nil || run.Locked {
-		writeError(w, 423, "CLASS_LOCKED", "老师已暂停课堂操作")
-		return
-	}
 	var in struct {
 		Persona  string   `json:"persona"`
 		SkillMD  string   `json:"skill_md"`
@@ -68,6 +63,13 @@ func (s *Server) saveDesign(w http.ResponseWriter, r *http.Request) {
 			seen[name] = true
 			clean = append(clean, name)
 		}
+	}
+	s.controlMu.RLock()
+	defer s.controlMu.RUnlock()
+	run, err := s.Store.Run(r.Context(), p.Session.RunID)
+	if err != nil || run.Status != "active" || run.Locked {
+		writeError(w, 423, "CLASS_LOCKED", "老师已暂停课堂操作")
+		return
 	}
 	d, err := s.Store.SaveDesign(r.Context(), store.Design{RunID: p.Session.RunID, StudentID: p.Session.StudentID, Persona: strings.TrimSpace(in.Persona), SkillMD: strings.TrimSpace(in.SkillMD), Tools: clean, MaxTurns: in.MaxTurns})
 	if err != nil {
@@ -182,8 +184,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalOf(r)
+	s.controlMu.RLock()
 	run, err := s.Store.Run(r.Context(), p.Session.RunID)
-	if err != nil || run.Locked {
+	locked := err != nil || run.Status != "active" || run.Locked
+	s.controlMu.RUnlock()
+	if locked {
 		writeError(w, 423, "CLASS_LOCKED", "老师已暂停课堂操作")
 		return
 	}
@@ -242,7 +247,16 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	turnID := newID("turn_")
-	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d}, emit)
+	beforeModelCall := func(ctx context.Context) error {
+		s.controlMu.RLock()
+		defer s.controlMu.RUnlock()
+		current, checkErr := s.Store.Run(ctx, p.Session.RunID)
+		if checkErr != nil || current.Status != "active" || current.Locked {
+			return agent.ErrClassLocked
+		}
+		return nil
+	}
+	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, BeforeModelCall: beforeModelCall}, emit)
 	if err != nil {
 		code, msg := agentError(err)
 		if !emitted {
@@ -264,6 +278,10 @@ func agentError(err error) (string, string) {
 		return "TURN_LIMIT_REACHED", "Agent 已达到最大步数，请调整任务后再试"
 	case errors.Is(err, agent.ErrToolLimit):
 		return "TOOL_LIMIT_REACHED", "Agent 已达到本轮工具调用上限，请缩小任务后再试"
+	case errors.Is(err, agent.ErrClassLocked):
+		return "CLASS_LOCKED", "老师已暂停课堂操作"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "UPSTREAM_TIMEOUT", "模型响应超时，请稍后重试"
 	case errors.Is(err, context.Canceled):
 		return "REQUEST_CANCELED", "生成已停止"
 	default:
@@ -276,6 +294,12 @@ func statusForAgent(err error) int {
 	}
 	if errors.Is(err, agent.ErrBudget) {
 		return 429
+	}
+	if errors.Is(err, agent.ErrClassLocked) {
+		return http.StatusLocked
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return http.StatusGatewayTimeout
 	}
 	return 502
 }
@@ -421,6 +445,8 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
 	run, err := s.Store.ActiveRun(r.Context())
 	if err != nil {
 		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
@@ -448,6 +474,8 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "INVALID_RUN_NAME", "场次名称不能为空且不能超过 80 个字")
 		return
 	}
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
 	old, _ := s.Store.ActiveRun(r.Context())
 	created, err := s.Store.CreateRun(r.Context(), newID("run_"), in.Name, old.ID)
 	if err != nil {

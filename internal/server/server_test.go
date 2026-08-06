@@ -55,11 +55,14 @@ type concurrencyClient struct {
 	mu      sync.Mutex
 	current int
 	max     int
+	calls   int
+	delay   time.Duration
 }
 
 func (c *concurrencyClient) Complete(ctx context.Context, req agent.CompletionRequest) (agent.Completion, error) {
 	c.mu.Lock()
 	c.current++
+	c.calls++
 	if c.current > c.max {
 		c.max = c.current
 	}
@@ -69,8 +72,12 @@ func (c *concurrencyClient) Complete(ctx context.Context, req agent.CompletionRe
 		c.current--
 		c.mu.Unlock()
 	}()
+	delay := c.delay
+	if delay == 0 {
+		delay = 15 * time.Millisecond
+	}
 	select {
-	case <-time.After(15 * time.Millisecond):
+	case <-time.After(delay):
 	case <-ctx.Done():
 		return agent.Completion{}, ctx.Err()
 	}
@@ -86,6 +93,12 @@ func (c *concurrencyClient) maximum() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.max
+}
+
+func (c *concurrencyClient) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
 }
 
 func newDelayedClient() *delayedClient {
@@ -158,7 +171,7 @@ func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (
 	cfg := config.Config{AdminPassword: "teacher-secret", AnonymousHMACKey: "hmac-secret", SessionTTL: time.Hour, LLMTimeout: time.Second, LLMConcurrency: 4, StudentTokenBudget: 1000, DefaultMaxTurns: 5, MinMaxTurns: 1, MaxMaxTurns: 8, MaxToolCalls: 4, MaxPersonaChars: 100, MaxSkillChars: 1000, MaxInputChars: 100, MaxOutputChars: 1000}
 	engine := agent.NewEngine(st, client, tools.NewRegistry(tools.Calculator{}), "fake", "hmac-secret", time.Second, 4)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
-	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("student")}, "teacher.html": &fstest.MapFile{Data: []byte("teacher")}, "screen.html": &fstest.MapFile{Data: []byte("screen")}}
+	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("student")}, "teacher.html": &fstest.MapFile{Data: []byte("teacher")}, "screen.html": &fstest.MapFile{Data: []byte("screen")}, "ndjson-stream.js": &fstest.MapFile{Data: []byte("stream parser")}}
 	templates := fstest.MapFS{"quiz.md": &fstest.MapFile{Data: []byte("# template")}}
 	app := New(cfg, st, engine, web, templates, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(func() { st.Close() })
@@ -191,8 +204,12 @@ func requestJSON(t *testing.T, c *testClient, method, target string, body any) (
 	resp := rec.Result()
 	defer resp.Body.Close()
 	for _, cookie := range resp.Cookies() {
-		if cookie.Name == "classroom_session" && cookie.MaxAge >= 0 {
-			c.cookie = cookie
+		if cookie.Name == "classroom_session" {
+			if cookie.MaxAge < 0 {
+				c.cookie = nil
+			} else {
+				c.cookie = cookie
+			}
 		}
 	}
 	raw, _ := io.ReadAll(resp.Body)
@@ -327,12 +344,69 @@ func TestTeacherLockAndRunSwitch(t *testing.T) {
 
 func TestPagesAreServed(t *testing.T) {
 	handler, _ := testServer(t)
-	for _, p := range []string{"/", "/teacher", "/screen", "/healthz"} {
+	for _, p := range []string{"/", "/teacher", "/screen", "/assets/ndjson-stream.js", "/healthz"} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
 		if rec.Code != 200 {
 			t.Fatalf("%s status=%d", p, rec.Code)
 		}
+	}
+}
+
+func TestAuthenticationAndRoleBoundaries(t *testing.T) {
+	handler, _ := testServer(t)
+	guest := newClient(handler)
+	status, body, _ := requestJSON(t, guest, http.MethodGet, "/api/me", nil)
+	if status != http.StatusUnauthorized || body["error"].(map[string]any)["code"] != "UNAUTHENTICATED" {
+		t.Fatalf("guest status=%d body=%v", status, body)
+	}
+
+	student := newClient(handler)
+	status, _, _ = requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, body, _ = requestJSON(t, student, http.MethodGet, "/api/teacher/student/2101", nil)
+	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "FORBIDDEN" {
+		t.Fatalf("student teacher-api status=%d body=%v", status, body)
+	}
+
+	teacher := newClient(handler)
+	status, _, _ = requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, body, _ = requestJSON(t, teacher, http.MethodGet, "/api/design", nil)
+	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "FORBIDDEN" {
+		t.Fatalf("teacher student-api status=%d body=%v", status, body)
+	}
+
+	status, _, _ = requestJSON(t, student, http.MethodPost, "/api/logout", nil)
+	if status != http.StatusOK || student.cookie != nil {
+		t.Fatalf("logout status=%d cookie=%v", status, student.cookie)
+	}
+	status, body, _ = requestJSON(t, student, http.MethodGet, "/api/me", nil)
+	if status != http.StatusUnauthorized || body["error"].(map[string]any)["code"] != "UNAUTHENTICATED" {
+		t.Fatalf("logged-out status=%d body=%v", status, body)
+	}
+}
+
+func TestAgentTimeoutHasStableStreamError(t *testing.T) {
+	client := newBlockingClient()
+	app, _ := testServerWithClient(t, client)
+	app.Agent.Timeout = 10 * time.Millisecond
+	student := newClient(app.Routes())
+	status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, conversation, _ := requestJSON(t, student, http.MethodPost, "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	status, _, raw := requestJSON(t, student, http.MethodPost, "/api/chat", map[string]string{"conversation_id": conversation["id"].(string), "message": "触发超时"})
+	if status != http.StatusOK || !strings.Contains(raw, `"code":"UPSTREAM_TIMEOUT"`) || strings.Contains(raw, "context deadline exceeded") {
+		t.Fatalf("timeout status=%d body=%s", status, raw)
 	}
 }
 
@@ -605,6 +679,169 @@ func TestFiftyStudentsChatWithinGlobalConcurrencyLimit(t *testing.T) {
 	}
 }
 
+func TestConcurrentDesignSavesAndWallSnapshots(t *testing.T) {
+	const studentCount = 24
+	app, _ := testServerWithRoster(t, directClient{}, studentCount)
+	handler := app.Routes()
+	students := make([]*testClient, studentCount)
+	for i := range students {
+		students[i] = newClient(handler)
+		status, _, _ := requestJSON(t, students[i], http.MethodPost, "/api/login", map[string]string{"id": strconv.Itoa(2101 + i)})
+		if status != http.StatusOK {
+			t.Fatalf("login %d status=%d", i, status)
+		}
+	}
+	teacher := newClient(handler)
+	status, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	wall, cancelWall, wallDone := startHandlerStream(handler, http.MethodGet, "/api/teacher/wall", teacher.cookie, nil)
+	defer func() { cancelWall(); <-wallDone }()
+	waitFlush(t, "wall", wall)
+
+	statuses := make(chan int, studentCount)
+	var wg sync.WaitGroup
+	for i := range students {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			status, _, _ := requestJSON(t, students[i], http.MethodPut, "/api/design", map[string]any{"persona": fmt.Sprintf("并发人设%d", i), "skill_md": "并发技能", "tools": []string{}, "max_turns": 3})
+			statuses <- status
+		}(i)
+	}
+	wg.Wait()
+	close(statuses)
+	for status := range statuses {
+		if status != http.StatusOK {
+			t.Fatalf("concurrent save status=%d", status)
+		}
+	}
+	waitWallDesigned(t, wall, studentCount)
+}
+
+func TestLockStopsQueuedAndFutureModelCalls(t *testing.T) {
+	const studentCount = 12
+	client := &concurrencyClient{delay: 300 * time.Millisecond}
+	app, _ := testServerWithRoster(t, client, studentCount)
+	app.Agent.Semaphore = make(chan struct{}, 2)
+	handler := app.Routes()
+	students := make([]*testClient, studentCount)
+	conversations := make([]string, studentCount)
+	for i := range students {
+		students[i] = newClient(handler)
+		status, _, _ := requestJSON(t, students[i], http.MethodPost, "/api/login", map[string]string{"id": strconv.Itoa(2101 + i)})
+		if status != http.StatusOK {
+			t.Fatal(status)
+		}
+		status, conversation, _ := requestJSON(t, students[i], http.MethodPost, "/api/conversations", map[string]string{})
+		if status != http.StatusCreated {
+			t.Fatal(status)
+		}
+		conversations[i] = conversation["id"].(string)
+	}
+
+	type chatResult struct {
+		status int
+		raw    string
+	}
+	results := make(chan chatResult, studentCount)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range students {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			status, _, raw := requestJSON(t, students[i], http.MethodPost, "/api/chat", map[string]string{"conversation_id": conversations[i], "message": "锁定竞态"})
+			results <- chatResult{status: status, raw: raw}
+		}(i)
+	}
+	close(start)
+	deadline := time.Now().Add(2 * time.Second)
+	for client.callCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if calls := client.callCount(); calls != 2 {
+		t.Fatalf("model calls before lock=%d", calls)
+	}
+	teacher := newClient(handler)
+	status, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, _, _ = requestJSON(t, teacher, http.MethodPost, "/api/teacher/lock", map[string]bool{"locked": true})
+	if status != http.StatusOK {
+		t.Fatalf("lock status=%d", status)
+	}
+	wg.Wait()
+	close(results)
+	for result := range results {
+		if result.status != http.StatusOK && result.status != http.StatusLocked {
+			t.Fatalf("chat status=%d body=%s", result.status, result.raw)
+		}
+		if result.status == http.StatusOK && !strings.Contains(result.raw, `"type":"turn_end"`) && !strings.Contains(result.raw, `"code":"CLASS_LOCKED"`) {
+			t.Fatalf("chat did not end or report lock: %s", result.raw)
+		}
+	}
+	if calls := client.callCount(); calls != 2 {
+		t.Fatalf("queued model calls started after lock: %d", calls)
+	}
+	status, _, _ = requestJSON(t, students[0], http.MethodPost, "/api/chat", map[string]string{"conversation_id": conversations[0], "message": "锁定后的新请求"})
+	if status != http.StatusLocked || client.callCount() != 2 {
+		t.Fatalf("post-lock chat status=%d calls=%d", status, client.callCount())
+	}
+}
+
+func TestConcurrentRunCreationIsSerialized(t *testing.T) {
+	const requests = 8
+	app, st := testServerWithRoster(t, directClient{}, 5)
+	handler := app.Routes()
+	teacher := newClient(handler)
+	status, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	type result struct {
+		status int
+		body   map[string]any
+	}
+	results := make(chan result, requests)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			status, body, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/run", map[string]string{"name": fmt.Sprintf("并发场次%d", i)})
+			results <- result{status: status, body: body}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	ids := map[string]bool{}
+	for result := range results {
+		if result.status != http.StatusCreated {
+			t.Fatalf("create run status=%d body=%v", result.status, result.body)
+		}
+		id, _ := result.body["id"].(string)
+		if id == "" || ids[id] {
+			t.Fatalf("duplicate or empty run id: %q", id)
+		}
+		ids[id] = true
+	}
+	active, err := st.ActiveRun(context.Background())
+	if err != nil || active.Status != "active" {
+		t.Fatalf("active run=%#v err=%v", active, err)
+	}
+	wall, err := st.Wall(context.Background(), active.ID)
+	if err != nil || len(wall) != 5 {
+		t.Fatalf("active roster=%d err=%v", len(wall), err)
+	}
+}
+
 func TestSameStudentDoubleChatCreatesOneCompleteTurn(t *testing.T) {
 	client := newDelayedClient()
 	app, st := testServerWithClient(t, client)
@@ -771,6 +1008,44 @@ func waitSSEJSON(t *testing.T, response *streamResponse, want int) map[string]an
 		}
 		if len(events) >= want {
 			return events[want-1]
+		}
+	}
+}
+
+func waitWallDesigned(t *testing.T, response *streamResponse, want int) {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		var latest map[string]any
+		scanner := bufio.NewScanner(bytes.NewReader(response.bytes()))
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			var event map[string]any
+			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data: "))), &event) == nil {
+				latest = event
+			}
+		}
+		if latest != nil {
+			students, _ := latest["students"].([]any)
+			designed := 0
+			for _, raw := range students {
+				student, _ := raw.(map[string]any)
+				if student["has_persona"] == true && student["has_skill"] == true {
+					designed++
+				}
+			}
+			if len(students) == want && designed == want {
+				return
+			}
+		}
+		select {
+		case <-response.flushed:
+		case <-deadline.C:
+			t.Fatalf("wall never reflected %d saved designs; latest=%v", want, latest)
 		}
 	}
 }

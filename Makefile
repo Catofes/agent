@@ -1,4 +1,4 @@
-.PHONY: build test check run dev check-env
+.PHONY: build test test-js check run dev check-env
 
 GOCACHE ?= /tmp/classroom-agent-gocache
 GOMODCACHE ?= /tmp/classroom-agent-gomodcache
@@ -11,10 +11,15 @@ build:
 
 test:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test ./...
+	node --test web/ndjson-stream.test.js
+
+test-js:
+	node --test web/ndjson-stream.test.js
 
 check:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test -race ./...
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go vet ./...
+	node --test web/ndjson-stream.test.js
 
 check-env:
 	@test -f "$(ENV_FILE_PATH)" || { echo "找不到 $(ENV_FILE_PATH)，请先创建环境变量文件" >&2; exit 1; }

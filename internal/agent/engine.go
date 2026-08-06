@@ -18,10 +18,11 @@ import (
 )
 
 var (
-	ErrBusy      = errors.New("chat already in progress")
-	ErrBudget    = errors.New("student token budget exceeded")
-	ErrTurnLimit = errors.New("agent turn limit reached")
-	ErrToolLimit = errors.New("agent tool call limit reached")
+	ErrBusy        = errors.New("chat already in progress")
+	ErrBudget      = errors.New("student token budget exceeded")
+	ErrTurnLimit   = errors.New("agent turn limit reached")
+	ErrToolLimit   = errors.New("agent tool call limit reached")
+	ErrClassLocked = errors.New("classroom is locked")
 )
 
 type Event struct {
@@ -43,6 +44,7 @@ type Event struct {
 type Request struct {
 	RunID, StudentID, ConversationID, TurnID, Input string
 	Design                                          store.Design
+	BeforeModelCall                                 func(context.Context) error
 }
 
 type Engine struct {
@@ -108,7 +110,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	for iteration := 1; iteration <= req.Design.MaxTurns; iteration++ {
 		streamedText := false
 		streamedChars := 0
-		completion, callErr := e.callWithRetry(ctx, CompletionRequest{Model: e.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, OnReasoningDelta: func(delta string) error {
+		completion, callErr := e.callWithRetry(ctx, CompletionRequest{Model: e.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, BeforeCall: req.BeforeModelCall, OnReasoningDelta: func(delta string) error {
 			remaining := e.MaxReasoningChars - reasoningChars
 			if remaining <= 0 {
 				return nil
@@ -245,6 +247,13 @@ func (e *Engine) callWithRetry(ctx context.Context, req CompletionRequest) (Comp
 		case <-callCtx.Done():
 			cancel()
 			return Completion{}, callCtx.Err()
+		}
+		if req.BeforeCall != nil {
+			if err := req.BeforeCall(callCtx); err != nil {
+				<-e.Semaphore
+				cancel()
+				return Completion{}, err
+			}
 		}
 		out, err := e.Client.Complete(callCtx, req)
 		<-e.Semaphore
