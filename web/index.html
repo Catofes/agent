@@ -1,37 +1,733 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>我的 Agent 工作坊</title><style>
-:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#172033;background:#f4f7fb}*{box-sizing:border-box}body{margin:0}button,input,textarea,select{font:inherit}button{min-height:44px;border:0;border-radius:10px;padding:.65rem 1rem;background:#315bea;color:#fff;font-weight:650;cursor:pointer}button.secondary{background:#e8edff;color:#2544a7}button:disabled{opacity:.48;cursor:not-allowed}.shell{max-width:940px;margin:auto;padding:16px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px}.card{background:#fff;border:1px solid #dfe5ef;border-radius:16px;padding:16px;margin:14px 0;box-shadow:0 4px 16px #1d355708}.concepts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.concepts div{background:#f4f7fb;border-radius:10px;padding:10px;color:#536075}.concepts strong{display:block;color:#24385f}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field{display:grid;gap:7px;margin:12px 0}label{font-weight:700}textarea,input,select{width:100%;border:1px solid #bbc5d5;border-radius:10px;padding:11px;background:#fff}textarea{min-height:110px;resize:vertical}.skill{min-height:260px;font-family:ui-monospace,monospace}.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.conversation-bar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;margin-bottom:12px}.conversation-bar label{display:grid;gap:6px}.notice{background:#fff7dc;color:#795700;padding:10px;border-radius:10px;margin-bottom:10px}.status{min-height:24px;color:#536075}.unsaved{color:#b44a00;font-weight:700}.messages{display:grid;gap:12px;max-height:52vh;overflow:auto;padding:4px}.bubble{padding:12px 14px;border-radius:14px;white-space:pre-wrap;word-break:break-word}.user{background:#e8edff;margin-left:10%}.assistant{background:#f1f3f6;margin-right:5%}.reasoning{border-left:4px solid #8290a8;background:#f7f8fa;padding:10px;color:#536075}.reasoning summary{cursor:pointer;font-weight:700}.reasoning pre{white-space:pre-wrap;word-break:break-word;margin:.6rem 0 0;font:inherit}.reasoning small{display:block;margin-top:.5rem}.action{border-left:4px solid #e6a700;background:#fff8dc;padding:9px;margin:6px 0}details{margin-top:6px}.login{max-width:420px;margin:12vh auto}.hidden{display:none!important}.lock{background:#fff0f0;color:#b22121;padding:10px;border-radius:10px;font-weight:700}@media(max-width:700px){.grid,.concepts{grid-template-columns:1fr}.shell{padding:10px}.top{align-items:flex-start}.messages{max-height:45vh}.conversation-bar{grid-template-columns:1fr}}
-</style></head><body><main class="shell">
-<section id="login" class="card login"><h1>🎓 我的 Agent 工作坊</h1><p>输入老师提供的学号进入课堂。</p><form id="loginForm"><div class="field"><label for="studentId">学号</label><input id="studentId" required autocomplete="username"></div><div class="field"><label for="initial">姓名首字（老师要求时填写）</label><input id="initial" maxlength="2"></div><button>进入工作台</button><p id="loginError" class="status"></p></form></section>
-<section id="app" class="hidden"><header class="top"><div><h1>🎓 我的 Agent 工作坊</h1><div id="identity" class="status"></div></div><div class="row"><button id="save">保存设计</button><button id="logout" class="secondary" type="button">退出</button></div></header><div id="locked" class="lock hidden">老师正在讲解，当前已暂停修改和发送。</div>
-<section class="card"><div class="concepts"><div><strong>Soul</strong>它是谁、重视什么、怎样表达。</div><div><strong>Skill</strong>只在任务适用时采用的方法，不是每轮固定剧本。</div><div><strong>Memory</strong>从经历中确认并记住的事实；当前版本尚未开启长期记忆，对话历史不等于 Memory。</div></div><div class="grid"><div><div class="field"><label for="persona">① Soul（人设）</label><textarea id="persona" placeholder="你是一位严格又耐心的初中数学出题老师……"></textarea></div><div class="field"><label for="tools">③ 给它装备</label><label><input id="calculator" type="checkbox" style="width:auto"> 🧮 计算器</label></div><div class="field"><label for="maxTurns">④ 最大步数：<span id="turnValue">5</span></label><input id="maxTurns" type="range" min="1" max="8" value="5"></div></div><div><div class="row"><label for="skill">② Skill（SKILL.md）</label><select id="templates"><option value="">选择模板…</option></select><button id="useTemplate" class="secondary" type="button">使用模板</button></div><p class="status">建议写明“什么时候使用”和“工作步骤”；任务不匹配时 Agent 可以不使用这项 Skill。</p><textarea id="skill" class="skill" placeholder="# 技能名称&#10;&#10;## 什么时候使用&#10;当用户希望……时使用。&#10;&#10;## 工作步骤&#10;1. ……"></textarea></div></div><div id="saveStatus" class="status"></div></section>
-<section class="card"><h2>💬 对话区</h2><div class="conversation-bar"><label for="conversations">当前对话<select id="conversations"></select></label><button id="newConversation" class="secondary" type="button">＋ 新建对话</button></div><div id="designNotice" class="notice hidden">设计已更新。继续发送会采用最新设计并保留本对话历史；想单独测试效果，建议新建对话。</div><div id="messages" class="messages"></div><form id="chatForm" class="row"><input id="chatInput" placeholder="给你的 Agent 一个任务……" autocomplete="off" style="flex:1;min-width:200px"><button id="send">发送</button><button id="stop" type="button" class="secondary hidden">停止</button></form><div id="chatStatus" class="status"></div></section></section></main>
-<script src="/assets/ndjson-stream.js"></script><script>
-const $=id=>document.getElementById(id);let student=null,templates=[],conversationItems=[],activeConversation=null,locked=false,dirty=false,controller=null,deltaQueue=[],deltaFrame=0,queuedDeltaChars=0;
-async function api(url,opt={}){const r=await fetch(url,{...opt,headers:{'Content-Type':'application/json',...(opt.headers||{})}});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error?.message||'请求失败');return data}
-function text(tag,value,cls=''){const el=document.createElement(tag);el.className=cls;el.textContent=value;return el}
-function markDirty(){dirty=true;$('saveStatus').textContent='设计尚未保存';$('saveStatus').className='status unsaved'}
-['persona','skill','calculator','maxTurns'].forEach(id=>$(id).addEventListener('input',()=>{if(id==='maxTurns')$('turnValue').textContent=$('maxTurns').value;markDirty()}));
-$('loginForm').onsubmit=async e=>{e.preventDefault();try{const d=await api('/api/login',{method:'POST',body:JSON.stringify({id:$('studentId').value,name_initial:$('initial').value})});student=d.student;$('identity').textContent=`学号：${student.id}　${student.name}　｜　${d.run.name}`;$('login').classList.add('hidden');$('app').classList.remove('hidden');await load();connectEvents()}catch(err){$('loginError').textContent=err.message}};
-async function resume(){try{const d=await api('/api/me');if(d.role!=='student')return;student=d.student;$('identity').textContent=`学号：${student.id}　${student.name}　｜　${d.run.name}`;$('login').classList.add('hidden');$('app').classList.remove('hidden');await load();connectEvents()}catch{}}resume();
-async function load(){try{const [d,t,c]=await Promise.all([api('/api/design'),api('/api/templates'),api('/api/conversations')]);$('persona').value=d.persona;$('skill').value=d.skill_md;$('calculator').checked=d.tools.includes('calculator');$('maxTurns').value=d.max_turns;$('turnValue').textContent=d.max_turns;templates=t.templates;$('templates').replaceChildren(new Option('选择模板…',''),...templates.map(x=>new Option(x.name,x.id)));conversationItems=c.conversations;if(!conversationItems.length){const created=await api('/api/conversations',{method:'POST',body:'{}'});conversationItems=[created]}activeConversation=conversationItems[0].id;renderConversationSelect();await loadMessages();dirty=false}catch(e){if(e.message.includes('登录'))location.reload();else $('saveStatus').textContent=e.message}}
-$('conversations').onchange=async()=>{if(controller)return;activeConversation=$('conversations').value;$('designNotice').classList.add('hidden');await loadMessages()};
-function renderConversationSelect(){const current=activeConversation;$('conversations').replaceChildren(...conversationItems.map(c=>new Option(`${c.title}（${c.message_count} 条）`,c.id)));if(current&&conversationItems.some(c=>c.id===current))$('conversations').value=current}
-async function refreshConversations(){const d=await api('/api/conversations');conversationItems=d.conversations;renderConversationSelect()}
-async function loadMessages(){$('messages').replaceChildren();if(!activeConversation)return;const m=await api('/api/messages?conversation_id='+encodeURIComponent(activeConversation));m.messages.forEach(renderHistory);$('messages').scrollTop=$('messages').scrollHeight}
-$('newConversation').onclick=async()=>{try{if(controller)return;if(dirty)await saveDesign();const c=await api('/api/conversations',{method:'POST',body:'{}'});activeConversation=c.id;conversationItems.unshift(c);renderConversationSelect();$('messages').replaceChildren();$('designNotice').classList.add('hidden');$('chatStatus').textContent='已新建独立对话，将使用最新保存的设计'}catch(e){$('chatStatus').textContent=e.message}};
-$('useTemplate').onclick=()=>{const t=templates.find(x=>x.id===$('templates').value);if(t){$('skill').value=t.content;markDirty()}};
-$('save').onclick=()=>saveDesign().catch(()=>{});
-$('logout').onclick=async()=>{if(dirty&&!confirm('设计还没有保存，退出后未保存的修改会丢失。确认退出吗？'))return;$('logout').disabled=true;try{await api('/api/logout',{method:'POST'});location.reload()}catch(e){$('saveStatus').textContent='退出失败：'+e.message;$('logout').disabled=false}};
-async function saveDesign(){try{$('save').disabled=true;const d={persona:$('persona').value,skill_md:$('skill').value,tools:$('calculator').checked?['calculator']:[],max_turns:Number($('maxTurns').value)};await api('/api/design',{method:'PUT',body:JSON.stringify(d)});dirty=false;$('saveStatus').textContent='已保存';$('saveStatus').className='status';const c=conversationItems.find(x=>x.id===activeConversation);$('designNotice').classList.toggle('hidden',!c||!c.message_count)}catch(e){$('saveStatus').textContent=e.message;throw e}finally{applyLock()}}
-function appendMessage(value,cls){const el=text('div',value,'bubble '+cls);$('messages').append(el);$('messages').scrollTop=$('messages').scrollHeight;return el}
-function appendReasoning(){const box=document.createElement('details'),summary=document.createElement('summary'),content=document.createElement('pre'),note=document.createElement('small');box.className='reasoning';box.open=true;summary.textContent='正在思考…';note.textContent='这是模型生成的思考草稿，可能不准确。';box.append(summary,content,note);$('messages').append(box);return{box,summary,content}}
-function queueDelta(el,delta){if(!delta)return;deltaQueue.push({el,delta});queuedDeltaChars+=Array.from(delta).length;if(document.hidden||queuedDeltaChars>3000){flushDeltas(true);return}if(!deltaFrame)deltaFrame=requestAnimationFrame(()=>flushDeltas(false))}
-function flushDeltas(all){if(deltaFrame)cancelAnimationFrame(deltaFrame);deltaFrame=0;let budget=all?Infinity:96;while(deltaQueue.length&&budget>0){const item=deltaQueue[0],chars=Array.from(item.delta),take=Math.min(chars.length,budget);item.el.textContent+=chars.slice(0,take).join('');queuedDeltaChars-=take;budget-=take;if(take===chars.length)deltaQueue.shift();else item.delta=chars.slice(take).join('')}if(deltaQueue.length&&!all)deltaFrame=requestAnimationFrame(()=>flushDeltas(false));$('messages').scrollTop=$('messages').scrollHeight}
-function actionBox(ev){const box=document.createElement('div');box.className='action';box.textContent=`第 ${ev.step} 步：${ev.tool}｜${ev.summary||''}`;if(ev.detail){const d=document.createElement('details'),s=document.createElement('summary'),pre=text('pre',JSON.stringify(ev.detail,null,2));s.textContent='查看技术细节';d.append(s,pre);box.append(d)};$('messages').append(box);return box}
-function renderHistory(m){if(m.role==='user')appendMessage(m.content,'user');else if(m.role==='assistant'&&!m.tool_calls)appendMessage(m.content,'assistant');else if(m.role==='assistant'&&m.tool_calls){try{JSON.parse(m.tool_calls).forEach((c,i)=>actionBox({step:i+1,tool:c.function?.name||'工具',summary:c.function?.arguments||'',detail:c}))}catch{}}else if(m.role==='tool')appendMessage('工具结果：'+m.content,'action')}
-$('chatForm').onsubmit=async e=>{e.preventDefault();const value=$('chatInput').value.trim();if(!value||!activeConversation||locked||controller)return;appendMessage(value,'user');$('chatInput').value='';controller=new AbortController();applyLock();$('stop').classList.remove('hidden');let answer=null,reasoning=null;const handleEvent=ev=>{if(ev.type==='reasoning_delta'){if(!reasoning)reasoning=appendReasoning();reasoning.content.textContent+=ev.delta}else if(ev.type==='text_delta'){if(reasoning){reasoning.box.open=false;reasoning.summary.textContent='思考草稿'}if(!answer)answer=appendMessage('','assistant');queueDelta(answer,ev.delta)}else if(ev.type==='tool_start')actionBox(ev);else if(ev.type==='tool_result')appendMessage(`工具返回：${ev.summary}`,'action');else if(ev.type==='turn_end'&&reasoning)reasoning.summary.textContent='思考草稿';else if(ev.type==='error')throw new Error(ev.message)};try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:activeConversation,message:value}),signal:controller.signal});if(!r.ok){const d=await r.json();throw new Error(d.error?.message||'发送失败')}const reader=r.body.getReader(),parser=NDJSONStream.createParser(handleEvent);while(true){const {value:chunk,done}=await reader.read();parser.push(chunk,done);if(done)break}flushDeltas(true);$('chatStatus').textContent='回答完成';await refreshConversations()}catch(err){flushDeltas(true);if(reasoning)reasoning.summary.textContent=err.name==='AbortError'?'思考草稿（已停止）':'思考草稿（生成中断）';$('chatStatus').textContent=err.name==='AbortError'?'已停止生成':err.message}finally{controller=null;$('stop').classList.add('hidden');applyLock()}};
-$('stop').onclick=()=>controller?.abort();
-function applyLock(){['persona','skill','calculator','maxTurns','templates','useTemplate','save','chatInput','send','newConversation'].forEach(id=>$(id).disabled=locked||!!controller);$('conversations').disabled=!!controller;$('locked').classList.toggle('hidden',!locked)}
-function connectEvents(){const es=new EventSource('/api/events');es.addEventListener('classroom',e=>{const d=JSON.parse(e.data);locked=d.locked;applyLock()});es.addEventListener('session_invalidated',()=>{es.close();alert('该学号已在另一台设备登录，请重新登录');location.reload()})}
-</script></body></html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <title>我的 Agent 工作坊</title>
+    <style>
+      :root {
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        color: #172033;
+        background: #f4f7fb;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+      button {
+        min-height: 44px;
+        border: 0;
+        border-radius: 10px;
+        padding: 0.65rem 1rem;
+        background: #315bea;
+        color: #fff;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #e8edff;
+        color: #2544a7;
+      }
+      button:disabled {
+        opacity: 0.48;
+        cursor: not-allowed;
+      }
+      .shell {
+        max-width: 940px;
+        margin: auto;
+        padding: 16px;
+      }
+      .top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #dfe5ef;
+        border-radius: 16px;
+        padding: 16px;
+        margin: 14px 0;
+        box-shadow: 0 4px 16px #1d355708;
+      }
+      .concepts {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+      .concepts div {
+        background: #f4f7fb;
+        border-radius: 10px;
+        padding: 10px;
+        color: #536075;
+      }
+      .concepts strong {
+        display: block;
+        color: #24385f;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+      .field {
+        display: grid;
+        gap: 7px;
+        margin: 12px 0;
+      }
+      label {
+        font-weight: 700;
+      }
+      textarea,
+      input,
+      select {
+        width: 100%;
+        border: 1px solid #bbc5d5;
+        border-radius: 10px;
+        padding: 11px;
+        background: #fff;
+      }
+      textarea {
+        min-height: 110px;
+        resize: vertical;
+      }
+      .skill {
+        min-height: 260px;
+        font-family: ui-monospace, monospace;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .conversation-bar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: end;
+        margin-bottom: 12px;
+      }
+      .conversation-bar label {
+        display: grid;
+        gap: 6px;
+      }
+      .notice {
+        background: #fff7dc;
+        color: #795700;
+        padding: 10px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+      }
+      .status {
+        min-height: 24px;
+        color: #536075;
+      }
+      .unsaved {
+        color: #b44a00;
+        font-weight: 700;
+      }
+      .messages {
+        display: grid;
+        gap: 12px;
+        max-height: 52vh;
+        overflow: auto;
+        padding: 4px;
+      }
+      .bubble {
+        padding: 12px 14px;
+        border-radius: 14px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .user {
+        background: #e8edff;
+        margin-left: 10%;
+      }
+      .assistant {
+        background: #f1f3f6;
+        margin-right: 5%;
+      }
+      .reasoning {
+        border-left: 4px solid #8290a8;
+        background: #f7f8fa;
+        padding: 10px;
+        color: #536075;
+      }
+      .reasoning summary {
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .reasoning pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        margin: 0.6rem 0 0;
+        font: inherit;
+      }
+      .reasoning small {
+        display: block;
+        margin-top: 0.5rem;
+      }
+      .action {
+        border-left: 4px solid #e6a700;
+        background: #fff8dc;
+        padding: 9px;
+        margin: 6px 0;
+      }
+      details {
+        margin-top: 6px;
+      }
+      .login {
+        max-width: 420px;
+        margin: 12vh auto;
+      }
+      .hidden {
+        display: none !important;
+      }
+      .lock {
+        background: #fff0f0;
+        color: #b22121;
+        padding: 10px;
+        border-radius: 10px;
+        font-weight: 700;
+      }
+      @media (max-width: 700px) {
+        .grid,
+        .concepts {
+          grid-template-columns: 1fr;
+        }
+        .shell {
+          padding: 10px;
+        }
+        .top {
+          align-items: flex-start;
+        }
+        .messages {
+          max-height: 45vh;
+        }
+        .conversation-bar {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section id="login" class="card login">
+        <h1>🎓 我的 Agent 工作坊</h1>
+        <p>输入老师提供的学号进入课堂。</p>
+        <form id="loginForm">
+          <div class="field">
+            <label for="studentId">学号</label
+            ><input id="studentId" required autocomplete="username" />
+          </div>
+          <div class="field">
+            <label for="initial">姓名首字（老师要求时填写）</label
+            ><input id="initial" maxlength="2" />
+          </div>
+          <button>进入工作台</button>
+          <p id="loginError" class="status"></p>
+        </form>
+      </section>
+      <section id="app" class="hidden">
+        <header class="top">
+          <div>
+            <h1>🎓 我的 Agent 工作坊</h1>
+            <div id="identity" class="status"></div>
+          </div>
+          <div class="row">
+            <button id="save">保存设计</button
+            ><button id="logout" class="secondary" type="button">退出</button>
+          </div>
+        </header>
+        <div id="locked" class="lock hidden">
+          老师正在讲解，当前已暂停修改和发送。
+        </div>
+        <section class="card">
+          <div class="concepts">
+            <div><strong>Soul</strong>它是谁、重视什么、怎样表达。</div>
+            <div>
+              <strong>Skill</strong>只在任务适用时采用的方法，不是每轮固定剧本。
+            </div>
+            <div>
+              <strong>Memory</strong
+              >从经历中确认并记住的事实；当前版本尚未开启长期记忆，对话历史不等于
+              Memory。
+            </div>
+          </div>
+          <div class="grid">
+            <div>
+              <div class="field">
+                <label for="persona">① Soul（人设）</label
+                ><textarea
+                  id="persona"
+                  placeholder="你是一位严格又耐心的初中数学出题老师……"
+                ></textarea>
+              </div>
+              <div class="field">
+                <label for="tools">③ 给它装备</label
+                ><label
+                  ><input id="calculator" type="checkbox" style="width: auto" />
+                  🧮 计算器</label
+                >
+              </div>
+              <div class="field">
+                <label for="maxTurns"
+                  >④ 最大步数：<span id="turnValue">5</span></label
+                ><input id="maxTurns" type="range" min="1" max="8" value="5" />
+              </div>
+            </div>
+            <div>
+              <div class="row">
+                <label for="skill">② Skill（SKILL.md）</label
+                ><select id="templates">
+                  <option value="">选择模板…</option></select
+                ><button id="useTemplate" class="secondary" type="button">
+                  使用模板
+                </button>
+              </div>
+              <p class="status">
+                建议写明“什么时候使用”和“工作步骤”；任务不匹配时 Agent
+                可以不使用这项 Skill。
+              </p>
+              <textarea
+                id="skill"
+                class="skill"
+                placeholder="# 技能名称&#10;&#10;## 什么时候使用&#10;当用户希望……时使用。&#10;&#10;## 工作步骤&#10;1. ……"
+              ></textarea>
+            </div>
+          </div>
+          <div id="saveStatus" class="status"></div>
+        </section>
+        <section class="card">
+          <h2>💬 对话区</h2>
+          <div class="conversation-bar">
+            <label for="conversations"
+              >当前对话<select id="conversations"></select></label
+            ><button id="newConversation" class="secondary" type="button">
+              ＋ 新建对话
+            </button>
+          </div>
+          <div id="designNotice" class="notice hidden">
+            设计已更新。继续发送会采用最新设计并保留本对话历史；想单独测试效果，建议新建对话。
+          </div>
+          <div id="messages" class="messages"></div>
+          <form id="chatForm" class="row">
+            <input
+              id="chatInput"
+              placeholder="给你的 Agent 一个任务……"
+              autocomplete="off"
+              style="flex: 1; min-width: 200px"
+            /><button id="send">发送</button
+            ><button id="stop" type="button" class="secondary hidden">
+              停止
+            </button>
+          </form>
+          <div id="chatStatus" class="status"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/assets/ndjson-stream.js"></script>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let student = null,
+        templates = [],
+        conversationItems = [],
+        activeConversation = null,
+        locked = false,
+        dirty = false,
+        controller = null,
+        deltaQueue = [],
+        deltaFrame = 0,
+        queuedDeltaChars = 0;
+      async function api(url, opt = {}) {
+        const r = await fetch(url, {
+          ...opt,
+          headers: {
+            "Content-Type": "application/json",
+            ...(opt.headers || {}),
+          },
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error?.message || "请求失败");
+        return data;
+      }
+      function text(tag, value, cls = "") {
+        const el = document.createElement(tag);
+        el.className = cls;
+        el.textContent = value;
+        return el;
+      }
+      function markDirty() {
+        dirty = true;
+        $("saveStatus").textContent = "设计尚未保存";
+        $("saveStatus").className = "status unsaved";
+      }
+      ["persona", "skill", "calculator", "maxTurns"].forEach((id) =>
+        $(id).addEventListener("input", () => {
+          if (id === "maxTurns")
+            $("turnValue").textContent = $("maxTurns").value;
+          markDirty();
+        }),
+      );
+      $("loginForm").onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          const d = await api("/api/login", {
+            method: "POST",
+            body: JSON.stringify({
+              id: $("studentId").value,
+              name_initial: $("initial").value,
+            }),
+          });
+          student = d.student;
+          $("identity").textContent =
+            `学号：${student.id}　${student.name}　｜　${d.run.name}`;
+          $("login").classList.add("hidden");
+          $("app").classList.remove("hidden");
+          await load();
+          connectEvents();
+        } catch (err) {
+          $("loginError").textContent = err.message;
+        }
+      };
+      async function resume() {
+        try {
+          const d = await api("/api/me");
+          if (d.role !== "student") return;
+          student = d.student;
+          $("identity").textContent =
+            `学号：${student.id}　${student.name}　｜　${d.run.name}`;
+          $("login").classList.add("hidden");
+          $("app").classList.remove("hidden");
+          await load();
+          connectEvents();
+        } catch {}
+      }
+      resume();
+      async function load() {
+        try {
+          const [d, t, c] = await Promise.all([
+            api("/api/design"),
+            api("/api/templates"),
+            api("/api/conversations"),
+          ]);
+          $("persona").value = d.persona;
+          $("skill").value = d.skill_md;
+          $("calculator").checked = d.tools.includes("calculator");
+          $("maxTurns").value = d.max_turns;
+          $("turnValue").textContent = d.max_turns;
+          templates = t.templates;
+          $("templates").replaceChildren(
+            new Option("选择模板…", ""),
+            ...templates.map((x) => new Option(x.name, x.id)),
+          );
+          conversationItems = c.conversations;
+          if (!conversationItems.length) {
+            const created = await api("/api/conversations", {
+              method: "POST",
+              body: "{}",
+            });
+            conversationItems = [created];
+          }
+          activeConversation = conversationItems[0].id;
+          renderConversationSelect();
+          await loadMessages();
+          dirty = false;
+        } catch (e) {
+          if (e.message.includes("登录")) location.reload();
+          else $("saveStatus").textContent = e.message;
+        }
+      }
+      $("conversations").onchange = async () => {
+        if (controller) return;
+        activeConversation = $("conversations").value;
+        $("designNotice").classList.add("hidden");
+        await loadMessages();
+      };
+      function renderConversationSelect() {
+        const current = activeConversation;
+        $("conversations").replaceChildren(
+          ...conversationItems.map(
+            (c) => new Option(`${c.title}（${c.message_count} 条）`, c.id),
+          ),
+        );
+        if (current && conversationItems.some((c) => c.id === current))
+          $("conversations").value = current;
+      }
+      async function refreshConversations() {
+        const d = await api("/api/conversations");
+        conversationItems = d.conversations;
+        renderConversationSelect();
+      }
+      async function loadMessages() {
+        $("messages").replaceChildren();
+        if (!activeConversation) return;
+        const m = await api(
+          "/api/messages?conversation_id=" +
+            encodeURIComponent(activeConversation),
+        );
+        m.messages.forEach(renderHistory);
+        $("messages").scrollTop = $("messages").scrollHeight;
+      }
+      $("newConversation").onclick = async () => {
+        try {
+          if (controller) return;
+          if (dirty) await saveDesign();
+          const c = await api("/api/conversations", {
+            method: "POST",
+            body: "{}",
+          });
+          activeConversation = c.id;
+          conversationItems.unshift(c);
+          renderConversationSelect();
+          $("messages").replaceChildren();
+          $("designNotice").classList.add("hidden");
+          $("chatStatus").textContent = "已新建独立对话，将使用最新保存的设计";
+        } catch (e) {
+          $("chatStatus").textContent = e.message;
+        }
+      };
+      $("useTemplate").onclick = () => {
+        const t = templates.find((x) => x.id === $("templates").value);
+        if (t) {
+          $("skill").value = t.content;
+          markDirty();
+        }
+      };
+      $("save").onclick = () => saveDesign().catch(() => {});
+      $("logout").onclick = async () => {
+        if (
+          dirty &&
+          !confirm("设计还没有保存，退出后未保存的修改会丢失。确认退出吗？")
+        )
+          return;
+        $("logout").disabled = true;
+        try {
+          await api("/api/logout", { method: "POST" });
+          location.reload();
+        } catch (e) {
+          $("saveStatus").textContent = "退出失败：" + e.message;
+          $("logout").disabled = false;
+        }
+      };
+      async function saveDesign() {
+        try {
+          $("save").disabled = true;
+          const d = {
+            persona: $("persona").value,
+            skill_md: $("skill").value,
+            tools: $("calculator").checked ? ["calculator"] : [],
+            max_turns: Number($("maxTurns").value),
+          };
+          await api("/api/design", { method: "PUT", body: JSON.stringify(d) });
+          dirty = false;
+          $("saveStatus").textContent = "已保存";
+          $("saveStatus").className = "status";
+          const c = conversationItems.find((x) => x.id === activeConversation);
+          $("designNotice").classList.toggle("hidden", !c || !c.message_count);
+        } catch (e) {
+          $("saveStatus").textContent = e.message;
+          throw e;
+        } finally {
+          applyLock();
+        }
+      }
+      function appendMessage(value, cls) {
+        const el = text("div", value, "bubble " + cls);
+        $("messages").append(el);
+        $("messages").scrollTop = $("messages").scrollHeight;
+        return el;
+      }
+      function appendReasoning() {
+        const box = document.createElement("details"),
+          summary = document.createElement("summary"),
+          content = document.createElement("pre"),
+          note = document.createElement("small");
+        box.className = "reasoning";
+        box.open = true;
+        summary.textContent = "正在思考…";
+        note.textContent = "这是模型生成的思考草稿，可能不准确。";
+        box.append(summary, content, note);
+        $("messages").append(box);
+        return { box, summary, content };
+      }
+      function queueDelta(el, delta) {
+        if (!delta) return;
+        deltaQueue.push({ el, delta });
+        queuedDeltaChars += Array.from(delta).length;
+        if (document.hidden || queuedDeltaChars > 3000) {
+          flushDeltas(true);
+          return;
+        }
+        if (!deltaFrame)
+          deltaFrame = requestAnimationFrame(() => flushDeltas(false));
+      }
+      function flushDeltas(all) {
+        if (deltaFrame) cancelAnimationFrame(deltaFrame);
+        deltaFrame = 0;
+        let budget = all ? Infinity : 96;
+        while (deltaQueue.length && budget > 0) {
+          const item = deltaQueue[0],
+            chars = Array.from(item.delta),
+            take = Math.min(chars.length, budget);
+          item.el.textContent += chars.slice(0, take).join("");
+          queuedDeltaChars -= take;
+          budget -= take;
+          if (take === chars.length) deltaQueue.shift();
+          else item.delta = chars.slice(take).join("");
+        }
+        if (deltaQueue.length && !all)
+          deltaFrame = requestAnimationFrame(() => flushDeltas(false));
+        $("messages").scrollTop = $("messages").scrollHeight;
+      }
+      function actionBox(ev) {
+        const box = document.createElement("div");
+        box.className = "action";
+        box.textContent = `第 ${ev.step} 步：${ev.tool}｜${ev.summary || ""}`;
+        if (ev.detail) {
+          const d = document.createElement("details"),
+            s = document.createElement("summary"),
+            pre = text("pre", JSON.stringify(ev.detail, null, 2));
+          s.textContent = "查看技术细节";
+          d.append(s, pre);
+          box.append(d);
+        }
+        $("messages").append(box);
+        return box;
+      }
+      function renderHistory(m) {
+        if (m.role === "user") appendMessage(m.content, "user");
+        else if (m.role === "assistant" && !m.tool_calls)
+          appendMessage(m.content, "assistant");
+        else if (m.role === "assistant" && m.tool_calls) {
+          try {
+            JSON.parse(m.tool_calls).forEach((c, i) =>
+              actionBox({
+                step: i + 1,
+                tool: c.function?.name || "工具",
+                summary: c.function?.arguments || "",
+                detail: c,
+              }),
+            );
+          } catch {}
+        } else if (m.role === "tool")
+          appendMessage("工具结果：" + m.content, "action");
+      }
+      $("chatForm").onsubmit = async (e) => {
+        e.preventDefault();
+        const value = $("chatInput").value.trim();
+        if (!value || !activeConversation || locked || controller) return;
+        appendMessage(value, "user");
+        $("chatInput").value = "";
+        controller = new AbortController();
+        applyLock();
+        $("stop").classList.remove("hidden");
+        let answer = null,
+          reasoning = null;
+        const handleEvent = (ev) => {
+          if (ev.type === "reasoning_delta") {
+            if (!reasoning) reasoning = appendReasoning();
+            reasoning.content.textContent += ev.delta;
+          } else if (ev.type === "text_delta") {
+            if (reasoning) {
+              reasoning.box.open = false;
+              reasoning.summary.textContent = "思考草稿";
+            }
+            if (!answer) answer = appendMessage("", "assistant");
+            queueDelta(answer, ev.delta);
+          } else if (ev.type === "tool_start") actionBox(ev);
+          else if (ev.type === "tool_result")
+            appendMessage(`工具返回：${ev.summary}`, "action");
+          else if (ev.type === "turn_end" && reasoning)
+            reasoning.summary.textContent = "思考草稿";
+          else if (ev.type === "error") throw new Error(ev.message);
+        };
+        try {
+          const r = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              conversation_id: activeConversation,
+              message: value,
+            }),
+            signal: controller.signal,
+          });
+          if (!r.ok) {
+            const d = await r.json();
+            throw new Error(d.error?.message || "发送失败");
+          }
+          const reader = r.body.getReader(),
+            parser = NDJSONStream.createParser(handleEvent);
+          while (true) {
+            const { value: chunk, done } = await reader.read();
+            parser.push(chunk, done);
+            if (done) break;
+          }
+          flushDeltas(true);
+          $("chatStatus").textContent = "回答完成";
+          await refreshConversations();
+        } catch (err) {
+          flushDeltas(true);
+          if (reasoning)
+            reasoning.summary.textContent =
+              err.name === "AbortError"
+                ? "思考草稿（已停止）"
+                : "思考草稿（生成中断）";
+          $("chatStatus").textContent =
+            err.name === "AbortError" ? "已停止生成" : err.message;
+        } finally {
+          controller = null;
+          $("stop").classList.add("hidden");
+          applyLock();
+        }
+      };
+      $("stop").onclick = () => controller?.abort();
+      function applyLock() {
+        [
+          "persona",
+          "skill",
+          "calculator",
+          "maxTurns",
+          "templates",
+          "useTemplate",
+          "save",
+          "chatInput",
+          "send",
+          "newConversation",
+        ].forEach((id) => ($(id).disabled = locked || !!controller));
+        $("conversations").disabled = !!controller;
+        $("locked").classList.toggle("hidden", !locked);
+      }
+      function connectEvents() {
+        const es = new EventSource("/api/events");
+        es.addEventListener("classroom", (e) => {
+          const d = JSON.parse(e.data);
+          locked = d.locked;
+          applyLock();
+        });
+        es.addEventListener("session_invalidated", () => {
+          es.close();
+          alert("该学号已在另一台设备登录，请重新登录");
+          location.reload();
+        });
+      }
+    </script>
+  </body>
+</html>
