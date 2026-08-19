@@ -377,7 +377,7 @@ func (s *Server) wallEvents(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return false
 		}
-		sendSSE(w, "wall", map[string]any{"run": current, "students": items, "server_time": time.Now().UTC()})
+		sendSSE(w, "wall", map[string]any{"run": current, "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
 		flusher.Flush()
 		return true
 	}
@@ -485,9 +485,12 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	s.studentHub.Publish(classroomEvent{Type: "run_ended", RunID: old.ID})
 	s.wallHub.Publish(struct{}{})
 	s.screenMu.Lock()
-	s.screen = screenState{Empty: true}
+	s.screenRevision++
+	s.screen = screenState{Revision: s.screenRevision, Empty: true}
+	s.screenAck = nil
+	emptyScreen := s.screen
 	s.screenMu.Unlock()
-	s.screenHub.Publish(screenState{Empty: true})
+	s.screenHub.Publish(emptyScreen)
 	s.Logger.Info("run created", "run_id", created.ID, "name", created.Name)
 	writeJSON(w, 201, created)
 }
@@ -554,13 +557,60 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "NO_COMPLETE_TURN", "指定回合尚未完成或不存在")
 		return
 	}
-	state := screenState{Name: st.Name, Persona: d.Persona, SkillMD: d.SkillMD, Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: publicScreenMessages(selected), Empty: false}
+	state := screenState{SpotlightID: newID("screen_"), Name: st.Name, Persona: d.Persona, SkillMD: d.SkillMD, Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: publicScreenMessages(selected), Empty: false}
+	ack := make(chan struct{})
 	s.screenMu.Lock()
+	s.screenRevision++
+	state.Revision = s.screenRevision
 	s.screen = state
+	s.screenAck = ack
 	s.screenMu.Unlock()
+	connections := s.screenHub.Count()
 	s.screenHub.Publish(state)
-	s.Logger.Info("spotlight changed", "run_id", run.ID, "student_id", st.ID, "turn_id", turnID)
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	s.Logger.Info("spotlight published", "run_id", run.ID, "student_id", st.ID, "turn_id", turnID, "spotlight_id", state.SpotlightID, "screen_connections", connections)
+	if connections == 0 {
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "delivered": false, "spotlight_id": state.SpotlightID, "screen_connections": 0})
+		return
+	}
+	timer := time.NewTimer(s.spotlightAckTimeout)
+	defer timer.Stop()
+	select {
+	case <-ack:
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "delivered": true, "spotlight_id": state.SpotlightID, "screen_connections": connections})
+	case <-timer.C:
+		s.Logger.Warn("spotlight acknowledgement timed out", "run_id", run.ID, "student_id", st.ID, "turn_id", turnID, "spotlight_id", state.SpotlightID, "screen_connections", connections)
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "delivered": false, "spotlight_id": state.SpotlightID, "screen_connections": connections})
+	case <-r.Context().Done():
+		return
+	}
+}
+
+func (s *Server) ackScreen(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		SpotlightID string `json:"spotlight_id"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	in.SpotlightID = strings.TrimSpace(in.SpotlightID)
+	if in.SpotlightID == "" || runeLen(in.SpotlightID) > maxConversationChars {
+		writeError(w, http.StatusBadRequest, "INVALID_SCREEN_ACK", "投屏确认参数不正确")
+		return
+	}
+	s.screenMu.Lock()
+	if s.screen.SpotlightID != in.SpotlightID || s.screenAck == nil {
+		s.screenMu.Unlock()
+		writeError(w, http.StatusConflict, "STALE_SCREEN_ACK", "投屏内容已更新")
+		return
+	}
+	select {
+	case <-s.screenAck:
+	default:
+		close(s.screenAck)
+	}
+	s.screenMu.Unlock()
+	s.Logger.Info("spotlight acknowledged", "spotlight_id", in.SpotlightID)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func publicScreenMessages(messages []store.Message) []screenMessage {
@@ -598,7 +648,13 @@ func (s *Server) screenEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, ch := s.screenHub.Subscribe()
-	defer s.screenHub.Unsubscribe(id)
+	s.Logger.Info("screen connected", "connection_id", id, "screen_connections", s.screenHub.Count())
+	s.wallHub.Publish(struct{}{})
+	defer func() {
+		s.screenHub.Unsubscribe(id)
+		s.Logger.Info("screen disconnected", "connection_id", id, "screen_connections", s.screenHub.Count())
+		s.wallHub.Publish(struct{}{})
+	}()
 	s.screenMu.RLock()
 	current := s.screen
 	s.screenMu.RUnlock()

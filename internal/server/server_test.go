@@ -488,20 +488,12 @@ func TestSpotlightBeforeAndAfterScreenConnect(t *testing.T) {
 	if initial := waitSSEJSON(t, stream, 1); initial["empty"] != true {
 		t.Fatalf("initial=%v", initial)
 	}
-	status, _, _ = requestJSON(t, teacher, "POST", "/api/teacher/spotlight", map[string]string{"id": "2101", "turn_id": firstTurn})
-	if status != http.StatusOK {
-		t.Fatal(status)
-	}
-	if pushed := waitSSEJSON(t, stream, 2); pushed["name"] != "张三" || pushed["empty"] != false || !screenContains(pushed, "第一轮作品") || screenContains(pushed, "第二轮作品") {
+	if pushed := spotlightAndAck(t, handler, teacher, stream, 2, map[string]string{"id": "2101", "turn_id": firstTurn}); pushed["name"] != "张三" || pushed["empty"] != false || !screenContains(pushed, "第一轮作品") || screenContains(pushed, "第二轮作品") {
 		t.Fatalf("pushed=%v", pushed)
 	} else {
 		assertPublicScreenFields(t, pushed)
 	}
-	status, _, _ = requestJSON(t, teacher, "POST", "/api/teacher/spotlight", map[string]string{"id": "2101", "turn_id": ""})
-	if status != http.StatusOK {
-		t.Fatal(status)
-	}
-	latest := waitSSEJSON(t, stream, 3)
+	latest := spotlightAndAck(t, handler, teacher, stream, 3, map[string]string{"id": "2101", "turn_id": ""})
 	if !screenContains(latest, "第二轮作品") || screenContains(latest, "第一轮作品") {
 		t.Fatalf("default spotlight did not choose latest complete turn: %v", latest)
 	}
@@ -531,13 +523,83 @@ func TestSpotlightBeforeAndAfterScreenConnect(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatal(status)
 	}
-	status, _, _ = requestJSON(t, teacher, "POST", "/api/teacher/spotlight", map[string]string{"id": "2102", "turn_id": ""})
+	if switched := spotlightAndAck(t, handler, teacher, stream2, 2, map[string]string{"id": "2102", "turn_id": ""}); switched["name"] != "李四" || !screenContains(switched, "李四的作品") {
+		t.Fatalf("screen did not switch students: %v", switched)
+	}
+}
+
+func TestSpotlightWithoutConnectedScreenIsNotReportedDelivered(t *testing.T) {
+	app, _ := testServerWithClient(t, directClient{})
+	app.spotlightAckTimeout = 100 * time.Millisecond
+	handler := app.Routes()
+	teacher := newClient(handler)
+	status, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
 	if status != http.StatusOK {
 		t.Fatal(status)
 	}
-	if switched := waitSSEJSON(t, stream2, 2); switched["name"] != "李四" || !screenContains(switched, "李四的作品") {
-		t.Fatalf("screen did not switch students: %v", switched)
+	student := newClient(handler)
+	status, _, _ = requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
 	}
+	status, conversation, _ := requestJSON(t, student, http.MethodPost, "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	status, _, _ = requestJSON(t, student, http.MethodPost, "/api/chat", map[string]string{"conversation_id": conversation["id"].(string), "message": "稍后连接大屏"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, body, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/spotlight", map[string]string{"id": "2101", "turn_id": ""})
+	if status != http.StatusAccepted || body["delivered"] != false || body["screen_connections"] != float64(0) {
+		t.Fatalf("spotlight without screen status=%d body=%v", status, body)
+	}
+
+	stream, cancel, done := startScreenStream(handler)
+	defer func() { cancel(); <-done }()
+	snapshot := waitSSEJSON(t, stream, 1)
+	if !screenContains(snapshot, "稍后连接大屏") {
+		t.Fatalf("late screen did not receive saved snapshot: %v", snapshot)
+	}
+	ack := newClient(handler)
+	status, _, _ = requestJSON(t, ack, http.MethodPost, "/api/screen/ack", map[string]any{"spotlight_id": snapshot["spotlight_id"]})
+	if status != http.StatusOK {
+		t.Fatalf("late screen acknowledgement status=%d", status)
+	}
+	status, stale, _ := requestJSON(t, ack, http.MethodPost, "/api/screen/ack", map[string]string{"spotlight_id": "screen_stale"})
+	if status != http.StatusConflict || stale["error"].(map[string]any)["code"] != "STALE_SCREEN_ACK" {
+		t.Fatalf("stale acknowledgement status=%d body=%v", status, stale)
+	}
+}
+
+type spotlightResult struct {
+	status int
+	body   map[string]any
+	raw    string
+}
+
+func spotlightAndAck(t *testing.T, handler http.Handler, teacher *testClient, stream *streamResponse, eventCount int, payload map[string]string) map[string]any {
+	t.Helper()
+	result := make(chan spotlightResult, 1)
+	go func() {
+		status, body, raw := requestJSON(t, teacher, http.MethodPost, "/api/teacher/spotlight", payload)
+		result <- spotlightResult{status: status, body: body, raw: raw}
+	}()
+	pushed := waitSSEJSON(t, stream, eventCount)
+	spotlightID, _ := pushed["spotlight_id"].(string)
+	if spotlightID == "" {
+		t.Fatalf("screen event missing spotlight_id: %v", pushed)
+	}
+	ack := newClient(handler)
+	status, _, raw := requestJSON(t, ack, http.MethodPost, "/api/screen/ack", map[string]string{"spotlight_id": spotlightID})
+	if status != http.StatusOK {
+		t.Fatalf("screen acknowledgement status=%d body=%s", status, raw)
+	}
+	response := <-result
+	if response.status != http.StatusOK || response.body["delivered"] != true || response.body["spotlight_id"] != spotlightID {
+		t.Fatalf("spotlight response status=%d body=%s", response.status, response.raw)
+	}
+	return pushed
 }
 
 func turnIDFromNDJSON(t *testing.T, raw string) string {

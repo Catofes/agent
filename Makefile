@@ -19,15 +19,15 @@ release:
 
 test:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test ./...
-	node --test web/ndjson-stream.test.js
+	node --test web/*.test.js
 
 test-js:
-	node --test web/ndjson-stream.test.js
+	node --test web/*.test.js
 
 check:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test -race ./...
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go vet ./...
-	node --test web/ndjson-stream.test.js
+	node --test web/*.test.js
 
 smoke:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go run ./cmd/smoke
