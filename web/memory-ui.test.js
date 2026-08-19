@@ -1,0 +1,27 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+
+test("student workbench exposes the complete Memory confirmation workflow", () => {
+  for (const id of [
+    "memoryEnabled",
+    "refreshMemory",
+    "clearMemory",
+    "memoryUsage",
+    "memoryList",
+  ]) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(html, /只有你确认的条目/);
+  assert.match(html, /新建课堂场次不会带入/);
+  assert.match(html, /contextReceipt\(ev\)/);
+});
+
+test("Memory and context receipts use text-only DOM rendering", () => {
+  assert.doesNotMatch(html, /\.innerHTML\s*=/);
+  assert.match(html, /content\.textContent/);
+  assert.match(html, /text\("div", item\.content\)/);
+});

@@ -175,6 +175,130 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"messages": items, "next_cursor": next})
 }
 
+func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	state, err := s.Store.MemoryState(r.Context(), p.Session.RunID, p.Session.StudentID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取 Memory 失败")
+		return
+	}
+	tokens := 0
+	for _, item := range state.Items {
+		tokens += memoryTokenEstimate(item.Content)
+	}
+	writeJSON(w, 200, map[string]any{
+		"enabled": state.Enabled,
+		"items":   state.Items,
+		"usage":   map[string]int{"items": len(state.Items), "estimated_tokens": tokens},
+		"limits":  map[string]int{"items": s.Config.MaxMemoryItems, "chars_per_item": s.Config.MaxMemoryChars, "estimated_tokens": s.Config.MaxMemoryTokens},
+		"scope":   "current_run",
+	})
+}
+
+func (s *Server) setMemorySettings(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	var in struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := s.Store.SetMemoryEnabled(r.Context(), p.Session.RunID, p.Session.StudentID, in.Enabled); err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "更新 Memory 开关失败")
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"enabled": in.Enabled})
+}
+
+func (s *Server) updateMemory(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" || runeLen(id) > maxMemoryIDChars {
+		writeError(w, 404, "MEMORY_NOT_FOUND", "未找到该条 Memory")
+		return
+	}
+	var in struct {
+		Content string `json:"content"`
+		Status  string `json:"status"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	in.Content = strings.TrimSpace(in.Content)
+	if in.Content == "" || runeLen(in.Content) > s.Config.MaxMemoryChars {
+		writeError(w, 400, "INVALID_MEMORY", fmt.Sprintf("Memory 不能为空且不能超过 %d 个字", s.Config.MaxMemoryChars))
+		return
+	}
+	if in.Status != "candidate" && in.Status != "confirmed" {
+		writeError(w, 400, "INVALID_MEMORY_STATUS", "Memory 状态不正确")
+		return
+	}
+	items, err := s.Store.Memories(r.Context(), p.Session.RunID, p.Session.StudentID, "")
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取 Memory 失败")
+		return
+	}
+	tokens := memoryTokenEstimate(in.Content)
+	found := false
+	for _, item := range items {
+		if item.ID == id {
+			found = true
+			continue
+		}
+		tokens += memoryTokenEstimate(item.Content)
+	}
+	if !found {
+		writeError(w, 404, "MEMORY_NOT_FOUND", "未找到该条 Memory")
+		return
+	}
+	if tokens > s.Config.MaxMemoryTokens {
+		writeError(w, 400, "MEMORY_LIMIT_EXCEEDED", "Memory 总 token 估算已超过上限，请先缩短或删除其他条目")
+		return
+	}
+	updated, err := s.Store.UpdateMemory(r.Context(), p.Session.RunID, p.Session.StudentID, id, in.Content, in.Status)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, 404, "MEMORY_NOT_FOUND", "未找到该条 Memory")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "更新 Memory 失败")
+		return
+	}
+	writeJSON(w, 200, updated)
+}
+
+func (s *Server) deleteMemory(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" || runeLen(id) > maxMemoryIDChars {
+		writeError(w, 404, "MEMORY_NOT_FOUND", "未找到该条 Memory")
+		return
+	}
+	err := s.Store.DeleteMemory(r.Context(), p.Session.RunID, p.Session.StudentID, id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, 404, "MEMORY_NOT_FOUND", "未找到该条 Memory")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "删除 Memory 失败")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) clearMemory(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	if err := s.Store.ClearMemories(r.Context(), p.Session.RunID, p.Session.StudentID); err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "清空 Memory 失败")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func memoryTokenEstimate(value string) int {
+	return (len([]byte(value)) + 2) / 3
+}
+
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.withShutdown(r.Context())
 	defer cancel()

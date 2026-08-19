@@ -81,6 +81,46 @@
         display: block;
         color: #24385f;
       }
+      .memory-workspace {
+        margin: 14px 0;
+        padding: 12px;
+        border: 1px solid #dfe5ef;
+        border-radius: 12px;
+        background: #fbfcff;
+      }
+      .memory-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .memory-item {
+        display: grid;
+        gap: 7px;
+        padding: 10px;
+        border-radius: 10px;
+        background: #f1f4fa;
+      }
+      .memory-item.candidate {
+        border-left: 4px solid #e6a700;
+      }
+      .memory-item.confirmed {
+        border-left: 4px solid #2a9d62;
+      }
+      button.small {
+        min-height: 34px;
+        padding: 0.35rem 0.7rem;
+      }
+      button.danger {
+        background: #fff0f0;
+        color: #a42626;
+      }
+      .context-receipt {
+        border-left: 4px solid #5b72c9;
+        background: #eef2ff;
+        padding: 9px;
+        margin: 4px 0;
+        color: #35466f;
+      }
       .grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -263,13 +303,32 @@
           <div class="concepts">
             <div><strong>Soul</strong>它是谁、重视什么、怎样表达。</div>
             <div>
-              <strong>Skill</strong>只在任务适用时采用的方法，不是每轮固定剧本。
+              <strong>Memory</strong
+              >学生确认过、与任务相关时才跨对话读取的事实；不等于对话历史。
             </div>
             <div>
-              <strong>Memory</strong
-              >从经历中确认并记住的事实；当前版本尚未开启长期记忆，对话历史不等于
-              Memory。
+              <strong>Skill</strong>只在任务适用时采用的方法，不是每轮固定剧本。
             </div>
+          </div>
+          <div class="memory-workspace">
+            <div class="row">
+              <strong>② Memory</strong>
+              <label
+                ><input id="memoryEnabled" type="checkbox" style="width: auto" />
+                开启长期 Memory</label
+              >
+              <button id="refreshMemory" class="secondary small" type="button">
+                刷新候选
+              </button>
+              <button id="clearMemory" class="danger small" type="button">
+                清空
+              </button>
+            </div>
+            <p class="status">
+              开启后会自动提取候选；只有你确认的条目才会在同一课堂场次的其他对话中按相关性读取。新建课堂场次不会带入。
+            </p>
+            <div id="memoryUsage" class="status"></div>
+            <div id="memoryList" class="memory-list"></div>
           </div>
           <div class="grid">
             <div>
@@ -281,7 +340,7 @@
                 ></textarea>
               </div>
               <div class="field">
-                <label for="tools">③ 给它装备</label
+                <label for="tools">④ 给它装备</label
                 ><label
                   ><input id="calculator" type="checkbox" style="width: auto" />
                   🧮 计算器</label
@@ -289,13 +348,13 @@
               </div>
               <div class="field">
                 <label for="maxTurns"
-                  >④ 最大步数：<span id="turnValue">5</span></label
+                  >⑤ 最大步数：<span id="turnValue">5</span></label
                 ><input id="maxTurns" type="range" min="1" max="8" value="5" />
               </div>
             </div>
             <div>
               <div class="row">
-                <label for="skill">② Skill（SKILL.md）</label
+                <label for="skill">③ Skill（SKILL.md）</label
                 ><select id="templates">
                   <option value="">选择模板…</option></select
                 ><button id="useTemplate" class="secondary" type="button">
@@ -350,6 +409,7 @@
         templates = [],
         conversationItems = [],
         activeConversation = null,
+        memoryState = null,
         locked = false,
         dirty = false,
         controller = null,
@@ -423,10 +483,11 @@
       resume();
       async function load() {
         try {
-          const [d, t, c] = await Promise.all([
+          const [d, t, c, memory] = await Promise.all([
             api("/api/design"),
             api("/api/templates"),
             api("/api/conversations"),
+            api("/api/memory"),
           ]);
           $("persona").value = d.persona;
           $("skill").value = d.skill_md;
@@ -434,6 +495,8 @@
           $("maxTurns").value = d.max_turns;
           $("turnValue").textContent = d.max_turns;
           templates = t.templates;
+          memoryState = memory;
+          renderMemory();
           $("templates").replaceChildren(
             new Option("选择模板…", ""),
             ...templates.map((x) => new Option(x.name, x.id)),
@@ -549,6 +612,100 @@
           applyLock();
         }
       }
+      function renderMemory() {
+        if (!memoryState) return;
+        $("memoryEnabled").checked = memoryState.enabled;
+        const usage = memoryState.usage || {},
+          limits = memoryState.limits || {};
+        $("memoryUsage").textContent =
+          `${usage.items || 0}/${limits.items || 30} 条，约 ${usage.estimated_tokens || 0}/${limits.estimated_tokens || 1200} tokens；单条最多 ${limits.chars_per_item || 400} 字。`;
+        const list = $("memoryList");
+        list.replaceChildren();
+        if (!memoryState.items.length) {
+          list.append(text("div", "还没有 Memory。开启后正常对话，系统会在回答完成后生成待确认候选。", "status"));
+          return;
+        }
+        memoryState.items.forEach((item) => {
+          const box = document.createElement("div"),
+            content = text("div", item.content),
+            controls = document.createElement("div"),
+            badge = text("strong", item.status === "confirmed" ? "已确认" : "待确认");
+          box.className = `memory-item ${item.status}`;
+          controls.className = "row";
+          controls.append(badge);
+          if (item.status === "candidate") {
+            const confirmButton = text("button", "确认", "small");
+            confirmButton.type = "button";
+            confirmButton.onclick = () => updateMemory(item, item.content, "confirmed");
+            controls.append(confirmButton);
+          }
+          const editButton = text("button", "编辑", "secondary small"),
+            deleteButton = text("button", "删除", "danger small");
+          editButton.type = deleteButton.type = "button";
+          editButton.onclick = () => {
+            const changed = prompt("编辑这条 Memory", item.content);
+            if (changed !== null && changed.trim())
+              updateMemory(item, changed.trim(), item.status);
+          };
+          deleteButton.onclick = () => deleteMemory(item);
+          controls.append(editButton, deleteButton);
+          box.append(content, controls);
+          list.append(box);
+        });
+      }
+      async function loadMemory() {
+        memoryState = await api("/api/memory");
+        renderMemory();
+      }
+      async function updateMemory(item, content, status) {
+        try {
+          await api("/api/memory/" + encodeURIComponent(item.id), {
+            method: "PATCH",
+            body: JSON.stringify({ content, status }),
+          });
+          await loadMemory();
+          $("chatStatus").textContent =
+            status === "confirmed" ? "Memory 已确认，后续相关任务可读取" : "Memory 已更新";
+        } catch (e) {
+          $("chatStatus").textContent = e.message;
+        }
+      }
+      async function deleteMemory(item) {
+        if (!confirm("删除这条 Memory？删除后不会再被读取。")) return;
+        try {
+          await api("/api/memory/" + encodeURIComponent(item.id), { method: "DELETE" });
+          await loadMemory();
+        } catch (e) {
+          $("chatStatus").textContent = e.message;
+        }
+      }
+      $("memoryEnabled").onchange = async () => {
+        try {
+          const enabled = $("memoryEnabled").checked;
+          await api("/api/memory/settings", {
+            method: "PUT",
+            body: JSON.stringify({ enabled }),
+          });
+          await loadMemory();
+          $("chatStatus").textContent = enabled
+            ? "长期 Memory 已开启；新候选仍需你确认"
+            : "长期 Memory 已关闭；现有条目保留但不会读取或提取";
+        } catch (e) {
+          $("memoryEnabled").checked = !$("memoryEnabled").checked;
+          $("chatStatus").textContent = e.message;
+        }
+      };
+      $("refreshMemory").onclick = () => loadMemory().catch((e) => ($("chatStatus").textContent = e.message));
+      $("clearMemory").onclick = async () => {
+        if (!memoryState?.items.length || !confirm("清空全部候选和已确认 Memory？此操作无法撤销。")) return;
+        try {
+          await api("/api/memory", { method: "DELETE" });
+          await loadMemory();
+          $("chatStatus").textContent = "Memory 已清空，后续对话不会读取已删除内容";
+        } catch (e) {
+          $("chatStatus").textContent = e.message;
+        }
+      };
       function appendMessage(value, cls) {
         const el = text("div", value, "bubble " + cls);
         $("messages").append(el);
@@ -612,8 +769,27 @@
         $("messages").append(box);
         return box;
       }
+      function contextReceipt(ev) {
+        const parts = [];
+        if (ev.soul_used) parts.push("Soul：已应用");
+        if (ev.skills?.length) parts.push("Skill：" + ev.skills.join("、"));
+        else parts.push("Skill：本轮未提供");
+        if (ev.memories?.length)
+          parts.push("Memory：读取 " + ev.memories.map((m) => `「${m.content}」`).join("、"));
+        else parts.push("Memory：本轮未读取");
+        const box = text("div", "本轮上下文｜" + parts.join("；"), "context-receipt");
+        $("messages").append(box);
+        return box;
+      }
       function renderHistory(m) {
-        if (m.role === "user") appendMessage(m.content, "user");
+        if (m.role === "user") {
+          appendMessage(m.content, "user");
+          if (m.context_receipt) {
+            try {
+              contextReceipt(JSON.parse(m.context_receipt));
+            } catch {}
+          }
+        }
         else if (m.role === "assistant" && !m.tool_calls)
           appendMessage(m.content, "assistant");
         else if (m.role === "assistant" && m.tool_calls) {
@@ -642,7 +818,8 @@
         let answer = null,
           reasoning = null;
         const handleEvent = (ev) => {
-          if (ev.type === "reasoning_delta") {
+          if (ev.type === "turn_start") contextReceipt(ev);
+          else if (ev.type === "reasoning_delta") {
             if (!reasoning) reasoning = appendReasoning();
             reasoning.content.textContent += ev.delta;
           } else if (ev.type === "text_delta") {
@@ -683,6 +860,8 @@
           flushDeltas(true);
           $("chatStatus").textContent = "回答完成";
           await refreshConversations();
+          setTimeout(() => loadMemory().catch(() => {}), 1500);
+          setTimeout(() => loadMemory().catch(() => {}), 4500);
         } catch (err) {
           flushDeltas(true);
           if (reasoning)

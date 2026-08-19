@@ -77,7 +77,25 @@ type Message struct {
 	ToolCalls      string    `json:"tool_calls,omitempty"`
 	Reasoning      string    `json:"-"`
 	FinishReason   string    `json:"finish_reason,omitempty"`
+	ContextReceipt string    `json:"context_receipt,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+type Memory struct {
+	ID                   string    `json:"id"`
+	RunID                string    `json:"-"`
+	StudentID            string    `json:"-"`
+	Content              string    `json:"content"`
+	Status               string    `json:"status"`
+	SourceConversationID string    `json:"source_conversation_id,omitempty"`
+	SourceTurnID         string    `json:"source_turn_id,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+type MemoryState struct {
+	Enabled bool     `json:"enabled"`
+	Items   []Memory `json:"items"`
 }
 
 type Usage struct {
@@ -136,8 +154,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 5 {
-		return fmt.Errorf("database version %d is newer than supported version 5", version)
+	if version > 7 {
+		return fmt.Errorf("database version %d is newer than supported version 7", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -199,7 +217,65 @@ PRAGMA user_version = 1;`
 			return fmt.Errorf("migrate unknown usage counter: %w", err)
 		}
 	}
+	if version < 6 {
+		if err := s.migrateMemory(ctx); err != nil {
+			return fmt.Errorf("migrate memory: %w", err)
+		}
+	}
+	if version < 7 {
+		if err := s.migrateContextReceipt(ctx); err != nil {
+			return fmt.Errorf("migrate context receipts: %w", err)
+		}
+	}
 	return nil
+}
+
+func (s *Store) migrateContextReceipt(ctx context.Context) error {
+	hasReceipt, err := s.tableHasColumn(ctx, "messages", "context_receipt")
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !hasReceipt {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN context_receipt TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 7`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) migrateMemory(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`CREATE TABLE IF NOT EXISTS memory_settings(
+ run_id TEXT NOT NULL, student_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)), updated_at TEXT NOT NULL,
+ PRIMARY KEY(run_id,student_id), FOREIGN KEY(run_id,student_id) REFERENCES students(run_id,id)
+)`,
+		`CREATE TABLE IF NOT EXISTS memories(
+ id TEXT NOT NULL, run_id TEXT NOT NULL, student_id TEXT NOT NULL, content TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('candidate','confirmed')), source_conversation_id TEXT NOT NULL DEFAULT '',
+ source_turn_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY(run_id,student_id,id), FOREIGN KEY(run_id,student_id) REFERENCES students(run_id,id)
+)`,
+		`CREATE INDEX IF NOT EXISTS memories_student_status ON memories(run_id,student_id,status,updated_at DESC,id)`,
+		`PRAGMA user_version = 6`,
+	} {
+		if _, err = tx.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateConversations(ctx context.Context) error {
@@ -630,9 +706,9 @@ func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {
 		return Message{}, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `INSERT INTO messages(run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,created_at)
-	 SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM conversations WHERE run_id=? AND student_id=? AND id=?)`,
-		m.RunID, m.StudentID, m.ConversationID, m.TurnID, m.Role, m.Content, m.ToolCalls, m.Reasoning, m.FinishReason, formatTime(m.CreatedAt), m.RunID, m.StudentID, m.ConversationID)
+	res, err := tx.ExecContext(ctx, `INSERT INTO messages(run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,context_receipt,created_at)
+	 SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM conversations WHERE run_id=? AND student_id=? AND id=?)`,
+		m.RunID, m.StudentID, m.ConversationID, m.TurnID, m.Role, m.Content, m.ToolCalls, m.Reasoning, m.FinishReason, m.ContextReceipt, formatTime(m.CreatedAt), m.RunID, m.StudentID, m.ConversationID)
 	if err != nil {
 		return Message{}, err
 	}
@@ -659,7 +735,7 @@ func (s *Store) Messages(ctx context.Context, runID, studentID, conversationID s
 	if limit < 1 || limit > 500 {
 		limit = 200
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,context_receipt,created_at
  FROM messages WHERE run_id=? AND student_id=? AND conversation_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, conversationID, afterID, limit)
 	if err != nil {
 		return nil, err
@@ -671,7 +747,7 @@ func (s *Store) StudentMessages(ctx context.Context, runID, studentID string, af
 	if limit < 1 || limit > 1000 {
 		limit = 500
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,created_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,context_receipt,created_at
  FROM messages WHERE run_id=? AND student_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, afterID, limit)
 	if err != nil {
 		return nil, err
@@ -685,7 +761,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var created string
-		if err := rows.Scan(&m.ID, &m.RunID, &m.StudentID, &m.ConversationID, &m.TurnID, &m.Role, &m.Content, &m.ToolCalls, &m.Reasoning, &m.FinishReason, &created); err != nil {
+		if err := rows.Scan(&m.ID, &m.RunID, &m.StudentID, &m.ConversationID, &m.TurnID, &m.Role, &m.Content, &m.ToolCalls, &m.Reasoning, &m.FinishReason, &m.ContextReceipt, &created); err != nil {
 			return nil, err
 		}
 		m.CreatedAt, _ = parseTime(created)
@@ -714,6 +790,166 @@ func (s *Store) Usage(ctx context.Context, runID, studentID string) (Usage, erro
 func (s *Store) AddUsage(ctx context.Context, runID, studentID string, in, out, unknown int64, cost float64) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO usage(run_id,student_id,tokens_in,tokens_out,unknown_calls,estimated_cost) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id,student_id) DO UPDATE SET tokens_in=tokens_in+excluded.tokens_in,tokens_out=tokens_out+excluded.tokens_out,unknown_calls=unknown_calls+excluded.unknown_calls,estimated_cost=estimated_cost+excluded.estimated_cost`, runID, studentID, in, out, unknown, cost)
 	return err
+}
+
+func (s *Store) MemoryState(ctx context.Context, runID, studentID string) (MemoryState, error) {
+	var state MemoryState
+	err := s.db.QueryRowContext(ctx, `SELECT enabled FROM memory_settings WHERE run_id=? AND student_id=?`, runID, studentID).Scan(&state.Enabled)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return MemoryState{}, err
+	}
+	state.Items, err = s.Memories(ctx, runID, studentID, "")
+	return state, err
+}
+
+func (s *Store) SetMemoryEnabled(ctx context.Context, runID, studentID string, enabled bool) error {
+	now := formatTime(time.Now().UTC())
+	res, err := s.db.ExecContext(ctx, `INSERT INTO memory_settings(run_id,student_id,enabled,updated_at)
+ SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)
+ ON CONFLICT(run_id,student_id) DO UPDATE SET enabled=excluded.enabled,updated_at=excluded.updated_at`,
+		runID, studentID, enabled, now, runID, studentID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) MemoryEnabled(ctx context.Context, runID, studentID string) (bool, error) {
+	enabled, _, err := s.MemorySetting(ctx, runID, studentID)
+	return enabled, err
+}
+
+func (s *Store) MemorySetting(ctx context.Context, runID, studentID string) (bool, string, error) {
+	var enabled bool
+	var updated string
+	err := s.db.QueryRowContext(ctx, `SELECT enabled,updated_at FROM memory_settings WHERE run_id=? AND student_id=?`, runID, studentID).Scan(&enabled, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", nil
+	}
+	return enabled, updated, err
+}
+
+func (s *Store) Memories(ctx context.Context, runID, studentID, status string) ([]Memory, error) {
+	query := `SELECT id,run_id,student_id,content,status,source_conversation_id,source_turn_id,created_at,updated_at
+ FROM memories WHERE run_id=? AND student_id=?`
+	args := []any{runID, studentID}
+	if status != "" {
+		query += ` AND status=?`
+		args = append(args, status)
+	}
+	query += ` ORDER BY updated_at DESC,id DESC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Memory, 0)
+	for rows.Next() {
+		var m Memory
+		var created, updated string
+		if err := rows.Scan(&m.ID, &m.RunID, &m.StudentID, &m.Content, &m.Status, &m.SourceConversationID, &m.SourceTurnID, &created, &updated); err != nil {
+			return nil, err
+		}
+		m.CreatedAt, _ = parseTime(created)
+		m.UpdatedAt, _ = parseTime(updated)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AddMemory(ctx context.Context, m Memory) (Memory, error) {
+	return s.addMemory(ctx, m, "")
+}
+
+// AddMemoryIfSetting stores a candidate only while the Memory switch still has
+// the same revision observed before asynchronous extraction began.
+func (s *Store) AddMemoryIfSetting(ctx context.Context, m Memory, settingRevision string) (Memory, error) {
+	return s.addMemory(ctx, m, settingRevision)
+}
+
+func (s *Store) addMemory(ctx context.Context, m Memory, settingRevision string) (Memory, error) {
+	now := time.Now().UTC()
+	m.CreatedAt, m.UpdatedAt = now, now
+	query := `INSERT INTO memories(id,run_id,student_id,content,status,source_conversation_id,source_turn_id,created_at,updated_at)
+ SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`
+	args := []any{m.ID, m.RunID, m.StudentID, m.Content, m.Status, m.SourceConversationID, m.SourceTurnID, formatTime(now), formatTime(now), m.RunID, m.StudentID}
+	if settingRevision != "" {
+		query += ` AND EXISTS(SELECT 1 FROM memory_settings WHERE run_id=? AND student_id=? AND enabled=1 AND updated_at=?)`
+		args = append(args, m.RunID, m.StudentID, settingRevision)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return Memory{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Memory{}, ErrNotFound
+	}
+	return m, nil
+}
+
+func (s *Store) UpdateMemory(ctx context.Context, runID, studentID, id, content, status string) (Memory, error) {
+	now := time.Now().UTC()
+	res, err := s.db.ExecContext(ctx, `UPDATE memories SET content=?,status=?,updated_at=? WHERE run_id=? AND student_id=? AND id=?`, content, status, formatTime(now), runID, studentID, id)
+	if err != nil {
+		return Memory{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Memory{}, ErrNotFound
+	}
+	var m Memory
+	var created, updated string
+	err = s.db.QueryRowContext(ctx, `SELECT id,run_id,student_id,content,status,source_conversation_id,source_turn_id,created_at,updated_at
+ FROM memories WHERE run_id=? AND student_id=? AND id=?`, runID, studentID, id).Scan(&m.ID, &m.RunID, &m.StudentID, &m.Content, &m.Status, &m.SourceConversationID, &m.SourceTurnID, &created, &updated)
+	if err != nil {
+		return Memory{}, err
+	}
+	m.CreatedAt, _ = parseTime(created)
+	m.UpdatedAt, _ = parseTime(updated)
+	return m, nil
+}
+
+func (s *Store) DeleteMemory(ctx context.Context, runID, studentID, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM memories WHERE run_id=? AND student_id=? AND id=?`, runID, studentID, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE memory_settings SET updated_at=? WHERE run_id=? AND student_id=?`, formatTime(time.Now().UTC()), runID, studentID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ClearMemories(ctx context.Context, runID, studentID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM memories WHERE run_id=? AND student_id=?`, runID, studentID); err != nil {
+		return err
+	}
+	now := formatTime(time.Now().UTC())
+	if _, err = tx.ExecContext(ctx, `INSERT INTO memory_settings(run_id,student_id,enabled,updated_at)
+ SELECT ?,?,0,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)
+ ON CONFLICT(run_id,student_id) DO UPDATE SET updated_at=excluded.updated_at`, runID, studentID, now, runID, studentID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Wall(ctx context.Context, runID string) ([]WallStudent, error) {

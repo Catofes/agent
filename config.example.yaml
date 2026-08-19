@@ -14,3 +14,7 @@ per_student_token_budget: 200000
 default_max_turns: 5
 max_tool_calls: 8
 max_reasoning_chars: 12000
+max_memory_items: 30
+max_memory_chars: 400
+max_memory_tokens: 1200
+memory_extract_timeout: "20s"

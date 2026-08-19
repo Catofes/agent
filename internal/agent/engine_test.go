@@ -26,6 +26,12 @@ type timeoutClient struct {
 	calls int
 }
 
+type extractorFunc func(context.Context, string, string) ([]string, error)
+
+func (f extractorFunc) Extract(ctx context.Context, user, assistant string) ([]string, error) {
+	return f(ctx, user, assistant)
+}
+
 func (f *timeoutClient) Complete(ctx context.Context, _ CompletionRequest) (Completion, error) {
 	f.mu.Lock()
 	f.calls++
@@ -378,7 +384,7 @@ func TestTechnicalToolDetailIsValidAndBounded(t *testing.T) {
 
 func TestBuildMessagesKeepsPromptLayersAndToolProtocol(t *testing.T) {
 	calls := `[{"id":"call_1","type":"function","function":{"name":"calculator","arguments":"{\"expression\":\"2+2\"}"}}]`
-	messages := buildMessages(store.Design{Persona: "耐心数学老师", SkillMD: "仅在精确计算时使用"}, []store.Message{
+	messages := buildMessages(store.Design{Persona: "耐心数学老师", SkillMD: "仅在精确计算时使用"}, nil, []store.Message{
 		{Role: "user", Content: "计算 2+2"},
 		{Role: "assistant", Content: "", Reasoning: "需要精确计算", ToolCalls: calls},
 		{Role: "tool", Content: "结果：4", ToolCalls: "call_1"},
@@ -403,6 +409,155 @@ func TestBuildMessagesKeepsPromptLayersAndToolProtocol(t *testing.T) {
 	if messages[3].ToolCallID != "call_1" || messages[3].Content != "结果：4" {
 		t.Fatalf("tool message=%#v", messages[3])
 	}
+}
+
+func TestEngineReadsOnlyConfirmedRelevantMemoryAndPersistsReceipt(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+		t.Fatal(err)
+	}
+	for _, memory := range []store.Memory{
+		{ID: "relevant", RunID: run.ID, StudentID: "2101", Content: "我喜欢篮球", Status: "confirmed"},
+		{ID: "candidate", RunID: run.ID, StudentID: "2101", Content: "我参加篮球校队", Status: "candidate"},
+		{ID: "unrelated", RunID: run.ID, StudentID: "2101", Content: "我正在学习钢琴", Status: "confirmed"},
+	} {
+		if _, err := st.AddMemory(ctx, memory); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := &fakeClient{answers: []Completion{{Content: "训练建议", Deltas: []string{"训练建议"}, TokensIn: 2, TokensOut: 1}}}
+	engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	var events []Event
+	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "memory_turn", Input: "给我篮球训练建议", Design: store.Design{Persona: "教练", SkillMD: "运动建议", MaxTurns: 1}}, func(event Event) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	system := fake.requests[0].Messages[0].Content
+	if !strings.Contains(system, "我喜欢篮球") || strings.Contains(system, "篮球校队") || strings.Contains(system, "学习钢琴") {
+		t.Fatalf("wrong memory selection in prompt: %s", system)
+	}
+	if len(events) == 0 || len(events[0].Memories) != 1 || events[0].Memories[0].ID != "relevant" || len(events[0].Skills) != 1 {
+		t.Fatalf("context receipt=%#v", events)
+	}
+	messages, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+	if err != nil || len(messages) != 2 || !strings.Contains(messages[0].ContextReceipt, "relevant") {
+		t.Fatalf("persisted receipt messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestMemoryExtractionCreatesCandidateAndFailureDoesNotFailChat(t *testing.T) {
+	t.Run("candidate", func(t *testing.T) {
+		ctx := context.Background()
+		st, run := newEngineTestStore(t)
+		if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+			t.Fatal(err)
+		}
+		fake := &fakeClient{answers: []Completion{{Content: "知道了", Deltas: []string{"知道了"}, TokensIn: 2, TokensOut: 1}}}
+		engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
+		engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+		done := make(chan struct{})
+		engine.MemoryExtractor = extractorFunc(func(_ context.Context, user, answer string) ([]string, error) {
+			defer close(done)
+			if user != "我喜欢蓝色" || answer != "知道了" {
+				t.Errorf("extract input=%q answer=%q", user, answer)
+			}
+			return []string{"我喜欢蓝色"}, nil
+		})
+		if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "我喜欢蓝色", Design: store.Design{MaxTurns: 1}}, func(Event) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("extractor was not called")
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			items, err := st.Memories(ctx, run.ID, "2101", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(items) == 1 {
+				if items[0].Status != "candidate" {
+					t.Fatalf("memory=%#v", items[0])
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("candidate was not stored")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		ctx := context.Background()
+		st, run := newEngineTestStore(t)
+		if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+			t.Fatal(err)
+		}
+		fake := &fakeClient{answers: []Completion{{Content: "主回答成功", Deltas: []string{"主回答成功"}, TokensIn: 2, TokensOut: 1}}}
+		engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
+		engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+		failed := make(chan struct{})
+		engine.MemoryExtractor = extractorFunc(func(context.Context, string, string) ([]string, error) {
+			close(failed)
+			return nil, errors.New("extract failed")
+		})
+		if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "普通消息", Design: store.Design{MaxTurns: 1}}, func(Event) error { return nil }); err != nil {
+			t.Fatalf("main chat was blocked by extraction: %v", err)
+		}
+		select {
+		case <-failed:
+		case <-time.After(time.Second):
+			t.Fatal("extractor failure path was not exercised")
+		}
+	})
+
+	t.Run("clear invalidates in-flight extraction", func(t *testing.T) {
+		ctx := context.Background()
+		st, run := newEngineTestStore(t)
+		if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+			t.Fatal(err)
+		}
+		fake := &fakeClient{answers: []Completion{{Content: "收到", Deltas: []string{"收到"}, TokensIn: 2, TokensOut: 1}}}
+		engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
+		engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+		started, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		engine.MemoryExtractor = extractorFunc(func(context.Context, string, string) ([]string, error) {
+			close(started)
+			<-release
+			defer close(finished)
+			return []string{"不应复活的候选"}, nil
+		})
+		if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "请记住", Design: store.Design{MaxTurns: 1}}, func(Event) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("extractor did not start")
+		}
+		if err := st.ClearMemories(ctx, run.ID, "2101"); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("extractor did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+		items, err := st.Memories(ctx, run.ID, "2101", "")
+		if err != nil || len(items) != 0 {
+			t.Fatalf("deleted memory was resurrected: %#v err=%v", items, err)
+		}
+	})
 }
 
 func TestEngineUsesLatestDesignAndOnlySelectedConversation(t *testing.T) {

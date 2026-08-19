@@ -58,6 +58,11 @@ func main() {
 	engine.MaxToolCalls = cfg.MaxToolCalls
 	engine.MaxOutputChars = cfg.MaxOutputChars
 	engine.MaxReasoningChars = cfg.MaxReasoningChars
+	engine.MemoryExtractor = agent.LLMMemoryExtractor{Client: client, Model: cfg.DeepSeekModel}
+	engine.MemoryExtractTimeout = cfg.MemoryExtractTimeout
+	engine.MaxMemoryItems = cfg.MaxMemoryItems
+	engine.MaxMemoryChars = cfg.MaxMemoryChars
+	engine.MaxMemoryTokens = cfg.MaxMemoryTokens
 	engine.InputPricePerM = cfg.InputPricePerM
 	engine.OutputPricePerM = cfg.OutputPricePerM
 	webFS, _ := fs.Sub(assets, "web")

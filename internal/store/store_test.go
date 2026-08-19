@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -115,6 +116,51 @@ func TestConversationIsolation(t *testing.T) {
 	list, err := st.Conversations(ctx, run.ID, "2101", 10)
 	if err != nil || len(list) != 2 {
 		t.Fatalf("list=%#v err=%v", list, err)
+	}
+}
+
+func TestMemoryIsolationDeletionAndRunScope(t *testing.T) {
+	ctx := context.Background()
+	st, csvPath := testStore(t)
+	run, err := st.EnsureActiveRun(ctx, "memory_run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+		t.Fatal(err)
+	}
+	created, err := st.AddMemory(ctx, Memory{ID: "mem_one", RunID: run.ID, StudentID: "2101", Content: "我喜欢篮球", Status: "candidate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.UpdateMemory(ctx, run.ID, "2102", created.ID, "越权修改", "confirmed"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-student update err=%v", err)
+	}
+	other, err := st.Memories(ctx, run.ID, "2102", "")
+	if err != nil || len(other) != 0 {
+		t.Fatalf("memory leaked to other student: %#v err=%v", other, err)
+	}
+	updated, err := st.UpdateMemory(ctx, run.ID, "2101", created.ID, "我喜欢打篮球", "confirmed")
+	if err != nil || updated.Status != "confirmed" {
+		t.Fatalf("update=%#v err=%v", updated, err)
+	}
+	run2, err := st.CreateRun(ctx, "memory_run_two", "下一堂课", run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := st.MemoryState(ctx, run2.ID, "2101")
+	if err != nil || state.Enabled || len(state.Items) != 0 {
+		t.Fatalf("memory crossed run: %#v err=%v", state, err)
+	}
+	if err = st.DeleteMemory(ctx, run.ID, "2101", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	items, err := st.Memories(ctx, run.ID, "2101", "")
+	if err != nil || len(items) != 0 {
+		t.Fatalf("deleted memory remains: %#v err=%v", items, err)
 	}
 }
 

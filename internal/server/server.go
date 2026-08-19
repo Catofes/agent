@@ -34,6 +34,7 @@ const (
 	maxConversationChars = 64
 	maxTurnIDChars       = 64
 	maxTeacherPassChars  = 512
+	maxMemoryIDChars     = 64
 )
 
 type principal struct {
@@ -128,6 +129,11 @@ func (s *Server) Routes() http.Handler {
 				r.Get("/conversations", s.conversations)
 				r.Post("/conversations", s.createConversation)
 				r.Get("/messages", s.messages)
+				r.Get("/memory", s.getMemory)
+				r.Put("/memory/settings", s.setMemorySettings)
+				r.Patch("/memory/{id}", s.updateMemory)
+				r.Delete("/memory/{id}", s.deleteMemory)
+				r.Delete("/memory", s.clearMemory)
 				r.Post("/chat", s.chat)
 				r.Get("/events", s.studentEvents)
 			})

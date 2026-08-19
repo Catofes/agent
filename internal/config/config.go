@@ -11,33 +11,37 @@ import (
 )
 
 type Config struct {
-	ListenAddr         string
-	DatabasePath       string
-	StudentsCSV        string
-	DeepSeekBaseURL    string
-	DeepSeekModel      string
-	DeepSeekAPIKey     string
-	AdminPassword      string
-	AnonymousHMACKey   string
-	CookieSecure       bool
-	RequireNameInitial bool
-	SessionTTL         time.Duration
-	LLMTimeout         time.Duration
-	LLMConcurrency     int
-	StudentTokenBudget int64
-	DefaultMaxTurns    int
-	MinMaxTurns        int
-	MaxMaxTurns        int
-	MaxToolCalls       int
-	MaxPersonaChars    int
-	MaxSkillChars      int
-	MaxInputChars      int
-	MaxOutputChars     int
-	MaxReasoningChars  int
-	InputPricePerM     float64
-	OutputPricePerM    float64
-	InitialRunName     string
-	Version            string
+	ListenAddr           string
+	DatabasePath         string
+	StudentsCSV          string
+	DeepSeekBaseURL      string
+	DeepSeekModel        string
+	DeepSeekAPIKey       string
+	AdminPassword        string
+	AnonymousHMACKey     string
+	CookieSecure         bool
+	RequireNameInitial   bool
+	SessionTTL           time.Duration
+	LLMTimeout           time.Duration
+	LLMConcurrency       int
+	StudentTokenBudget   int64
+	DefaultMaxTurns      int
+	MinMaxTurns          int
+	MaxMaxTurns          int
+	MaxToolCalls         int
+	MaxPersonaChars      int
+	MaxSkillChars        int
+	MaxInputChars        int
+	MaxOutputChars       int
+	MaxReasoningChars    int
+	MaxMemoryItems       int
+	MaxMemoryChars       int
+	MaxMemoryTokens      int
+	MemoryExtractTimeout time.Duration
+	InputPricePerM       float64
+	OutputPricePerM      float64
+	InitialRunName       string
+	Version              string
 }
 
 func Load(version string) (Config, error) {
@@ -65,6 +69,10 @@ func Load(version string) (Config, error) {
 	flag.IntVar(&c.MaxInputChars, "max-input-chars", envInt("MAX_INPUT_CHARS", 4000), "chat input character limit")
 	flag.IntVar(&c.MaxOutputChars, "max-output-chars", envInt("MAX_OUTPUT_CHARS", 16000), "model output character limit")
 	flag.IntVar(&c.MaxReasoningChars, "max-reasoning-chars", envInt("MAX_REASONING_CHARS", 12000), "reasoning draft character limit per chat")
+	flag.IntVar(&c.MaxMemoryItems, "max-memory-items", envInt("MAX_MEMORY_ITEMS", 30), "maximum memory candidates and confirmed items per student and run")
+	flag.IntVar(&c.MaxMemoryChars, "max-memory-chars", envInt("MAX_MEMORY_CHARS", 400), "character limit per memory item")
+	flag.IntVar(&c.MaxMemoryTokens, "max-memory-tokens", envInt("MAX_MEMORY_TOKENS", 1200), "estimated token limit for all memory items per student and run")
+	flag.DurationVar(&c.MemoryExtractTimeout, "memory-extract-timeout", envDuration("MEMORY_EXTRACT_TIMEOUT", 20*time.Second), "timeout for asynchronous memory candidate extraction")
 	flag.Float64Var(&c.InputPricePerM, "input-price-per-million", envFloat("INPUT_PRICE_PER_MILLION", 0), "input token price per million")
 	flag.Float64Var(&c.OutputPricePerM, "output-price-per-million", envFloat("OUTPUT_PRICE_PER_MILLION", 0), "output token price per million")
 	flag.StringVar(&c.InitialRunName, "initial-run-name", env("INITIAL_RUN_NAME", "课堂 1"), "name used when creating the first run")
@@ -96,7 +104,7 @@ func (c Config) Validate() error {
 	if c.MinMaxTurns < 1 || c.DefaultMaxTurns < c.MinMaxTurns || c.DefaultMaxTurns > c.MaxMaxTurns {
 		return errors.New("max-turn settings must satisfy 1 <= min <= default <= max")
 	}
-	if c.MaxPersonaChars < 1 || c.MaxSkillChars < 1 || c.MaxInputChars < 1 || c.MaxOutputChars < 1 || c.MaxReasoningChars < 1 {
+	if c.MaxPersonaChars < 1 || c.MaxSkillChars < 1 || c.MaxInputChars < 1 || c.MaxOutputChars < 1 || c.MaxReasoningChars < 1 || c.MaxMemoryItems < 1 || c.MaxMemoryChars < 1 || c.MaxMemoryTokens < 1 || c.MemoryExtractTimeout <= 0 {
 		return errors.New("text limits must be positive")
 	}
 	return nil

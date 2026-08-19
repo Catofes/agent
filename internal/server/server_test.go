@@ -168,7 +168,7 @@ func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (
 	if _, err = st.ImportStudentsCSV(context.Background(), run.ID, csvPath); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{AdminPassword: "teacher-secret", AnonymousHMACKey: "hmac-secret", SessionTTL: time.Hour, LLMTimeout: time.Second, LLMConcurrency: 4, StudentTokenBudget: 1000, DefaultMaxTurns: 5, MinMaxTurns: 1, MaxMaxTurns: 8, MaxToolCalls: 4, MaxPersonaChars: 100, MaxSkillChars: 1000, MaxInputChars: 100, MaxOutputChars: 1000}
+	cfg := config.Config{AdminPassword: "teacher-secret", AnonymousHMACKey: "hmac-secret", SessionTTL: time.Hour, LLMTimeout: time.Second, LLMConcurrency: 4, StudentTokenBudget: 1000, DefaultMaxTurns: 5, MinMaxTurns: 1, MaxMaxTurns: 8, MaxToolCalls: 4, MaxPersonaChars: 100, MaxSkillChars: 1000, MaxInputChars: 100, MaxOutputChars: 1000, MaxMemoryItems: 30, MaxMemoryChars: 400, MaxMemoryTokens: 1200}
 	engine := agent.NewEngine(st, client, tools.NewRegistry(tools.Calculator{}), "fake", "hmac-secret", time.Second, 4)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("student")}, "teacher.html": &fstest.MapFile{Data: []byte("teacher")}, "screen.html": &fstest.MapFile{Data: []byte("screen")}, "ndjson-stream.js": &fstest.MapFile{Data: []byte("stream parser")}}
@@ -255,6 +255,69 @@ func TestStudentLoginDesignChatAndReplacement(t *testing.T) {
 	errBody := out["error"].(map[string]any)
 	if errBody["code"] != "SESSION_REPLACED" {
 		t.Fatalf("code=%v", errBody["code"])
+	}
+}
+
+func TestStudentMemoryCRUDLimitsAndPrivacyIsolation(t *testing.T) {
+	handler, st := testServer(t)
+	first, second := newClient(handler), newClient(handler)
+	status, _, _ := requestJSON(t, first, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatalf("first login status=%d", status)
+	}
+	status, initial, _ := requestJSON(t, first, http.MethodGet, "/api/memory", nil)
+	if status != http.StatusOK || initial["enabled"] != false || initial["scope"] != "current_run" {
+		t.Fatalf("initial memory status=%d body=%#v", status, initial)
+	}
+	status, _, _ = requestJSON(t, first, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})
+	if status != http.StatusOK {
+		t.Fatalf("enable status=%d", status)
+	}
+	if _, err := st.AddMemory(context.Background(), store.Memory{ID: "mem_private", RunID: "run", StudentID: "2101", Content: "我喜欢篮球", Status: "candidate"}); err != nil {
+		t.Fatal(err)
+	}
+	status, listed, _ := requestJSON(t, first, http.MethodGet, "/api/memory", nil)
+	items, _ := listed["items"].([]any)
+	if status != http.StatusOK || len(items) != 1 {
+		t.Fatalf("list status=%d body=%#v", status, listed)
+	}
+	status, confirmed, _ := requestJSON(t, first, http.MethodPatch, "/api/memory/mem_private", map[string]string{"content": "我喜欢打篮球", "status": "confirmed"})
+	if status != http.StatusOK || confirmed["status"] != "confirmed" {
+		t.Fatalf("confirm status=%d body=%#v", status, confirmed)
+	}
+	status, _, _ = requestJSON(t, first, http.MethodPatch, "/api/memory/mem_private", map[string]string{"content": strings.Repeat("长", 401), "status": "confirmed"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("overlong update status=%d", status)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := st.AddMemory(context.Background(), store.Memory{ID: fmt.Sprintf("mem_budget_%d", i), RunID: "run", StudentID: "2101", Content: strings.Repeat("中", 400), Status: "candidate"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status, budgetBody, _ := requestJSON(t, first, http.MethodPatch, "/api/memory/mem_private", map[string]string{"content": "额外内容", "status": "confirmed"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("total token limit status=%d body=%#v", status, budgetBody)
+	}
+	status, _, _ = requestJSON(t, second, http.MethodPost, "/api/login", map[string]string{"id": "2102"})
+	if status != http.StatusOK {
+		t.Fatalf("second login status=%d", status)
+	}
+	status, other, _ := requestJSON(t, second, http.MethodGet, "/api/memory", nil)
+	otherItems, _ := other["items"].([]any)
+	if status != http.StatusOK || len(otherItems) != 0 {
+		t.Fatalf("memory leaked status=%d body=%#v", status, other)
+	}
+	status, _, _ = requestJSON(t, second, http.MethodDelete, "/api/memory/mem_private", nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-student delete status=%d", status)
+	}
+	status, _, _ = requestJSON(t, first, http.MethodDelete, "/api/memory", nil)
+	if status != http.StatusNoContent {
+		t.Fatalf("clear status=%d", status)
+	}
+	state, err := st.MemoryState(context.Background(), "run", "2101")
+	if err != nil || !state.Enabled || len(state.Items) != 0 {
+		t.Fatalf("clear did not remove items while preserving switch: %#v err=%v", state, err)
 	}
 }
 
