@@ -557,8 +557,20 @@ func TestSpotlightBeforeAndAfterScreenConnect(t *testing.T) {
 		assertPublicScreenFields(t, pushed)
 	}
 	latest := spotlightAndAck(t, handler, teacher, stream, 3, map[string]string{"id": "2101", "turn_id": ""})
-	if !screenContains(latest, "第二轮作品") || screenContains(latest, "第一轮作品") {
-		t.Fatalf("default spotlight did not choose latest complete turn: %v", latest)
+	if !screenContains(latest, "第一轮作品") || !screenContains(latest, "第二轮作品") {
+		t.Fatalf("latest spotlight did not preserve earlier turns: %v", latest)
+	}
+	status, previousConversation, _ := requestJSON(t, student, "POST", "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	status, _, _ = requestJSON(t, student, "POST", "/api/chat", map[string]string{"conversation_id": previousConversation["id"].(string), "message": "跨对话作品"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	withPrevious := spotlightAndAck(t, handler, teacher, stream, 4, map[string]string{"id": "2101", "turn_id": ""})
+	if !screenContains(withPrevious, "第一轮作品") || !screenContains(withPrevious, "第二轮作品") || !screenContains(withPrevious, "跨对话作品") {
+		t.Fatalf("spotlight did not include previous conversations: %v", withPrevious)
 	}
 	cancel()
 	select {
@@ -569,7 +581,7 @@ func TestSpotlightBeforeAndAfterScreenConnect(t *testing.T) {
 
 	stream2, cancel2, done2 := startScreenStream(handler)
 	defer func() { cancel2(); <-done2 }()
-	if snapshot := waitSSEJSON(t, stream2, 1); snapshot["name"] != "张三" || !screenContains(snapshot, "第二轮作品") {
+	if snapshot := waitSSEJSON(t, stream2, 1); snapshot["name"] != "张三" || !screenContains(snapshot, "第二轮作品") || !screenContains(snapshot, "跨对话作品") {
 		t.Fatalf("snapshot=%v", snapshot)
 	}
 

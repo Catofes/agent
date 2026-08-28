@@ -668,20 +668,37 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "NO_COMPLETE_TURN", "该学生还没有可投屏的完整回答")
 		return
 	}
-	var selected []store.Message
+	var selectedFinalID int64
 	hasUser, hasFinal := false, false
 	for _, m := range all {
 		if m.TurnID == turnID {
-			selected = append(selected, m)
 			hasUser = hasUser || m.Role == "user"
-			hasFinal = hasFinal || (m.Role == "assistant" && m.ToolCalls == "")
+			if m.Role == "assistant" && m.ToolCalls == "" {
+				hasFinal = true
+				selectedFinalID = m.ID
+			}
 		}
 	}
 	if !hasUser || !hasFinal {
 		writeError(w, http.StatusConflict, "NO_COMPLETE_TURN", "指定回合尚未完成或不存在")
 		return
 	}
-	state := screenState{SpotlightID: newID("screen_"), Name: st.Name, Persona: d.Persona, SkillMD: d.SkillMD, Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: publicScreenMessages(selected), Empty: false}
+	history := make([]store.Message, 0, len(all))
+	for _, message := range all {
+		if message.ID <= selectedFinalID {
+			history = append(history, message)
+		}
+	}
+	conversations, err := s.Store.Conversations(r.Context(), run.ID, in.ID, 200)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取对话列表失败")
+		return
+	}
+	titles := make(map[string]string, len(conversations))
+	for _, conversation := range conversations {
+		titles[conversation.ID] = conversation.Title
+	}
+	state := screenState{SpotlightID: newID("screen_"), Name: st.Name, Persona: d.Persona, SkillMD: d.SkillMD, Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: publicScreenMessages(history, titles, turnID), Empty: false}
 	ack := make(chan struct{})
 	s.screenMu.Lock()
 	s.screenRevision++
@@ -737,7 +754,7 @@ func (s *Server) ackScreen(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func publicScreenMessages(messages []store.Message) []screenMessage {
+func publicScreenMessages(messages []store.Message, titles map[string]string, currentTurnID string) []screenMessage {
 	out := make([]screenMessage, 0, len(messages))
 	for _, message := range messages {
 		content := message.Content
@@ -760,7 +777,11 @@ func publicScreenMessages(messages []store.Message) []screenMessage {
 				content += "\n" + action
 			}
 		}
-		out = append(out, screenMessage{Role: message.Role, Content: content})
+		title := titles[message.ConversationID]
+		if title == "" {
+			title = "历史对话"
+		}
+		out = append(out, screenMessage{Role: message.Role, Content: content, Conversation: title, Current: message.TurnID == currentTurnID})
 	}
 	return out
 }

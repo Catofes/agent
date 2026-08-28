@@ -1,7 +1,7 @@
 .PHONY: build release test test-js check smoke smoke-real run dev check-env
 
 GOCACHE ?= /tmp/classroom-agent-gocache
-GOMODCACHE ?= /tmp/classroom-agent-gomodcache
+GOMODCACHE ?= $(shell go env GOMODCACHE)
 ENV_FILE ?= .env
 ENV_FILE_PATH := $(if $(filter /%,$(ENV_FILE)),$(ENV_FILE),./$(ENV_FILE))
 TARGET_OS ?= linux

@@ -61,8 +61,10 @@ type screenState struct {
 }
 
 type screenMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role         string `json:"role"`
+	Content      string `json:"content"`
+	Conversation string `json:"conversation,omitempty"`
+	Current      bool   `json:"current,omitempty"`
 }
 
 type Server struct {

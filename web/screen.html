@@ -87,8 +87,9 @@
         }
       }
     </style>
+    <link rel="stylesheet" href="/assets/ui.css" />
   </head>
-  <body>
+  <body class="screen-page">
     <div id="connection" class="connection" role="status">正在连接…</div>
     <main id="empty" class="empty">等待老师选择作品…</main>
     <main id="screen" class="screen" hidden>
@@ -102,7 +103,7 @@
           <div id="meta" class="label" style="margin-top: 2vh"></div>
         </section>
         <section class="card">
-          <div class="label">精彩对话与行动记录</div>
+          <div class="label">完整对话历史</div>
           <div id="messages" class="content"></div>
         </section>
       </div>
@@ -132,6 +133,9 @@
           console.error("[screen] acknowledgement failed", error);
         }
       }
+      function afterDOMUpdate(callback) {
+        Promise.resolve().then(callback);
+      }
       function render(d) {
         $("empty").hidden = !d.empty;
         $("screen").hidden = d.empty;
@@ -141,27 +145,35 @@
           $("skill").textContent = d.skill_md || "（未填写）";
           $("meta").textContent =
             `装备：${(d.tools || []).join("、") || "无"}　｜　最大步数：${d.max_turns}`;
-          $("messages").replaceChildren(
-            ...(d.messages || []).map((m) => {
-              const x = document.createElement("div");
-              x.className = "msg " + m.role;
-              x.textContent =
-                (m.role === "user"
-                  ? "学生"
-                  : m.role === "assistant"
-                    ? "Agent"
-                    : "工具") +
-                "：" +
-                (m.content || "发起工具调用");
-              return x;
-            }),
-          );
+          const history = [],
+            messages = d.messages || [];
+          let conversation = "";
+          messages.forEach((m) => {
+            if (m.conversation && m.conversation !== conversation) {
+              conversation = m.conversation;
+              const heading = document.createElement("div");
+              heading.className = "conversation-heading";
+              heading.textContent = conversation;
+              history.push(heading);
+            }
+            const x = document.createElement("div");
+            x.className =
+              "msg " + m.role + (m.current ? " current" : "");
+            x.textContent =
+              (m.role === "user"
+                ? "学生"
+                : m.role === "assistant"
+                  ? "Agent"
+                  : "工具") +
+              "：" +
+              (m.content || "发起工具调用");
+            history.push(x);
+          });
+          $("messages").replaceChildren(...history);
         }
         connection(`已连接·${new Date().toLocaleTimeString()}`);
         if (d.spotlight_id)
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => acknowledge(d.spotlight_id)),
-          );
+          afterDOMUpdate(() => acknowledge(d.spotlight_id));
       }
       es.onopen = () => {
         connection("大屏已连接");

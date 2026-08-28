@@ -266,8 +266,9 @@
         }
       }
     </style>
+    <link rel="stylesheet" href="/assets/ui.css" />
   </head>
-  <body>
+  <body class="student-page">
     <main class="shell">
       <section id="login" class="card login">
         <h1>🎓 我的 Agent 工作坊</h1>
@@ -299,7 +300,7 @@
         <div id="locked" class="lock hidden">
           老师正在讲解，当前已暂停修改和发送。
         </div>
-        <section class="card">
+        <section class="card design-card">
           <div class="concepts">
             <div><strong>Soul</strong>它是谁、重视什么、怎样表达。</div>
             <div>
@@ -374,13 +375,23 @@
           </div>
           <div id="saveStatus" class="status"></div>
         </section>
-        <section class="card">
+        <section class="card chat-card">
           <h2>💬 对话区</h2>
           <div class="conversation-bar">
-            <label for="conversations"
-              >当前对话<select id="conversations"></select></label
-            ><button id="newConversation" class="secondary" type="button">
-              ＋ 新建对话
+            <div
+              id="conversationTabs"
+              class="conversation-tabs"
+              role="tablist"
+              aria-label="对话标签页"
+            ></div>
+            <button
+              id="newConversation"
+              class="secondary new-conversation"
+              type="button"
+              title="新建对话"
+              aria-label="新建对话"
+            >
+              ＋
             </button>
           </div>
           <div id="designNotice" class="notice hidden">
@@ -510,7 +521,7 @@
             conversationItems = [created];
           }
           activeConversation = conversationItems[0].id;
-          renderConversationSelect();
+          renderConversationTabs();
           await loadMessages();
           dirty = false;
         } catch (e) {
@@ -518,26 +529,40 @@
           else $("saveStatus").textContent = e.message;
         }
       }
-      $("conversations").onchange = async () => {
-        if (controller) return;
-        activeConversation = $("conversations").value;
+      async function switchConversation(id) {
+        if (controller || id === activeConversation) return;
+        activeConversation = id;
         $("designNotice").classList.add("hidden");
+        renderConversationTabs();
         await loadMessages();
-      };
-      function renderConversationSelect() {
-        const current = activeConversation;
-        $("conversations").replaceChildren(
-          ...conversationItems.map(
-            (c) => new Option(`${c.title}（${c.message_count} 条）`, c.id),
-          ),
+      }
+      function renderConversationTabs() {
+        $("conversationTabs").replaceChildren(
+          ...conversationItems.map((conversation) => {
+            const tab = document.createElement("button"),
+              title = text("span", conversation.title, "conversation-title"),
+              count = text("span", conversation.message_count, "conversation-count");
+            tab.type = "button";
+            tab.className =
+              "conversation-tab" +
+              (conversation.id === activeConversation ? " active" : "");
+            tab.role = "tab";
+            tab.setAttribute(
+              "aria-selected",
+              String(conversation.id === activeConversation),
+            );
+            tab.title = conversation.title;
+            tab.disabled = !!controller;
+            tab.onclick = () => switchConversation(conversation.id);
+            tab.append(title, count);
+            return tab;
+          }),
         );
-        if (current && conversationItems.some((c) => c.id === current))
-          $("conversations").value = current;
       }
       async function refreshConversations() {
         const d = await api("/api/conversations");
         conversationItems = d.conversations;
-        renderConversationSelect();
+        renderConversationTabs();
       }
       async function loadMessages() {
         $("messages").replaceChildren();
@@ -559,7 +584,7 @@
           });
           activeConversation = c.id;
           conversationItems.unshift(c);
-          renderConversationSelect();
+          renderConversationTabs();
           $("messages").replaceChildren();
           $("designNotice").classList.add("hidden");
           $("chatStatus").textContent = "已新建独立对话，将使用最新保存的设计";
@@ -891,7 +916,9 @@
           "send",
           "newConversation",
         ].forEach((id) => ($(id).disabled = locked || !!controller));
-        $("conversations").disabled = !!controller;
+        $("conversationTabs")
+          .querySelectorAll("button")
+          .forEach((tab) => (tab.disabled = !!controller));
         $("locked").classList.toggle("hidden", !locked);
       }
       function connectEvents() {

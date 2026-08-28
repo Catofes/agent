@@ -25,3 +25,11 @@ test("Memory and context receipts use text-only DOM rendering", () => {
   assert.match(html, /content\.textContent/);
   assert.match(html, /text\("div", item\.content\)/);
 });
+
+test("conversations are exposed as browser-style tabs", () => {
+  assert.match(html, /id=["']conversationTabs["']/);
+  assert.match(html, /role=["']tablist["']/);
+  assert.match(html, /className\s*=\s*[\s\S]*conversation-tab/);
+  assert.match(html, /aria-selected/);
+  assert.doesNotMatch(html, /id=["']conversations["']/);
+});
