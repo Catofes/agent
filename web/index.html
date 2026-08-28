@@ -301,79 +301,80 @@
           老师正在讲解，当前已暂停修改和发送。
         </div>
         <section class="card design-card">
-          <div class="concepts">
-            <div><strong>Soul</strong>它是谁、重视什么、怎样表达。</div>
+          <div class="design-heading">
             <div>
-              <strong>Memory</strong
-              >学生确认过、与任务相关时才跨对话读取的事实；不等于对话历史。
+              <h2>设计你的 Agent</h2>
+              <p class="status">从身份、做事方法和长期记忆三个方面塑造它。</p>
             </div>
-            <div>
-              <strong>Skill</strong>只在任务适用时采用的方法，不是每轮固定剧本。
-            </div>
+            <span id="saveStatus" class="status"></span>
           </div>
-          <div class="memory-workspace">
-            <div class="row">
-              <strong>② Memory</strong>
-              <label
-                ><input id="memoryEnabled" type="checkbox" style="width: auto" />
-                开启长期 Memory</label
-              >
-              <button id="refreshMemory" class="secondary small" type="button">
-                刷新候选
-              </button>
-              <button id="clearMemory" class="danger small" type="button">
-                清空
-              </button>
-            </div>
-            <p class="status">
-              开启后会自动提取候选；只有你确认的条目才会在同一课堂场次的其他对话中按相关性读取。新建课堂场次不会带入。
-            </p>
-            <div id="memoryUsage" class="status"></div>
-            <div id="memoryList" class="memory-list"></div>
+          <div class="design-tabs" role="tablist" aria-label="Agent 设计区域">
+            <button class="design-tab active" type="button" role="tab" aria-selected="true" aria-controls="soulPanel" data-design-tab="soulPanel">
+              <span class="design-tab-icon">✦</span><span><strong>Soul</strong><small>它是谁</small></span>
+            </button>
+            <button class="design-tab" type="button" role="tab" aria-selected="false" aria-controls="skillPanel" data-design-tab="skillPanel">
+              <span class="design-tab-icon">⌁</span><span><strong>Skill</strong><small>怎样做事</small></span>
+            </button>
+            <button class="design-tab" type="button" role="tab" aria-selected="false" aria-controls="memoryPanel" data-design-tab="memoryPanel">
+              <span class="design-tab-icon">◉</span><span><strong>Memory</strong><small>记住什么</small></span>
+            </button>
           </div>
-          <div class="grid">
-            <div>
-              <div class="field">
-                <label for="persona">① Soul（人设）</label
-                ><textarea
-                  id="persona"
-                  placeholder="你是一位严格又耐心的初中数学出题老师……"
-                ></textarea>
+          <div class="design-panels">
+            <section id="soulPanel" class="design-panel active" role="tabpanel">
+              <div class="panel-intro">
+                <strong>Soul · 角色与表达</strong>
+                <span>定义它是谁、重视什么，以及用怎样的语气与你交流。</span>
               </div>
-              <div class="field">
-                <label for="tools">④ 给它装备</label
-                ><label
-                  ><input id="calculator" type="checkbox" style="width: auto" />
-                  🧮 计算器</label
-                >
+              <div class="field panel-field">
+                <label for="persona">Agent 人设</label>
+                <textarea id="persona" placeholder="你是一位严格又耐心的初中数学出题老师……"></textarea>
               </div>
-              <div class="field">
-                <label for="maxTurns"
-                  >⑤ 最大步数：<span id="turnValue">30</span></label
-                ><input id="maxTurns" type="range" min="1" max="60" value="30" />
+            </section>
+            <section id="skillPanel" class="design-panel" role="tabpanel" hidden>
+              <div class="panel-intro">
+                <strong>Skill · 做事方法</strong>
+                <span>写明什么时候使用和工作步骤；任务不匹配时可以不使用。</span>
               </div>
-            </div>
-            <div>
-              <div class="row">
-                <label for="skill">③ Skill（SKILL.md）</label
-                ><select id="templates">
+              <div class="skill-toolbar">
+                <select id="templates" aria-label="Skill 模板">
                   <option value="">选择模板…</option></select
                 ><button id="useTemplate" class="secondary" type="button">
                   使用模板
                 </button>
               </div>
-              <p class="status">
-                建议写明“什么时候使用”和“工作步骤”；任务不匹配时 Agent
-                可以不使用这项 Skill。
-              </p>
               <textarea
                 id="skill"
                 class="skill"
+                aria-label="Skill 内容"
                 placeholder="# 技能名称&#10;&#10;## 什么时候使用&#10;当用户希望……时使用。&#10;&#10;## 工作步骤&#10;1. ……"
               ></textarea>
+            </section>
+            <section id="memoryPanel" class="design-panel" role="tabpanel" hidden>
+              <div class="panel-intro">
+                <strong>Memory · 长期记忆</strong>
+                <span>只有你确认的内容，才会在相关的新对话中被读取。</span>
+              </div>
+              <div class="memory-workspace">
+                <div class="memory-toolbar">
+                  <label class="memory-toggle"><input id="memoryEnabled" type="checkbox" /> <span>开启长期 Memory</span></label>
+                  <div class="row">
+                    <button id="refreshMemory" class="secondary small" type="button">刷新候选</button>
+                    <button id="clearMemory" class="danger small" type="button">清空</button>
+                  </div>
+                </div>
+                <p class="status">自动提取的内容会先成为候选；只有你确认的条目才会在当前课堂场次内跨对话使用。新建课堂场次不会带入。</p>
+                <div id="memoryUsage" class="memory-usage status"></div>
+                <div id="memoryList" class="memory-list"></div>
+              </div>
+            </section>
+          </div>
+          <div class="design-options">
+            <label class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
+            <div class="turn-option">
+              <label for="maxTurns">最大步数 <strong id="turnValue">30</strong></label>
+              <input id="maxTurns" type="range" min="1" max="60" value="30" />
             </div>
           </div>
-          <div id="saveStatus" class="status"></div>
         </section>
         <section class="card chat-card">
           <h2>💬 对话区</h2>
@@ -428,6 +429,21 @@
         deltaQueue = [],
         deltaFrame = 0,
         queuedDeltaChars = 0;
+      document.querySelectorAll("[data-design-tab]").forEach((tab) => {
+        tab.onclick = () => {
+          const panelID = tab.dataset.designTab;
+          document.querySelectorAll("[data-design-tab]").forEach((item) => {
+            const selected = item === tab;
+            item.classList.toggle("active", selected);
+            item.setAttribute("aria-selected", String(selected));
+          });
+          document.querySelectorAll(".design-panel").forEach((panel) => {
+            const selected = panel.id === panelID;
+            panel.hidden = !selected;
+            panel.classList.toggle("active", selected);
+          });
+        };
+      });
       async function api(url, opt = {}) {
         const r = await fetch(url, {
           ...opt,

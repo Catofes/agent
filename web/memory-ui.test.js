@@ -34,6 +34,15 @@ test("conversations are exposed as browser-style tabs", () => {
   assert.doesNotMatch(html, /id=["']conversations["']/);
 });
 
+test("Soul, Skill and Memory share the design area as accessible tabs", () => {
+  for (const panel of ["soulPanel", "skillPanel", "memoryPanel"]) {
+    assert.match(html, new RegExp(`aria-controls=["']${panel}["']`));
+    assert.match(html, new RegExp(`id=["']${panel}["']`));
+  }
+  assert.match(html, /data-design-tab/);
+  assert.match(html, /role=["']tabpanel["']/);
+});
+
 test("agent step control defaults to 30 and allows up to 60", () => {
   assert.match(
     html,

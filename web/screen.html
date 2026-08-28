@@ -93,17 +93,26 @@
     <div id="connection" class="connection" role="status">正在连接…</div>
     <main id="empty" class="empty">等待老师选择作品…</main>
     <main id="screen" class="screen" hidden>
-      <h1 id="name"></h1>
+      <header class="screen-header">
+        <div>
+          <div class="eyebrow">课堂作品展示</div>
+          <h1 id="name"></h1>
+        </div>
+      </header>
       <div class="grid">
-        <section class="card">
-          <div class="label">它是谁？</div>
+        <section class="card design-summary">
+          <div class="summary-mark">✦</div>
+          <div class="label">Soul · 它是谁</div>
           <div id="persona" class="content"></div>
-          <div class="label" style="margin-top: 2vh">技能手册</div>
+          <div class="label section-label">Skill · 怎样做事</div>
           <div id="skill" class="content"></div>
-          <div id="meta" class="label" style="margin-top: 2vh"></div>
+          <div id="meta" class="meta"></div>
         </section>
-        <section class="card">
-          <div class="label">完整对话历史</div>
+        <section id="conversationCard" class="card conversation-card">
+          <div class="conversation-titlebar">
+            <div><span class="chat-icon">●</span><strong>对话展示</strong></div>
+            <span>完整多轮记录</span>
+          </div>
           <div id="messages" class="content"></div>
         </section>
       </div>
@@ -176,6 +185,7 @@
             history.push(x);
           });
           $("messages").replaceChildren(...history);
+          $("conversationCard").scrollTop = 0;
         }
         connection(`已连接·${new Date().toLocaleTimeString()}`);
         if (d.spotlight_id)

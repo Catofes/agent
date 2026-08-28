@@ -98,6 +98,7 @@ test('screen SSE event renders DOM and acknowledges the rendered spotlight', asy
   assert.equal(runtime.elements.get('messages').children[2].children[0].textContent, 'Agent');
   assert.equal(runtime.elements.get('messages').children[2].children[1].textContent, '391');
   assert.match(runtime.elements.get('messages').children[2].className, /current/);
+  assert.equal(runtime.elements.get('conversationCard').scrollTop, 0);
   assert.equal(runtime.requests.length, 1);
   assert.equal(runtime.requests[0].url, '/api/screen/ack');
   assert.deepEqual(JSON.parse(runtime.requests[0].options.body), { spotlight_id: 'screen_test' });
