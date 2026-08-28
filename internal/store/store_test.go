@@ -117,6 +117,36 @@ func TestConversationIsolation(t *testing.T) {
 	if err != nil || len(list) != 2 {
 		t.Fatalf("list=%#v err=%v", list, err)
 	}
+	if err = st.DeleteConversation(ctx, run.ID, "2102", "first"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-student delete err=%v", err)
+	}
+	if err = st.DeleteConversation(ctx, run.ID, "2101", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.Conversation(ctx, run.ID, "2101", "first"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted conversation still exists: %v", err)
+	}
+	messages, err := st.Messages(ctx, run.ID, "2101", "first", 0, 10)
+	if err != nil || len(messages) != 0 {
+		t.Fatalf("deleted conversation retained messages: %#v err=%v", messages, err)
+	}
+}
+
+func TestRunPolicyDefaultsAndRevision(t *testing.T) {
+	ctx := context.Background()
+	st, _ := testStore(t)
+	run, err := st.EnsureActiveRun(ctx, "policy_run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := st.RunPolicy(ctx, run.ID)
+	if err != nil || policy.MemoryMode != MemoryModeReviewRequired || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "calculator" || policy.Revision != 1 {
+		t.Fatalf("default policy=%#v err=%v", policy, err)
+	}
+	policy, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeAdaptive, AllowedTools: []string{"calculator", "calculator"}})
+	if err != nil || policy.MemoryMode != MemoryModeAdaptive || len(policy.AllowedTools) != 1 || policy.Revision != 2 {
+		t.Fatalf("updated policy=%#v err=%v", policy, err)
+	}
 }
 
 func TestMemoryIsolationDeletionAndRunScope(t *testing.T) {

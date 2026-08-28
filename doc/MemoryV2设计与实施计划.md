@@ -1,6 +1,6 @@
 # Memory V2：自然形成、可控使用与实施计划
 
-状态：设计提案，尚未实现。
+状态：分阶段实现中。Phase Policy 已落地；`adaptive` 已具备自然提取并直接生效的最小闭环。结构化类型、敏感度判定、合并/纠正、撤销和提取状态仍按后续 Phase 实施。
 
 Memory V2 是对 [Memory MVP](MemoryMVP设计.md) 的渐进演化，不推翻 MVP 已经建立的场次隔离、学生控制、来源追踪和上下文回执。核心变化是：Memory 从“需要学生处理的候选收件箱”变成“Agent 在自然对话中逐步形成、轻量告知、随时可纠正的学生画像”。
 
@@ -314,6 +314,8 @@ updated_at      TEXT NOT NULL
 
 ### Phase Policy：课堂能力控制
 
+实现状态：已完成。教师端可按场次切换三种 Memory 模式和 Registry 中的 Tool；策略通过 SSE 同步学生端，服务端在模型请求与 Tool 执行前重新计算有效交集，并以 revision 防止旧提取任务跨策略写回。
+
 目标：先建立老师对 Memory 模式和 Tool 能力的场次级控制，为 V2 灰度验证提供开关。
 
 - 增加 `run_policies` migration、Store API 和 revision。
@@ -337,6 +339,8 @@ updated_at      TEXT NOT NULL
 验收：能够区分没有候选、模型格式错误、超时、关闭后丢弃和存储失败；主对话仍不受影响。
 
 ### Phase 1：自然写入与轻提示
+
+实现状态：部分完成。`adaptive` 模式已允许现有低敏感提取器的结果直接成为可用 Memory，学生可查看、编辑和删除；结构化提案、确定性敏感规则、分类页面和“已了解 + 撤销”提示尚未实现。
 
 目标：普通表达即可形成低风险 Memory，不再要求逐条确认。
 

@@ -43,10 +43,13 @@ type principal struct {
 }
 
 type classroomEvent struct {
-	Type   string `json:"type"`
-	Locked bool   `json:"locked"`
-	RunID  string `json:"run_id,omitempty"`
-	Target string `json:"-"`
+	Type         string   `json:"type"`
+	Locked       bool     `json:"locked"`
+	RunID        string   `json:"run_id,omitempty"`
+	MemoryMode   string   `json:"memory_mode,omitempty"`
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+	Revision     int64    `json:"revision,omitempty"`
+	Target       string   `json:"-"`
 }
 type screenState struct {
 	SpotlightID string          `json:"spotlight_id,omitempty"`
@@ -127,9 +130,11 @@ func (s *Server) Routes() http.Handler {
 				r.Use(s.requireStudent)
 				r.Get("/design", s.getDesign)
 				r.Put("/design", s.saveDesign)
+				r.Get("/capabilities", s.capabilities)
 				r.Get("/templates", s.listTemplates)
 				r.Get("/conversations", s.conversations)
 				r.Post("/conversations", s.createConversation)
+				r.Delete("/conversations/{id}", s.deleteConversation)
 				r.Get("/messages", s.messages)
 				r.Get("/memory", s.getMemory)
 				r.Put("/memory/settings", s.setMemorySettings)
@@ -142,6 +147,8 @@ func (s *Server) Routes() http.Handler {
 			r.Route("/teacher", func(r chi.Router) {
 				r.Use(s.requireTeacher)
 				r.Get("/wall", s.wallEvents)
+				r.Get("/policy", s.getTeacherPolicy)
+				r.Put("/policy", s.setTeacherPolicy)
 				r.Get("/student/{id}", s.teacherStudent)
 				r.Post("/lock", s.lock)
 				r.Post("/run", s.createRun)

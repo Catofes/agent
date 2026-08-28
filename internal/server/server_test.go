@@ -373,6 +373,61 @@ func TestConversationAPIScopeAndPagination(t *testing.T) {
 	if status != http.StatusNotFound {
 		t.Fatalf("cross-student chat status=%d", status)
 	}
+	status, _, _ = requestJSON(t, second, http.MethodDelete, "/api/conversations/"+conversationID, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-student delete status=%d", status)
+	}
+	status, _, _ = requestJSON(t, first, http.MethodDelete, "/api/conversations/"+conversationID, nil)
+	if status != http.StatusNoContent {
+		t.Fatalf("delete status=%d", status)
+	}
+	status, _, _ = requestJSON(t, first, http.MethodGet, "/api/messages?conversation_id="+conversationID, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("deleted conversation messages status=%d", status)
+	}
+}
+
+func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
+	handler, _ := testServer(t)
+	student := newClient(handler)
+	status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, capabilities, _ := requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
+	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || len(capabilities["allowed_tools"].([]any)) != 1 {
+		t.Fatalf("default capabilities status=%d body=%#v", status, capabilities)
+	}
+	status, _, _ = requestJSON(t, student, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})
+	if status != http.StatusOK {
+		t.Fatalf("enable memory status=%d", status)
+	}
+
+	teacher := newClient(handler)
+	status, _, _ = requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, policy, _ := requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeDisabled, "allowed_tools": []string{}})
+	if status != http.StatusOK || policy["memory_mode"] != store.MemoryModeDisabled || policy["revision"].(float64) != 2 {
+		t.Fatalf("policy update status=%d body=%#v", status, policy)
+	}
+	status, capabilities, _ = requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
+	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeDisabled || len(capabilities["allowed_tools"].([]any)) != 0 {
+		t.Fatalf("updated capabilities status=%d body=%#v", status, capabilities)
+	}
+	status, body, _ := requestJSON(t, student, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})
+	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "MEMORY_DISABLED_BY_TEACHER" {
+		t.Fatalf("disabled memory setting status=%d body=%#v", status, body)
+	}
+	status, body, _ = requestJSON(t, student, http.MethodPatch, "/api/memory/not-present", map[string]string{"content": "不应写入", "status": "confirmed"})
+	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "MEMORY_DISABLED_BY_TEACHER" {
+		t.Fatalf("disabled memory update status=%d body=%#v", status, body)
+	}
+	status, _, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": "magic", "allowed_tools": []string{}})
+	if status != http.StatusBadRequest {
+		t.Fatalf("invalid policy status=%d", status)
+	}
 }
 
 func TestTeacherLockAndRunSwitch(t *testing.T) {

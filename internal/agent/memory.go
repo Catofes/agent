@@ -13,8 +13,8 @@ import (
 	"classroom-agent/internal/store"
 )
 
-// MemoryExtractor proposes facts only. A proposal remains a candidate until the
-// student explicitly confirms it, so extractor output is never injected directly.
+// MemoryExtractor proposes facts only. The classroom policy decides whether a
+// proposal needs student review or is added directly to the student's Memory.
 type MemoryExtractor interface {
 	Extract(context.Context, string, string) ([]string, error)
 }
@@ -57,7 +57,10 @@ func (x LLMMemoryExtractor) Extract(ctx context.Context, user, assistant string)
 	return parsed.Candidates, nil
 }
 
-func (e *Engine) relevantMemories(ctx context.Context, runID, studentID, input string) ([]store.Memory, error) {
+func (e *Engine) relevantMemories(ctx context.Context, runID, studentID, input, memoryMode string) ([]store.Memory, error) {
+	if memoryMode == store.MemoryModeDisabled {
+		return nil, nil
+	}
 	enabled, err := e.Store.MemoryEnabled(ctx, runID, studentID)
 	if err != nil || !enabled {
 		return nil, err
@@ -84,7 +87,7 @@ func (e *Engine) relevantMemories(ctx context.Context, runID, studentID, input s
 }
 
 func (e *Engine) scheduleMemoryExtraction(req Request, answer string) {
-	if e.MemoryExtractor == nil || strings.TrimSpace(req.Input) == "" {
+	if e.MemoryExtractor == nil || strings.TrimSpace(req.Input) == "" || req.MemoryMode == store.MemoryModeDisabled {
 		return
 	}
 	key := req.RunID + "\x00" + req.StudentID
@@ -140,8 +143,12 @@ func (e *Engine) scheduleMemoryExtraction(req Request, answer string) {
 			if len(items) >= e.MaxMemoryItems || totalTokens+candidateTokens > e.MaxMemoryTokens {
 				return
 			}
-			memory := store.Memory{ID: newMemoryID(), RunID: req.RunID, StudentID: req.StudentID, Content: content, Status: "candidate", SourceConversationID: req.ConversationID, SourceTurnID: req.TurnID}
-			if _, err := e.Store.AddMemoryIfSetting(ctx, memory, revision); err != nil {
+			status := "candidate"
+			if req.MemoryMode == store.MemoryModeAdaptive {
+				status = "confirmed"
+			}
+			memory := store.Memory{ID: newMemoryID(), RunID: req.RunID, StudentID: req.StudentID, Content: content, Status: status, SourceConversationID: req.ConversationID, SourceTurnID: req.TurnID}
+			if _, err := e.Store.AddMemoryIfSettings(ctx, memory, revision, req.PolicyRevision, req.MemoryMode); err != nil {
 				return
 			}
 			items = append(items, memory)

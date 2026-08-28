@@ -108,8 +108,50 @@
       .msg.user {
         background: #e8edff;
       }
+      .policy-grid {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) minmax(260px, 2fr) auto;
+        gap: 14px;
+        align-items: end;
+      }
+      .policy-field {
+        display: grid;
+        gap: 7px;
+      }
+      .policy-field > span {
+        color: #667085;
+        font-size: 0.88rem;
+        font-weight: 650;
+      }
+      .policy-tools {
+        display: flex;
+        min-height: 43px;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 12px;
+        border: 1px solid #d9dce5;
+        border-radius: 11px;
+        background: #fff;
+      }
+      .policy-tools label {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .policy-tools input {
+        min-height: auto;
+        accent-color: #5b4ee8;
+      }
+      #policyStatus {
+        min-height: 1.4em;
+        margin: 8px 0 0;
+        color: #667085;
+      }
       @media (max-width: 760px) {
         .detail {
+          grid-template-columns: 1fr;
+        }
+        .policy-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -149,6 +191,30 @@
             ><button id="logout" class="secondary">退出</button>
           </div>
         </header>
+        <section class="card" aria-labelledby="policyTitle">
+          <div class="top">
+            <div>
+              <h2 id="policyTitle" style="margin-bottom: 4px">课堂能力</h2>
+              <div class="status">统一控制本场课堂的 Memory 行为与 Agent 可用工具。</div>
+            </div>
+          </div>
+          <div class="policy-grid">
+            <label class="policy-field">
+              <span>Memory 模式</span>
+              <select id="policyMemoryMode">
+                <option value="disabled">关闭</option>
+                <option value="review_required">学生确认后记住</option>
+                <option value="adaptive">自然积累</option>
+              </select>
+            </label>
+            <div class="policy-field">
+              <span>允许使用的工具</span>
+              <div id="policyTools" class="policy-tools"></div>
+            </div>
+            <button id="savePolicy">保存课堂设置</button>
+          </div>
+          <p id="policyStatus" role="status"></p>
+        </section>
         <section id="wall" class="wall"></section>
         <section id="detailCard" class="card hidden">
           <div class="top">
@@ -179,7 +245,9 @@
         current = null,
         es = null,
         lockBusy = false,
-        runBusy = false;
+        runBusy = false,
+        policyDirty = false,
+        policyBusy = false;
       async function api(url, opt = {}) {
         const r = await fetch(url, {
           ...opt,
@@ -235,6 +303,7 @@
             : "全体锁定";
         $("lock").disabled = lockBusy;
         $("lock").setAttribute("aria-pressed", String(wallState.run.locked));
+        renderPolicy();
         const now = new Date(wallState.server_time);
         $("wall").replaceChildren(
           ...wallState.students.map((s) => {
@@ -256,6 +325,74 @@
           }),
         );
       }
+      function toolLabel(name) {
+        return name === "calculator" ? "计算器" : name;
+      }
+      function selectedPolicy() {
+        return {
+          memory_mode: $("policyMemoryMode").value,
+          allowed_tools: [...$("policyTools").querySelectorAll("input:checked")].map(
+            (input) => input.value,
+          ),
+        };
+      }
+      function renderPolicy() {
+        if (!wallState?.policy) return;
+        const available = wallState.available_tools || [];
+        const key = available.join("\u0000");
+        if ($("policyTools").dataset.key !== key) {
+          $("policyTools").dataset.key = key;
+          $("policyTools").replaceChildren(
+            ...available.map((name) => {
+              const label = document.createElement("label"),
+                input = document.createElement("input");
+              input.type = "checkbox";
+              input.value = name;
+              input.onchange = markPolicyDirty;
+              label.append(input, document.createTextNode(toolLabel(name)));
+              return label;
+            }),
+          );
+        }
+        if (!policyDirty) {
+          $("policyMemoryMode").value = wallState.policy.memory_mode;
+          const enabled = new Set(wallState.policy.allowed_tools || []);
+          $("policyTools")
+            .querySelectorAll("input")
+            .forEach((input) => (input.checked = enabled.has(input.value)));
+        }
+        $("policyMemoryMode").disabled = policyBusy;
+        $("policyTools")
+          .querySelectorAll("input")
+          .forEach((input) => (input.disabled = policyBusy));
+        $("savePolicy").disabled = policyBusy || !policyDirty;
+        $("savePolicy").textContent = policyBusy ? "正在保存…" : "保存课堂设置";
+      }
+      function markPolicyDirty() {
+        policyDirty = true;
+        $("policyStatus").textContent = "设置有改动，保存后立即对全班生效";
+        renderPolicy();
+      }
+      $("policyMemoryMode").onchange = markPolicyDirty;
+      $("savePolicy").onclick = async () => {
+        if (!wallState || policyBusy || !policyDirty) return;
+        policyBusy = true;
+        renderPolicy();
+        try {
+          const policy = await api("/api/teacher/policy", {
+            method: "PUT",
+            body: JSON.stringify(selectedPolicy()),
+          });
+          wallState.policy = policy;
+          policyDirty = false;
+          $("policyStatus").textContent = "课堂设置已保存，并同步给学生";
+        } catch (e) {
+          $("policyStatus").textContent = "保存失败：" + e.message;
+        } finally {
+          policyBusy = false;
+          renderPolicy();
+        }
+      };
       function t(v, tag = "div") {
         const e = document.createElement(tag);
         e.textContent = v;
@@ -299,7 +436,7 @@
         try {
           await api("/api/teacher/run", {
             method: "POST",
-            body: JSON.stringify({ name }),
+            body: JSON.stringify({ name, ...selectedPolicy() }),
           });
           $("actionStatus").textContent = "新场次已创建，请让学生重新登录";
         } catch (e) {

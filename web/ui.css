@@ -236,12 +236,21 @@ p { line-height: 1.65; }
   background: #f3f3f7;
   scrollbar-width: thin;
 }
+.conversation-tab-wrap {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  max-width: 250px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+}
+.conversation-tab-wrap.active { border-color: #dfdce9; background: white; box-shadow: 0 2px 8px rgba(32, 27, 76, .08); }
 .conversation-tab {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  max-width: 230px;
+  max-width: 205px;
   min-height: 38px;
   padding: 7px 11px;
   border: 1px solid transparent;
@@ -254,11 +263,13 @@ p { line-height: 1.65; }
 }
 .conversation-tab:hover:not(:disabled) { background: rgba(255, 255, 255, .72); color: var(--ink); transform: none; }
 .conversation-tab.active {
-  border-color: #dfdce9;
-  background: white;
+  border-color: transparent;
+  background: transparent;
   color: #292443;
-  box-shadow: 0 2px 8px rgba(32, 27, 76, .08);
+  box-shadow: none;
 }
+.conversation-close { width: 28px; min-width: 28px; min-height: 28px; margin-right: 5px; padding: 0; border-radius: 7px; background: transparent; color: #aaa6b6; box-shadow: none; font-size: 1rem; line-height: 1; }
+.conversation-close:hover:not(:disabled) { background: #fff0f1; color: var(--danger); transform: none; }
 .conversation-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-count {
   display: grid;

@@ -33,6 +33,21 @@ func (s *Server) getDesign(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, d)
 }
 
+func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	policy, err := s.Store.RunPolicy(r.Context(), p.Session.RunID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"memory_mode":     policy.MemoryMode,
+		"allowed_tools":   policy.AllowedTools,
+		"available_tools": s.Agent.Tools.Names(),
+		"revision":        policy.Revision,
+	})
+}
+
 func (s *Server) saveDesign(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
 	var in struct {
@@ -55,7 +70,7 @@ func (s *Server) saveDesign(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 	clean := make([]string, 0, len(in.Tools))
 	for _, name := range in.Tools {
-		if name != "calculator" {
+		if _, ok := s.Agent.Tools.Get(name); !ok {
 			writeError(w, 400, "UNKNOWN_TOOL", "包含未开放的装备")
 			return
 		}
@@ -148,6 +163,31 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
+func (s *Server) deleteConversation(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" || runeLen(id) > maxConversationChars {
+		writeError(w, 404, "CONVERSATION_NOT_FOUND", "未找到该对话")
+		return
+	}
+	run, err := s.Store.Run(r.Context(), p.Session.RunID)
+	if err != nil || run.Status != "active" || run.Locked {
+		writeError(w, 423, "CLASS_LOCKED", "老师已暂停课堂操作")
+		return
+	}
+	err = s.Store.DeleteConversation(r.Context(), p.Session.RunID, p.Session.StudentID, id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, 404, "CONVERSATION_NOT_FOUND", "未找到该对话")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "删除对话失败")
+		return
+	}
+	s.wallHub.Publish(struct{}{})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
 	conversationID := strings.TrimSpace(r.URL.Query().Get("conversation_id"))
@@ -177,6 +217,11 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
+	policy, err := s.Store.RunPolicy(r.Context(), p.Session.RunID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂 Memory 策略失败")
+		return
+	}
 	state, err := s.Store.MemoryState(r.Context(), p.Session.RunID, p.Session.StudentID)
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "读取 Memory 失败")
@@ -192,11 +237,21 @@ func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
 		"usage":   map[string]int{"items": len(state.Items), "estimated_tokens": tokens},
 		"limits":  map[string]int{"items": s.Config.MaxMemoryItems, "chars_per_item": s.Config.MaxMemoryChars, "estimated_tokens": s.Config.MaxMemoryTokens},
 		"scope":   "current_run",
+		"mode":    policy.MemoryMode,
 	})
 }
 
 func (s *Server) setMemorySettings(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
+	policy, err := s.Store.RunPolicy(r.Context(), p.Session.RunID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂 Memory 策略失败")
+		return
+	}
+	if policy.MemoryMode == store.MemoryModeDisabled {
+		writeError(w, http.StatusForbidden, "MEMORY_DISABLED_BY_TEACHER", "老师未在本场次开放 Memory")
+		return
+	}
 	var in struct {
 		Enabled bool `json:"enabled"`
 	}
@@ -212,6 +267,15 @@ func (s *Server) setMemorySettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) updateMemory(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
+	policy, err := s.Store.RunPolicy(r.Context(), p.Session.RunID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂 Memory 策略失败")
+		return
+	}
+	if policy.MemoryMode == store.MemoryModeDisabled {
+		writeError(w, http.StatusForbidden, "MEMORY_DISABLED_BY_TEACHER", "老师未在本场次开放 Memory")
+		return
+	}
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	if id == "" || runeLen(id) > maxMemoryIDChars {
 		writeError(w, 404, "MEMORY_NOT_FOUND", "未找到该条 Memory")
@@ -352,6 +416,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取设计失败")
 		return
 	}
+	policy, err := s.Store.RunPolicy(r.Context(), p.Session.RunID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -380,7 +449,20 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}
-	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, BeforeModelCall: beforeModelCall}, emit)
+	toolsForCall := func(ctx context.Context) ([]string, error) {
+		s.controlMu.RLock()
+		defer s.controlMu.RUnlock()
+		current, checkErr := s.Store.Run(ctx, p.Session.RunID)
+		if checkErr != nil || current.Status != "active" || current.Locked {
+			return nil, agent.ErrClassLocked
+		}
+		currentPolicy, checkErr := s.Store.RunPolicy(ctx, p.Session.RunID)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		return intersectStrings(d.Tools, currentPolicy.AllowedTools), nil
+	}
+	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall}, emit)
 	if err != nil {
 		code, msg := agentError(err)
 		if !emitted {
@@ -390,6 +472,20 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.wallHub.Publish(struct{}{})
+}
+
+func intersectStrings(selected, allowed []string) []string {
+	allow := make(map[string]bool, len(allowed))
+	for _, value := range allowed {
+		allow[value] = true
+	}
+	out := make([]string, 0, len(selected))
+	for _, value := range selected {
+		if allow[value] {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func agentError(err error) (string, string) {
@@ -442,7 +538,11 @@ func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sendSSE(w, "classroom", classroomEvent{Type: "classroom", Locked: run.Locked, RunID: run.ID})
+	policy, err := s.Store.RunPolicy(r.Context(), run.ID)
+	if err != nil {
+		return
+	}
+	sendSSE(w, "classroom", classroomEvent{Type: "classroom", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	flusher.Flush()
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
@@ -501,7 +601,11 @@ func (s *Server) wallEvents(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return false
 		}
-		sendSSE(w, "wall", map[string]any{"run": current, "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
+		policy, e := s.Store.RunPolicy(r.Context(), current.ID)
+		if e != nil {
+			return false
+		}
+		sendSSE(w, "wall", map[string]any{"run": current, "policy": policy, "available_tools": s.Agent.Tools.Names(), "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
 		flusher.Flush()
 		return true
 	}
@@ -562,6 +666,70 @@ func (s *Server) teacherStudent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"student": st, "design": d, "conversations": conversations, "messages": msgs, "usage": usage})
 }
 
+func (s *Server) getTeacherPolicy(w http.ResponseWriter, r *http.Request) {
+	run, err := s.Store.ActiveRun(r.Context())
+	if err != nil {
+		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
+		return
+	}
+	policy, err := s.Store.RunPolicy(r.Context(), run.ID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"policy": policy, "available_tools": s.Agent.Tools.Names()})
+}
+
+func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		MemoryMode   string   `json:"memory_mode"`
+		AllowedTools []string `json:"allowed_tools"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	clean, ok := s.validatePolicyInput(w, in.MemoryMode, in.AllowedTools)
+	if !ok {
+		return
+	}
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+	run, err := s.Store.ActiveRun(r.Context())
+	if err != nil {
+		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
+		return
+	}
+	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, AllowedTools: clean})
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "更新课堂能力失败")
+		return
+	}
+	s.studentHub.Publish(classroomEvent{Type: "classroom_policy", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	s.wallHub.Publish(struct{}{})
+	s.Logger.Info("classroom policy changed", "run_id", run.ID, "memory_mode", policy.MemoryMode, "allowed_tools", policy.AllowedTools, "revision", policy.Revision)
+	writeJSON(w, 200, policy)
+}
+
+func (s *Server) validatePolicyInput(w http.ResponseWriter, memoryMode string, allowedTools []string) ([]string, bool) {
+	if memoryMode != store.MemoryModeDisabled && memoryMode != store.MemoryModeReviewRequired && memoryMode != store.MemoryModeAdaptive {
+		writeError(w, 400, "INVALID_MEMORY_MODE", "Memory 模式不正确")
+		return nil, false
+	}
+	seen := map[string]bool{}
+	clean := make([]string, 0, len(allowedTools))
+	for _, name := range allowedTools {
+		if _, exists := s.Agent.Tools.Get(name); !exists {
+			writeError(w, 400, "UNKNOWN_TOOL", "包含服务端未注册的 Tool")
+			return nil, false
+		}
+		if !seen[name] {
+			seen[name] = true
+			clean = append(clean, name)
+		}
+	}
+	return clean, true
+}
+
 func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Locked bool `json:"locked"`
@@ -580,7 +748,8 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "切换锁定状态失败")
 		return
 	}
-	s.studentHub.Publish(classroomEvent{Type: "classroom", Locked: in.Locked, RunID: run.ID})
+	policy, _ := s.Store.RunPolicy(r.Context(), run.ID)
+	s.studentHub.Publish(classroomEvent{Type: "classroom", Locked: in.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	s.wallHub.Publish(struct{}{})
 	s.Logger.Info("classroom lock changed", "run_id", run.ID, "locked", in.Locked)
 	writeJSON(w, 200, map[string]bool{"locked": in.Locked})
@@ -588,7 +757,9 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name string `json:"name"`
+		Name         string   `json:"name"`
+		MemoryMode   string   `json:"memory_mode"`
+		AllowedTools []string `json:"allowed_tools"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -601,7 +772,18 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	s.controlMu.Lock()
 	defer s.controlMu.Unlock()
 	old, _ := s.Store.ActiveRun(r.Context())
-	created, err := s.Store.CreateRun(r.Context(), newID("run_"), in.Name, old.ID)
+	if in.MemoryMode == "" {
+		oldPolicy, _ := s.Store.RunPolicy(r.Context(), old.ID)
+		in.MemoryMode = oldPolicy.MemoryMode
+		if in.AllowedTools == nil {
+			in.AllowedTools = oldPolicy.AllowedTools
+		}
+	}
+	clean, ok := s.validatePolicyInput(w, in.MemoryMode, in.AllowedTools)
+	if !ok {
+		return
+	}
+	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, AllowedTools: clean})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "新建场次失败")
 		return

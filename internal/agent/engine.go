@@ -52,7 +52,10 @@ type MemoryReceipt struct {
 type Request struct {
 	RunID, StudentID, ConversationID, TurnID, Input string
 	Design                                          store.Design
+	MemoryMode                                      string
+	PolicyRevision                                  int64
 	BeforeModelCall                                 func(context.Context) error
+	ToolsForCall                                    func(context.Context) ([]string, error)
 }
 
 type Engine struct {
@@ -99,7 +102,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	if u.TokensIn+u.TokensOut >= e.TokenBudget {
 		return ErrBudget
 	}
-	memories, err := e.relevantMemories(ctx, req.RunID, req.StudentID, req.Input)
+	memories, err := e.relevantMemories(ctx, req.RunID, req.StudentID, req.Input, req.MemoryMode)
 	if err != nil {
 		// Memory is an optional enhancement. Its read path must not take down chat.
 		memories = nil
@@ -125,7 +128,6 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		return err
 	}
 	messages := buildMessages(req.Design, memories, history)
-	defs := e.Tools.Definitions(req.Design.Tools)
 	var totalIn, totalOut int64
 	var unknownUsage int64
 	toolCount := 0
@@ -137,6 +139,14 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		}
 	}()
 	for iteration := 1; iteration <= req.Design.MaxTurns; iteration++ {
+		effectiveTools := req.Design.Tools
+		if req.ToolsForCall != nil {
+			effectiveTools, err = req.ToolsForCall(ctx)
+			if err != nil {
+				return err
+			}
+		}
+		defs := e.Tools.Definitions(effectiveTools)
 		streamedText := false
 		streamedChars := 0
 		completion, callErr := e.callWithRetry(ctx, CompletionRequest{Model: e.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, BeforeCall: req.BeforeModelCall, OnReasoningDelta: func(delta string) error {
@@ -231,7 +241,12 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			t, ok := e.Tools.Get(call.Function.Name)
 			var result tools.Result
 			var toolErr error
-			if !ok || !contains(req.Design.Tools, call.Function.Name) {
+			if req.ToolsForCall != nil {
+				effectiveTools, toolErr = req.ToolsForCall(ctx)
+			}
+			if toolErr != nil {
+				// Preserve the policy or classroom error returned by the server.
+			} else if !ok || !contains(effectiveTools, call.Function.Name) {
 				toolErr = fmt.Errorf("工具 %q 未启用", call.Function.Name)
 			} else {
 				result, toolErr = t.Execute(ctx, json.RawMessage(call.Function.Arguments))

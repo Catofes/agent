@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 )
 
 var ErrInvalidInput = errors.New("invalid tool input")
@@ -40,6 +41,14 @@ func NewRegistry(items ...Tool) *Registry {
 }
 
 func (r *Registry) Get(name string) (Tool, bool) { t, ok := r.values[name]; return t, ok }
+func (r *Registry) Names() []string {
+	out := make([]string, 0, len(r.values))
+	for name := range r.values {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
 func (r *Registry) Definitions(enabled []string) []Definition {
 	out := make([]Definition, 0, len(enabled))
 	for _, name := range enabled {

@@ -352,7 +352,7 @@
             <section id="memoryPanel" class="design-panel" role="tabpanel" hidden>
               <div class="panel-intro">
                 <strong>Memory · 长期记忆</strong>
-                <span>只有你确认的内容，才会在相关的新对话中被读取。</span>
+                <span id="memoryIntro">只有你确认的内容，才会在相关的新对话中被读取。</span>
               </div>
               <div class="memory-workspace">
                 <div class="memory-toolbar">
@@ -362,7 +362,7 @@
                     <button id="clearMemory" class="danger small" type="button">清空</button>
                   </div>
                 </div>
-                <p class="status">自动提取的内容会先成为候选；只有你确认的条目才会在当前课堂场次内跨对话使用。新建课堂场次不会带入。</p>
+                <p id="memoryDescription" class="status">自动提取的内容会先成为候选；只有你确认的条目才会在当前课堂场次内跨对话使用。新建课堂场次不会带入。</p>
                 <div id="memoryUsage" class="memory-usage status"></div>
                 <div id="memoryList" class="memory-list"></div>
               </div>
@@ -423,6 +423,7 @@
         conversationItems = [],
         activeConversation = null,
         memoryState = null,
+        capabilities = null,
         locked = false,
         dirty = false,
         controller = null,
@@ -485,6 +486,7 @@
             }),
           });
           student = d.student;
+          locked = !!d.run.locked;
           $("identity").textContent =
             `学号：${student.id}　${student.name}　｜　${d.run.name}`;
           $("login").classList.add("hidden");
@@ -500,6 +502,7 @@
           const d = await api("/api/me");
           if (d.role !== "student") return;
           student = d.student;
+          locked = !!d.run.locked;
           $("identity").textContent =
             `学号：${student.id}　${student.name}　｜　${d.run.name}`;
           $("login").classList.add("hidden");
@@ -511,11 +514,12 @@
       resume();
       async function load() {
         try {
-          const [d, t, c, memory] = await Promise.all([
+          const [d, t, c, memory, caps] = await Promise.all([
             api("/api/design"),
             api("/api/templates"),
             api("/api/conversations"),
             api("/api/memory"),
+            api("/api/capabilities"),
           ]);
           $("persona").value = d.persona;
           $("skill").value = d.skill_md;
@@ -524,23 +528,25 @@
           $("turnValue").textContent = d.max_turns;
           templates = t.templates;
           memoryState = memory;
+          capabilities = caps;
           renderMemory();
           $("templates").replaceChildren(
             new Option("选择模板…", ""),
             ...templates.map((x) => new Option(x.name, x.id)),
           );
           conversationItems = c.conversations;
-          if (!conversationItems.length) {
+          if (!conversationItems.length && !locked) {
             const created = await api("/api/conversations", {
               method: "POST",
               body: "{}",
             });
             conversationItems = [created];
           }
-          activeConversation = conversationItems[0].id;
+          activeConversation = conversationItems[0]?.id || null;
           renderConversationTabs();
           await loadMessages();
           dirty = false;
+          applyLock();
         } catch (e) {
           if (e.message.includes("登录")) location.reload();
           else $("saveStatus").textContent = e.message;
@@ -556,9 +562,14 @@
       function renderConversationTabs() {
         $("conversationTabs").replaceChildren(
           ...conversationItems.map((conversation) => {
-            const tab = document.createElement("button"),
+            const wrapper = document.createElement("div"),
+              tab = document.createElement("button"),
               title = text("span", conversation.title, "conversation-title"),
-              count = text("span", conversation.message_count, "conversation-count");
+              count = text("span", conversation.message_count, "conversation-count"),
+              close = document.createElement("button");
+            wrapper.className =
+              "conversation-tab-wrap" +
+              (conversation.id === activeConversation ? " active" : "");
             tab.type = "button";
             tab.className =
               "conversation-tab" +
@@ -572,9 +583,60 @@
             tab.disabled = !!controller;
             tab.onclick = () => switchConversation(conversation.id);
             tab.append(title, count);
-            return tab;
+            close.type = "button";
+            close.className = "conversation-close";
+            close.textContent = "×";
+            close.title = `关闭并删除“${conversation.title}”`;
+            close.setAttribute("aria-label", `关闭并删除对话 ${conversation.title}`);
+            close.disabled = locked || !!controller;
+            close.onclick = () => removeConversation(conversation);
+            wrapper.append(tab, close);
+            return wrapper;
           }),
         );
+      }
+
+      async function removeConversation(conversation) {
+        if (controller || locked) return;
+        if (
+          !confirm(
+            `关闭并删除“${conversation.title}”吗？\n\n这个对话中的消息会被永久删除。`,
+          )
+        )
+          return;
+        try {
+          await api(
+            "/api/conversations/" + encodeURIComponent(conversation.id),
+            { method: "DELETE" },
+          );
+          const removedIndex = conversationItems.findIndex(
+            (item) => item.id === conversation.id,
+          );
+          conversationItems = conversationItems.filter(
+            (item) => item.id !== conversation.id,
+          );
+          if (activeConversation === conversation.id) {
+            if (!conversationItems.length) {
+              const created = await api("/api/conversations", {
+                method: "POST",
+                body: "{}",
+              });
+              conversationItems = [created];
+            }
+            activeConversation =
+              conversationItems[
+                Math.min(
+                  Math.max(removedIndex, 0),
+                  conversationItems.length - 1,
+                )
+              ].id;
+            await loadMessages();
+          }
+          renderConversationTabs();
+          $("chatStatus").textContent = "对话已删除";
+        } catch (e) {
+          $("chatStatus").textContent = e.message;
+        }
       }
       async function refreshConversations() {
         const d = await api("/api/conversations");
@@ -656,15 +718,43 @@
       }
       function renderMemory() {
         if (!memoryState) return;
+        const disabledByTeacher =
+          (capabilities?.memory_mode || memoryState.mode) === "disabled";
+        const adaptive = capabilities?.memory_mode === "adaptive";
+        $("memoryIntro").textContent = disabledByTeacher
+          ? "本场课堂未开放长期记忆；已有内容仍由你管理。"
+          : adaptive
+            ? "在自然对话中逐步积累有长期价值的信息，你可以随时编辑或删除。"
+            : "系统提出可能有用的内容，由你决定是否保留。";
+        $("memoryDescription").textContent = disabledByTeacher
+          ? "Memory 不会被读取或新增；已有内容仍可查看和删除。"
+          : adaptive
+            ? "长期偏好、背景和学习目标会在当前课堂场次内自然积累；新建课堂场次不会带入。"
+            : "自动提取的内容会先成为候选；只有你确认的条目才会在当前课堂场次内跨对话使用。新建课堂场次不会带入。";
         $("memoryEnabled").checked = memoryState.enabled;
+        $("memoryEnabled").disabled = disabledByTeacher || locked || !!controller;
+        $("refreshMemory").disabled =
+          disabledByTeacher || locked || !!controller;
+        $("clearMemory").disabled = locked || !!controller;
         const usage = memoryState.usage || {},
           limits = memoryState.limits || {};
-        $("memoryUsage").textContent =
-          `${usage.items || 0}/${limits.items || 30} 条，约 ${usage.estimated_tokens || 0}/${limits.estimated_tokens || 1200} tokens；单条最多 ${limits.chars_per_item || 400} 字。`;
+        $("memoryUsage").textContent = disabledByTeacher
+          ? "老师未在本场次开放 Memory；已有内容仍可查看和删除。"
+          : `${usage.items || 0}/${limits.items || 30} 条，约 ${usage.estimated_tokens || 0}/${limits.estimated_tokens || 1200} tokens；单条最多 ${limits.chars_per_item || 400} 字。`;
         const list = $("memoryList");
         list.replaceChildren();
         if (!memoryState.items.length) {
-          list.append(text("div", "还没有 Memory。开启后正常对话，系统会在回答完成后生成待确认候选。", "status"));
+          list.append(
+            text(
+              "div",
+              disabledByTeacher
+                ? "本场次暂不使用 Memory。"
+                : capabilities?.memory_mode === "adaptive"
+                  ? "还没有 Memory。自然对话中有长期价值的信息会自动加入。"
+                  : "还没有 Memory。开启后正常对话，系统会在回答完成后生成待确认候选。",
+              "status",
+            ),
+          );
           return;
         }
         memoryState.items.forEach((item) => {
@@ -678,12 +768,15 @@
           if (item.status === "candidate") {
             const confirmButton = text("button", "确认", "small");
             confirmButton.type = "button";
+            confirmButton.disabled = disabledByTeacher || locked || !!controller;
             confirmButton.onclick = () => updateMemory(item, item.content, "confirmed");
             controls.append(confirmButton);
           }
           const editButton = text("button", "编辑", "secondary small"),
             deleteButton = text("button", "删除", "danger small");
           editButton.type = deleteButton.type = "button";
+          editButton.disabled = disabledByTeacher || locked || !!controller;
+          deleteButton.disabled = locked || !!controller;
           editButton.onclick = () => {
             const changed = prompt("编辑这条 Memory", item.content);
             if (changed !== null && changed.trim())
@@ -730,7 +823,9 @@
           });
           await loadMemory();
           $("chatStatus").textContent = enabled
-            ? "长期 Memory 已开启；新候选仍需你确认"
+            ? capabilities?.memory_mode === "adaptive"
+              ? "自然 Memory 已开启；有长期价值的信息会自动加入，并可随时删除"
+              : "长期 Memory 已开启；新候选仍需你确认"
             : "长期 Memory 已关闭；现有条目保留但不会读取或提取";
         } catch (e) {
           $("memoryEnabled").checked = !$("memoryEnabled").checked;
@@ -936,9 +1031,16 @@
           "send",
           "newConversation",
         ].forEach((id) => ($(id).disabled = locked || !!controller));
+        const calculatorAllowed =
+          !capabilities || capabilities.allowed_tools.includes("calculator");
+        $("calculator").disabled = locked || !!controller || !calculatorAllowed;
+        renderMemory();
         $("conversationTabs")
           .querySelectorAll("button")
-          .forEach((tab) => (tab.disabled = !!controller));
+          .forEach((tab) =>
+            (tab.disabled =
+              !!controller || (locked && tab.classList.contains("conversation-close"))),
+          );
         $("locked").classList.toggle("hidden", !locked);
       }
       function connectEvents() {
@@ -946,6 +1048,15 @@
         es.addEventListener("classroom", (e) => {
           const d = JSON.parse(e.data);
           locked = d.locked;
+          if (d.memory_mode) {
+            capabilities = {
+              ...(capabilities || { available_tools: ["calculator"] }),
+              memory_mode: d.memory_mode,
+              allowed_tools: d.allowed_tools || [],
+              revision: d.revision,
+            };
+            if (memoryState) memoryState.mode = d.memory_mode;
+          }
           applyLock();
         });
         es.addEventListener("session_invalidated", () => {

@@ -31,6 +31,9 @@ test("conversations are exposed as browser-style tabs", () => {
   assert.match(html, /role=["']tablist["']/);
   assert.match(html, /className\s*=\s*[\s\S]*conversation-tab/);
   assert.match(html, /aria-selected/);
+  assert.match(html, /className = "conversation-close"/);
+  assert.match(html, /method: "DELETE"/);
+  assert.match(html, /消息会被永久删除/);
   assert.doesNotMatch(html, /id=["']conversations["']/);
 });
 

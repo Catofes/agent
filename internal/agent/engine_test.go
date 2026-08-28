@@ -495,6 +495,52 @@ func TestMemoryExtractionCreatesCandidateAndFailureDoesNotFailChat(t *testing.T)
 		}
 	})
 
+	t.Run("adaptive mode confirms naturally extracted memory", func(t *testing.T) {
+		ctx := context.Background()
+		st, run := newEngineTestStore(t)
+		if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+			t.Fatal(err)
+		}
+		policy, err := st.SetRunPolicy(ctx, run.ID, store.RunPolicy{MemoryMode: store.MemoryModeAdaptive, AllowedTools: []string{"calculator"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fake := &fakeClient{answers: []Completion{{Content: "明白", Deltas: []string{"明白"}, TokensIn: 2, TokensOut: 1}}}
+		engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
+		engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+		done := make(chan struct{})
+		engine.MemoryExtractor = extractorFunc(func(context.Context, string, string) ([]string, error) {
+			defer close(done)
+			return []string{"我长期在准备机器人比赛"}, nil
+		})
+		req := Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "我长期在准备机器人比赛", Design: store.Design{MaxTurns: 1}, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision}
+		if err = engine.Run(ctx, req, func(Event) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("extractor was not called")
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			items, listErr := st.Memories(ctx, run.ID, "2101", "")
+			if listErr != nil {
+				t.Fatal(listErr)
+			}
+			if len(items) == 1 {
+				if items[0].Status != "confirmed" {
+					t.Fatalf("adaptive memory=%#v", items[0])
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("adaptive memory was not stored")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
+
 	t.Run("failure", func(t *testing.T) {
 		ctx := context.Background()
 		st, run := newEngineTestStore(t)
