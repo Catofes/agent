@@ -811,7 +811,7 @@ func TestShutdownClosesStreamsAndCancelsLLM(t *testing.T) {
 	if elapsed := time.Since(started); elapsed >= 2*time.Second {
 		t.Fatalf("shutdown took %v", elapsed)
 	}
-	if got := app.studentHub.Count() + app.wallHub.Count() + app.screenHub.Count(); got != 0 {
+	if got := app.studentHub.Count() + app.studentMemoryHub.Count() + app.wallHub.Count() + app.screenHub.Count(); got != 0 {
 		t.Fatalf("shutdown left %d event subscribers", got)
 	}
 }
@@ -1168,6 +1168,13 @@ func TestStudentSSEReconnectRestoresSnapshotAndDisablesProxyBuffering(t *testing
 	if initial["locked"] != false || initial["run_id"] != "run" {
 		t.Fatalf("initial snapshot=%v", initial)
 	}
+	app.studentMemoryHub.Publish("old_run\x002101", classroomEvent{Type: "memory_status", RunID: "old_run", MemoryStatus: "changed", MemoryItems: []memoryEventItem{{ID: "wrong_run", Content: "不应发送", Status: "confirmed"}}})
+	app.studentMemoryHub.Publish("run\x002101", classroomEvent{Type: "memory_status", RunID: "run", MemoryStatus: "changed", MemoryItems: []memoryEventItem{{ID: "mem_one", Content: "更喜欢图示讲解", Status: "confirmed"}}})
+	memoryUpdate := waitSSEJSON(t, first, 2)
+	items, _ := memoryUpdate["memory_items"].([]any)
+	if memoryUpdate["type"] != "memory_status" || memoryUpdate["memory_status"] != "changed" || memoryUpdate["run_id"] != "run" || len(items) != 1 {
+		t.Fatalf("memory SSE=%v", memoryUpdate)
+	}
 	assertStreamingHeaders(t, first.header, "text/event-stream")
 	cancelFirst()
 	select {
@@ -1175,7 +1182,7 @@ func TestStudentSSEReconnectRestoresSnapshotAndDisablesProxyBuffering(t *testing
 	case <-time.After(2 * time.Second):
 		t.Fatal("disconnected student SSE did not close")
 	}
-	if got := app.studentHub.Count(); got != 0 {
+	if got := app.studentHub.Count() + app.studentMemoryHub.Count(); got != 0 {
 		t.Fatalf("disconnected SSE left %d subscribers", got)
 	}
 

@@ -462,7 +462,18 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		}
 		return intersectStrings(d.Tools, currentPolicy.AllowedTools), nil
 	}
-	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall}, emit)
+	onMemoryUpdate := func(update agent.MemoryUpdate) {
+		if update.Err != nil {
+			s.Logger.Warn("memory extraction update", "run_id", p.Session.RunID, "student_id", p.Session.StudentID, "status", update.Status, "error", update.Err)
+		}
+		items := make([]memoryEventItem, 0, len(update.Items))
+		for _, item := range update.Items {
+			items = append(items, memoryEventItem{ID: item.ID, Content: item.Content, Status: item.Status})
+		}
+		target := p.Session.RunID + "\x00" + p.Session.StudentID
+		s.studentMemoryHub.Publish(target, classroomEvent{Type: "memory_status", RunID: p.Session.RunID, MemoryStatus: update.Status, MemoryItems: items})
+	}
+	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
 	if err != nil {
 		code, msg := agentError(err)
 		if !emitted {
@@ -528,6 +539,8 @@ func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
 	id, ch := s.studentHub.Subscribe()
 	defer s.studentHub.Unsubscribe(id)
+	memoryID, memoryCh := s.studentMemoryHub.Subscribe(p.Session.RunID + "\x00" + p.Session.StudentID)
+	defer s.studentMemoryHub.Unsubscribe(memoryID)
 	run, err := s.Store.Run(r.Context(), p.Session.RunID)
 	if err != nil {
 		writeError(w, 401, "RUN_ENDED", "课堂场次已结束")
@@ -563,6 +576,12 @@ func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			sendSSE(w, "classroom", ev)
+			flusher.Flush()
+		case ev, open := <-memoryCh:
+			if !open {
+				return
+			}
+			sendSSE(w, "memory", ev)
 			flusher.Flush()
 		case <-tick.C:
 			sess, e := s.Store.Session(r.Context(), p.Session.TokenHash)

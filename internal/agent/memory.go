@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 	"unicode"
@@ -107,25 +108,44 @@ func (e *Engine) scheduleMemoryExtraction(req Request, answer string) {
 		ctx, cancel := context.WithTimeout(context.Background(), e.MemoryExtractTimeout)
 		defer cancel()
 		enabled, revision, err := e.Store.MemorySetting(ctx, req.RunID, req.StudentID)
-		if err != nil || !enabled {
+		if err != nil {
+			notifyMemoryUpdate(req, MemoryUpdate{Status: "failed", Err: err})
 			return
 		}
+		if !enabled {
+			return
+		}
+		notifyMemoryUpdate(req, MemoryUpdate{Status: "extracting"})
 		select {
 		case e.Semaphore <- struct{}{}:
 		case <-ctx.Done():
+			notifyMemoryUpdate(req, MemoryUpdate{Status: "failed", Err: ctx.Err()})
 			return
 		}
 		candidates, err := e.MemoryExtractor.Extract(ctx, req.Input, answer)
 		<-e.Semaphore
 		if err != nil {
+			notifyMemoryUpdate(req, MemoryUpdate{Status: "failed", Err: err})
 			return
 		}
 		stillEnabled, currentRevision, err := e.Store.MemorySetting(ctx, req.RunID, req.StudentID)
-		if err != nil || !stillEnabled || currentRevision != revision {
+		if err != nil {
+			notifyMemoryUpdate(req, MemoryUpdate{Status: "failed", Err: err})
+			return
+		}
+		policy, err := e.Store.RunPolicy(ctx, req.RunID)
+		if err != nil {
+			notifyMemoryUpdate(req, MemoryUpdate{Status: "failed", Err: err})
+			return
+		}
+		policyChanged := req.PolicyRevision > 0 && (policy.MemoryMode != req.MemoryMode || policy.Revision != req.PolicyRevision)
+		if !stillEnabled || currentRevision != revision || policyChanged {
+			notifyMemoryUpdate(req, MemoryUpdate{Status: "discarded"})
 			return
 		}
 		items, err := e.Store.Memories(ctx, req.RunID, req.StudentID, "")
 		if err != nil {
+			notifyMemoryUpdate(req, MemoryUpdate{Status: "failed", Err: err})
 			return
 		}
 		existing := make(map[string]bool, len(items))
@@ -134,6 +154,7 @@ func (e *Engine) scheduleMemoryExtraction(req Request, answer string) {
 			existing[strings.ToLower(strings.TrimSpace(item.Content))] = true
 			totalTokens += estimateTokens(item.Content)
 		}
+		created := make([]store.Memory, 0, len(candidates))
 		for _, content := range candidates {
 			content = strings.TrimSpace(content)
 			if content == "" || utf8.RuneCountInString(content) > e.MaxMemoryChars || existing[strings.ToLower(content)] {
@@ -141,21 +162,39 @@ func (e *Engine) scheduleMemoryExtraction(req Request, answer string) {
 			}
 			candidateTokens := estimateTokens(content)
 			if len(items) >= e.MaxMemoryItems || totalTokens+candidateTokens > e.MaxMemoryTokens {
-				return
+				break
 			}
 			status := "candidate"
 			if req.MemoryMode == store.MemoryModeAdaptive {
 				status = "confirmed"
 			}
 			memory := store.Memory{ID: newMemoryID(), RunID: req.RunID, StudentID: req.StudentID, Content: content, Status: status, SourceConversationID: req.ConversationID, SourceTurnID: req.TurnID}
-			if _, err := e.Store.AddMemoryIfSettings(ctx, memory, revision, req.PolicyRevision, req.MemoryMode); err != nil {
+			stored, err := e.Store.AddMemoryIfSettings(ctx, memory, revision, req.PolicyRevision, req.MemoryMode)
+			if err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					notifyMemoryUpdate(req, MemoryUpdate{Status: "discarded"})
+				} else {
+					notifyMemoryUpdate(req, MemoryUpdate{Status: "failed", Err: err})
+				}
 				return
 			}
-			items = append(items, memory)
+			items = append(items, stored)
+			created = append(created, stored)
 			existing[strings.ToLower(content)] = true
 			totalTokens += candidateTokens
 		}
+		if len(created) == 0 {
+			notifyMemoryUpdate(req, MemoryUpdate{Status: "no_change"})
+			return
+		}
+		notifyMemoryUpdate(req, MemoryUpdate{Status: "changed", Items: created})
 	}()
+}
+
+func notifyMemoryUpdate(req Request, update MemoryUpdate) {
+	if req.OnMemoryUpdate != nil {
+		req.OnMemoryUpdate(update)
+	}
 }
 
 func newMemoryID() string {

@@ -49,6 +49,12 @@ type MemoryReceipt struct {
 	Content string `json:"content"`
 }
 
+type MemoryUpdate struct {
+	Status string
+	Items  []store.Memory
+	Err    error
+}
+
 type Request struct {
 	RunID, StudentID, ConversationID, TurnID, Input string
 	Design                                          store.Design
@@ -56,6 +62,7 @@ type Request struct {
 	PolicyRevision                                  int64
 	BeforeModelCall                                 func(context.Context) error
 	ToolsForCall                                    func(context.Context) ([]string, error)
+	OnMemoryUpdate                                  func(MemoryUpdate)
 }
 
 type Engine struct {

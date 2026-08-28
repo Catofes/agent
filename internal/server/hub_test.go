@@ -43,3 +43,26 @@ func TestHubUnsubscribeReleasesSubscriber(t *testing.T) {
 		t.Fatal("subscriber channel remained open")
 	}
 }
+
+func TestTargetHubOnlyPublishesToMatchingSubscribers(t *testing.T) {
+	hub := NewTargetHub[string]()
+	firstID, first := hub.Subscribe("run-one\x00student")
+	defer hub.Unsubscribe(firstID)
+	secondID, second := hub.Subscribe("run-two\x00student")
+	defer hub.Unsubscribe(secondID)
+
+	hub.Publish("run-one\x00student", "memory changed")
+	select {
+	case got := <-first:
+		if got != "memory changed" {
+			t.Fatalf("message=%q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("matching subscriber did not receive message")
+	}
+	select {
+	case got := <-second:
+		t.Fatalf("non-matching subscriber received %q", got)
+	default:
+	}
+}

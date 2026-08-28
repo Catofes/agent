@@ -312,6 +312,24 @@ p { line-height: 1.65; }
 .reasoning { border: 1px solid #e6e7ed; border-left: 4px solid #9c96c4; border-radius: 11px; background: #f9f9fc; }
 .action { border: 1px solid #f4dfb9; border-left: 4px solid #e2a23d; border-radius: 11px; background: var(--warning-soft); }
 .notice { border: 1px solid #f4dfb9; background: var(--warning-soft); color: #8d5d18; }
+.memory-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 10px;
+  padding: 10px 13px;
+  border: 1px solid #dedafc;
+  border-radius: 11px;
+  background: #f7f5ff;
+  color: #51499a;
+  font-size: .86rem;
+  line-height: 1.5;
+}
+.memory-notice button { flex: 0 0 auto; min-height: 32px; padding: 5px 9px; }
+.memory-notice.success { border-color: #cdebdc; background: var(--success-soft); color: #14734f; }
+.memory-notice.review { border-color: #f4dfb9; background: var(--warning-soft); color: #8d5d18; }
+.memory-notice.warning { border-color: #f4dfb9; background: #fffaf0; color: #8d5d18; }
 .student-page #chatForm { flex-wrap: nowrap; padding-top: 12px; border-top: 1px solid var(--line); }
 .student-page #chatInput { min-height: 46px; border-radius: 13px; background: #fafafe; }
 

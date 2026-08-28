@@ -43,13 +43,21 @@ type principal struct {
 }
 
 type classroomEvent struct {
-	Type         string   `json:"type"`
-	Locked       bool     `json:"locked"`
-	RunID        string   `json:"run_id,omitempty"`
-	MemoryMode   string   `json:"memory_mode,omitempty"`
-	AllowedTools []string `json:"allowed_tools,omitempty"`
-	Revision     int64    `json:"revision,omitempty"`
-	Target       string   `json:"-"`
+	Type         string            `json:"type"`
+	Locked       bool              `json:"locked"`
+	RunID        string            `json:"run_id,omitempty"`
+	MemoryMode   string            `json:"memory_mode,omitempty"`
+	AllowedTools []string          `json:"allowed_tools,omitempty"`
+	Revision     int64             `json:"revision,omitempty"`
+	MemoryStatus string            `json:"memory_status,omitempty"`
+	MemoryItems  []memoryEventItem `json:"memory_items,omitempty"`
+	Target       string            `json:"-"`
+}
+
+type memoryEventItem struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
+	Status  string `json:"status"`
 }
 type screenState struct {
 	SpotlightID string          `json:"spotlight_id,omitempty"`
@@ -78,6 +86,7 @@ type Server struct {
 	Templates           fs.FS
 	Logger              *slog.Logger
 	studentHub          *Hub[classroomEvent]
+	studentMemoryHub    *TargetHub[classroomEvent]
 	wallHub             *Hub[struct{}]
 	screenHub           *Hub[screenState]
 	screenMu            sync.RWMutex
@@ -93,7 +102,7 @@ type Server struct {
 
 func New(cfg config.Config, st *store.Store, engine *agent.Engine, webFS, templates fs.FS, logger *slog.Logger) *Server {
 	shutdown, cancel := context.WithCancel(context.Background())
-	return &Server{Config: cfg, Store: st, Agent: engine, WebFS: webFS, Templates: templates, Logger: logger, studentHub: NewHub[classroomEvent](), wallHub: NewHub[struct{}](), screenHub: NewHub[screenState](), screen: screenState{Empty: true}, spotlightAckTimeout: time.Second, shutdown: shutdown, cancel: cancel}
+	return &Server{Config: cfg, Store: st, Agent: engine, WebFS: webFS, Templates: templates, Logger: logger, studentHub: NewHub[classroomEvent](), studentMemoryHub: NewTargetHub[classroomEvent](), wallHub: NewHub[struct{}](), screenHub: NewHub[screenState](), screen: screenState{Empty: true}, spotlightAckTimeout: time.Second, shutdown: shutdown, cancel: cancel}
 }
 
 // Shutdown cancels server-owned long-running work before http.Server.Shutdown

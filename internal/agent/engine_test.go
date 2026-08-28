@@ -461,6 +461,7 @@ func TestMemoryExtractionCreatesCandidateAndFailureDoesNotFailChat(t *testing.T)
 		engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
 		engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 		done := make(chan struct{})
+		updates := make(chan MemoryUpdate, 4)
 		engine.MemoryExtractor = extractorFunc(func(_ context.Context, user, answer string) ([]string, error) {
 			defer close(done)
 			if user != "我喜欢蓝色" || answer != "知道了" {
@@ -468,7 +469,7 @@ func TestMemoryExtractionCreatesCandidateAndFailureDoesNotFailChat(t *testing.T)
 			}
 			return []string{"我喜欢蓝色"}, nil
 		})
-		if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "我喜欢蓝色", Design: store.Design{MaxTurns: 1}}, func(Event) error { return nil }); err != nil {
+		if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "我喜欢蓝色", Design: store.Design{MaxTurns: 1}, OnMemoryUpdate: func(update MemoryUpdate) { updates <- update }}, func(Event) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 		select {
@@ -492,6 +493,19 @@ func TestMemoryExtractionCreatesCandidateAndFailureDoesNotFailChat(t *testing.T)
 				t.Fatal("candidate was not stored")
 			}
 			time.Sleep(time.Millisecond)
+		}
+		for _, want := range []string{"extracting", "changed"} {
+			select {
+			case update := <-updates:
+				if update.Status != want {
+					t.Fatalf("memory update status=%q want=%q", update.Status, want)
+				}
+				if want == "changed" && (len(update.Items) != 1 || update.Items[0].Content != "我喜欢蓝色") {
+					t.Fatalf("changed update=%#v", update)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("missing memory update %q", want)
+			}
 		}
 	})
 
@@ -551,17 +565,31 @@ func TestMemoryExtractionCreatesCandidateAndFailureDoesNotFailChat(t *testing.T)
 		engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
 		engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 		failed := make(chan struct{})
+		updates := make(chan MemoryUpdate, 4)
 		engine.MemoryExtractor = extractorFunc(func(context.Context, string, string) ([]string, error) {
 			close(failed)
 			return nil, errors.New("extract failed")
 		})
-		if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "普通消息", Design: store.Design{MaxTurns: 1}}, func(Event) error { return nil }); err != nil {
+		if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "普通消息", Design: store.Design{MaxTurns: 1}, OnMemoryUpdate: func(update MemoryUpdate) { updates <- update }}, func(Event) error { return nil }); err != nil {
 			t.Fatalf("main chat was blocked by extraction: %v", err)
 		}
 		select {
 		case <-failed:
 		case <-time.After(time.Second):
 			t.Fatal("extractor failure path was not exercised")
+		}
+		for _, want := range []string{"extracting", "failed"} {
+			select {
+			case update := <-updates:
+				if update.Status != want {
+					t.Fatalf("memory update status=%q want=%q", update.Status, want)
+				}
+				if want == "failed" && update.Err == nil {
+					t.Fatal("failed update omitted internal error")
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("missing memory update %q", want)
+			}
 		}
 	})
 
@@ -575,13 +603,14 @@ func TestMemoryExtractionCreatesCandidateAndFailureDoesNotFailChat(t *testing.T)
 		engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
 		engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 		started, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		updates := make(chan MemoryUpdate, 4)
 		engine.MemoryExtractor = extractorFunc(func(context.Context, string, string) ([]string, error) {
 			close(started)
 			<-release
 			defer close(finished)
 			return []string{"不应复活的候选"}, nil
 		})
-		if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "请记住", Design: store.Design{MaxTurns: 1}}, func(Event) error { return nil }); err != nil {
+		if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "请记住", Design: store.Design{MaxTurns: 1}, OnMemoryUpdate: func(update MemoryUpdate) { updates <- update }}, func(Event) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 		select {
@@ -602,6 +631,16 @@ func TestMemoryExtractionCreatesCandidateAndFailureDoesNotFailChat(t *testing.T)
 		items, err := st.Memories(ctx, run.ID, "2101", "")
 		if err != nil || len(items) != 0 {
 			t.Fatalf("deleted memory was resurrected: %#v err=%v", items, err)
+		}
+		for _, want := range []string{"extracting", "discarded"} {
+			select {
+			case update := <-updates:
+				if update.Status != want {
+					t.Fatalf("memory update status=%q want=%q", update.Status, want)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("missing memory update %q", want)
+			}
 		}
 	})
 }

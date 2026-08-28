@@ -399,6 +399,7 @@
             设计已更新。继续发送会采用最新设计并保留本对话历史；想单独测试效果，建议新建对话。
           </div>
           <div id="messages" class="messages"></div>
+          <div id="memoryNotice" class="memory-notice hidden" role="status" aria-live="polite"></div>
           <form id="chatForm" class="row">
             <input
               id="chatInput"
@@ -429,7 +430,8 @@
         controller = null,
         deltaQueue = [],
         deltaFrame = 0,
-        queuedDeltaChars = 0;
+        queuedDeltaChars = 0,
+        memoryNoticeTimer = 0;
       document.querySelectorAll("[data-design-tab]").forEach((tab) => {
         tab.onclick = () => {
           const panelID = tab.dataset.designTab;
@@ -999,8 +1001,6 @@
           flushDeltas(true);
           $("chatStatus").textContent = "回答完成";
           await refreshConversations();
-          setTimeout(() => loadMemory().catch(() => {}), 1500);
-          setTimeout(() => loadMemory().catch(() => {}), 4500);
         } catch (err) {
           flushDeltas(true);
           if (reasoning)
@@ -1018,6 +1018,31 @@
         }
       };
       $("stop").onclick = () => controller?.abort();
+      function showMemoryNotice(message, kind = "info", timeout = 0, action = null) {
+        clearTimeout(memoryNoticeTimer);
+        const notice = $("memoryNotice");
+        notice.replaceChildren(document.createTextNode(message));
+        notice.className = `memory-notice ${kind}`;
+        if (!message) notice.classList.add("hidden");
+        if (action) {
+          const button = text("button", action.label, "secondary small");
+          button.type = "button";
+          button.onclick = async () => {
+            button.disabled = true;
+            try {
+              await action.run();
+            } catch (e) {
+              showMemoryNotice("撤销失败：" + e.message, "warning", 6000);
+            }
+          };
+          notice.append(button);
+        }
+        if (timeout > 0) {
+          memoryNoticeTimer = setTimeout(() => {
+            notice.classList.add("hidden");
+          }, timeout);
+        }
+      }
       function applyLock() {
         [
           "persona",
@@ -1058,6 +1083,53 @@
             if (memoryState) memoryState.mode = d.memory_mode;
           }
           applyLock();
+        });
+        es.addEventListener("memory", async (e) => {
+          const update = JSON.parse(e.data),
+            status = update.memory_status,
+            items = update.memory_items || [];
+          if (status === "extracting") {
+            showMemoryNotice("正在从这轮对话中整理可能长期有用的信息…");
+            return;
+          }
+          if (status === "changed") {
+            await loadMemory().catch(() => {});
+            if (capabilities?.memory_mode === "adaptive") {
+              const first = items[0],
+                summary = first?.content || "新的长期信息";
+              showMemoryNotice(
+                `已了解：${summary}${items.length > 1 ? `（另有 ${items.length - 1} 条）` : ""}。可在 Memory 中编辑或删除。`,
+                "success",
+                9000,
+                first
+                  ? {
+                      label: "撤销这条",
+                      run: async () => {
+                        await api("/api/memory/" + encodeURIComponent(first.id), {
+                          method: "DELETE",
+                        });
+                        await loadMemory();
+                        showMemoryNotice("已撤销这条 Memory。", "info", 4000);
+                      },
+                    }
+                  : null,
+              );
+            } else {
+              showMemoryNotice(
+                items.length
+                  ? `发现 ${items.length} 条可能有用的信息，已放入 Memory 等你确认。`
+                  : "发现了可能有用的信息，已放入 Memory 等你确认。",
+                "review",
+                9000,
+              );
+            }
+            return;
+          }
+          if (status === "failed") {
+            showMemoryNotice("Memory 暂未更新，不影响本次回答。", "warning", 6000);
+            return;
+          }
+          showMemoryNotice("", "info");
         });
         es.addEventListener("session_invalidated", () => {
           es.close();

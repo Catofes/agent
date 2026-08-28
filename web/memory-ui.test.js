@@ -18,6 +18,12 @@ test("student workbench exposes the complete Memory confirmation workflow", () =
   assert.match(html, /只有你确认的条目/);
   assert.match(html, /新建课堂场次不会带入/);
   assert.match(html, /contextReceipt\(ev\)/);
+  assert.match(html, /id=["']memoryNotice["']/);
+  assert.match(html, /addEventListener\(["']memory["']/);
+  assert.match(html, /memory_status/);
+  assert.match(html, /撤销这条/);
+  assert.match(html, /encodeURIComponent\(first\.id\)/);
+  assert.doesNotMatch(html, /setTimeout\(\(\) => loadMemory/);
 });
 
 test("Memory and context receipts use text-only DOM rendering", () => {
