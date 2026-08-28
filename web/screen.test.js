@@ -22,6 +22,9 @@ function screenRuntime({ animationFrames = true } = {}) {
     classList: {
       toggle() {},
     },
+    append(...children) {
+      this.children.push(...children);
+    },
     replaceChildren(...children) {
       this.children = children;
     },
@@ -56,6 +59,11 @@ function screenRuntime({ animationFrames = true } = {}) {
     requestAnimationFrame: callback => {
       if (animationFrames) callback();
     },
+    MarkdownRenderer: {
+      render(element, value) {
+        element.textContent = value;
+      },
+    },
   };
   vm.runInNewContext(match[1], context, { filename: 'screen.html' });
   return { elements, requests, source };
@@ -87,7 +95,8 @@ test('screen SSE event renders DOM and acknowledges the rendered spotlight', asy
   assert.equal(runtime.elements.get('persona').textContent, '耐心的数学老师');
   assert.equal(runtime.elements.get('messages').children.length, 3);
   assert.equal(runtime.elements.get('messages').children[0].textContent, '数学讨论');
-  assert.equal(runtime.elements.get('messages').children[2].textContent, 'Agent：391');
+  assert.equal(runtime.elements.get('messages').children[2].children[0].textContent, 'Agent');
+  assert.equal(runtime.elements.get('messages').children[2].children[1].textContent, '391');
   assert.match(runtime.elements.get('messages').children[2].className, /current/);
   assert.equal(runtime.requests.length, 1);
   assert.equal(runtime.requests[0].url, '/api/screen/ack');

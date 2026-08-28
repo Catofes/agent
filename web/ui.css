@@ -276,9 +276,11 @@ p { line-height: 1.65; }
   flex: 1;
   min-height: 190px;
   padding: 14px 5px 18px;
+  align-content: start;
+  grid-auto-rows: max-content;
   scrollbar-color: #c9c6dd transparent;
 }
-.bubble { max-width: 88%; padding: 12px 15px; border-radius: 16px; line-height: 1.65; }
+.bubble { align-self: start; height: auto; max-width: 88%; padding: 12px 15px; border-radius: 16px; line-height: 1.65; }
 .bubble.user, .user.bubble {
   justify-self: end;
   margin-left: 12%;
@@ -299,6 +301,51 @@ p { line-height: 1.65; }
 .notice { border: 1px solid #f4dfb9; background: var(--warning-soft); color: #8d5d18; }
 .student-page #chatForm { flex-wrap: nowrap; padding-top: 12px; border-top: 1px solid var(--line); }
 .student-page #chatInput { min-height: 46px; border-radius: 13px; background: #fafafe; }
+
+.markdown-body { white-space: normal; line-height: 1.65; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body p { margin: .35em 0 .7em; line-height: inherit; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  margin: .85em 0 .4em;
+  color: inherit;
+  line-height: 1.3;
+  letter-spacing: -.015em;
+}
+.markdown-body h1 { font-size: 1.45em; }
+.markdown-body h2 { font-size: 1.28em; }
+.markdown-body h3 { font-size: 1.13em; }
+.markdown-body ul, .markdown-body ol { margin: .45em 0 .75em; padding-left: 1.5em; }
+.markdown-body li { margin: .22em 0; }
+.markdown-body blockquote {
+  margin: .65em 0;
+  padding: .25em 0 .25em .85em;
+  border-left: 3px solid #aca5ed;
+  color: var(--muted);
+}
+.markdown-body code {
+  padding: .14em .38em;
+  border-radius: 5px;
+  background: rgba(39, 34, 76, .09);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: .88em;
+}
+.markdown-body pre {
+  max-width: 100%;
+  margin: .7em 0;
+  padding: 13px 14px;
+  overflow: auto;
+  border: 1px solid #e2e3e9;
+  border-radius: 10px;
+  background: #232136;
+  color: #f3f1ff;
+  white-space: pre;
+}
+.markdown-body pre code { padding: 0; background: transparent; color: inherit; font-size: .84em; }
+.markdown-body a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.markdown-body hr { margin: .9em 0; border: 0; border-top: 1px solid var(--line); }
+.message-role { display: block; margin-bottom: .35em; color: inherit; font-size: .78em; letter-spacing: .05em; opacity: .68; }
 
 /* Teacher dashboard */
 .teacher-page .shell { max-width: 1320px; }
@@ -383,6 +430,11 @@ p { line-height: 1.65; }
 }
 .screen-page .conversation-heading:first-child { margin-top: .3rem; }
 .screen-page .msg.current { border-color: rgba(255, 183, 111, .52); box-shadow: inset 4px 0 #ffb76f; }
+.screen-page .markdown-body { color: inherit; font-size: inherit; }
+.screen-page .markdown-body blockquote { color: #c9c4ea; }
+.screen-page .markdown-body code { background: rgba(255,255,255,.11); }
+.screen-page .markdown-body pre { border-color: rgba(255,255,255,.1); background: rgba(8,7,20,.55); }
+.screen-page .markdown-body a { color: #bdb5ff; }
 .screen-page .empty { position: relative; z-index: 1; color: #f4f1ff; font-weight: 700; letter-spacing: -.03em; }
 .screen-page .empty::before { content: "✦"; margin-right: .5em; color: #8c7ff6; }
 

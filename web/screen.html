@@ -108,6 +108,7 @@
         </section>
       </div>
     </main>
+    <script src="/assets/markdown.js"></script>
     <script>
       const $ = (id) => document.getElementById(id),
         es = new EventSource("/api/screen/events");
@@ -159,14 +160,19 @@
             const x = document.createElement("div");
             x.className =
               "msg " + m.role + (m.current ? " current" : "");
-            x.textContent =
-              (m.role === "user"
+            const role = document.createElement("strong"),
+              body = document.createElement("div"),
+              content = m.content || "发起工具调用";
+            role.className = "message-role";
+            role.textContent =
+              m.role === "user"
                 ? "学生"
                 : m.role === "assistant"
                   ? "Agent"
-                  : "工具") +
-              "：" +
-              (m.content || "发起工具调用");
+                  : "工具";
+            if (m.role === "assistant") MarkdownRenderer.render(body, content);
+            else body.textContent = content;
+            x.append(role, body);
             history.push(x);
           });
           $("messages").replaceChildren(...history);

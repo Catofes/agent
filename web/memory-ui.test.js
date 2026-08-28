@@ -33,3 +33,11 @@ test("conversations are exposed as browser-style tabs", () => {
   assert.match(html, /aria-selected/);
   assert.doesNotMatch(html, /id=["']conversations["']/);
 });
+
+test("agent step control defaults to 30 and allows up to 60", () => {
+  assert.match(
+    html,
+    /id=["']maxTurns["'][^>]*min=["']1["'][^>]*max=["']60["'][^>]*value=["']30["']/,
+  );
+  assert.match(html, /id=["']turnValue["']>30</);
+});

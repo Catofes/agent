@@ -172,6 +172,7 @@
         </section>
       </section>
     </main>
+    <script src="/assets/markdown.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let wallState = null,
@@ -327,10 +328,23 @@
           `人设\n${d.design.persona || "（未填写）"}\n\n技能手册\n${d.design.skill_md || "（未填写）"}\n\n装备：${d.design.tools.join("、") || "无"}\n最大步数：${d.design.max_turns}`;
         $("messages").replaceChildren(
           ...d.messages.map((m) => {
-            const e = t(
-              `${m.role === "user" ? "学生" : m.role === "assistant" ? "Agent" : "工具"}：${m.content || m.tool_calls}`,
-            );
+            const e = document.createElement("div"),
+              role = t(
+                m.role === "user"
+                  ? "学生"
+                  : m.role === "assistant"
+                    ? "Agent"
+                    : "工具",
+                "strong",
+              ),
+              content = document.createElement("div"),
+              value = m.content || m.tool_calls;
             e.className = "msg " + m.role;
+            role.className = "message-role";
+            if (m.role === "assistant" && !m.tool_calls)
+              MarkdownRenderer.render(content, value);
+            else content.textContent = value;
+            e.append(role, content);
             return e;
           }),
         );
