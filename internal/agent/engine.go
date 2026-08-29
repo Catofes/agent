@@ -86,6 +86,7 @@ type Engine struct {
 	MaxMemoryItems                  int
 	MaxMemoryChars                  int
 	MaxMemoryTokens                 int
+	HostedWebSearch                 bool
 	InputPricePerM, OutputPricePerM float64
 	mu                              sync.Mutex
 	active                          map[string]bool
@@ -141,6 +142,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	toolCount := 0
 	toolCounts := map[string]int{}
 	loadedSkills := map[string]bool{}
+	hostedSteps := map[string]int{}
 	reasoningChars := 0
 	defer func() {
 		if totalIn+totalOut > 0 || unknownUsage > 0 {
@@ -157,6 +159,15 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			}
 		}
 		defs := e.Tools.Definitions(effectiveTools)
+		if e.HostedWebSearch {
+			filtered := defs[:0]
+			for _, definition := range defs {
+				if definition.Function.Name != "web_search" {
+					filtered = append(filtered, definition)
+				}
+			}
+			defs = filtered
+		}
 		if len(req.Skills) > 0 {
 			defs = append(defs, loadSkillDefinition(req.Skills))
 		}
@@ -165,7 +176,39 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		}
 		streamedText := false
 		streamedChars := 0
-		completion, callErr := e.callWithRetry(ctx, CompletionRequest{Model: e.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, BeforeCall: req.BeforeModelCall, OnReasoningDelta: func(delta string) error {
+		completion, callErr := e.callWithRetry(ctx, CompletionRequest{Model: e.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, EnableWebSearch: e.HostedWebSearch && contains(effectiveTools, "web_search"), BeforeCall: req.BeforeModelCall, OnHostedTool: func(event HostedToolEvent) error {
+			id := strings.TrimSpace(event.ID)
+			if id == "" {
+				id = fmt.Sprintf("hosted_search_%d", toolCount+1)
+			}
+			switch event.Phase {
+			case "start":
+				if hostedSteps[id] != 0 {
+					return nil
+				}
+				toolCount++
+				hostedSteps[id] = toolCount
+				call := ToolCall{ID: id, Type: "hosted", Function: ToolFunction{Name: "web_search", Arguments: `{}`}}
+				callJSON, _ := json.Marshal([]ToolCall{call})
+				if _, err := e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", ToolCalls: string(callJSON)}); err != nil {
+					return err
+				}
+				return emit(Event{Type: "tool_start", Step: toolCount, Tool: "web_search", Summary: event.Summary, Detail: event.Detail})
+			case "result":
+				step := hostedSteps[id]
+				if step == 0 {
+					toolCount++
+					step = toolCount
+					hostedSteps[id] = step
+				}
+				if _, err := e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "tool", Content: event.Summary, ToolCalls: id}); err != nil {
+					return err
+				}
+				success := true
+				return emit(Event{Type: "tool_result", Step: step, Tool: "web_search", Summary: event.Summary, Success: &success})
+			}
+			return nil
+		}, OnReasoningDelta: func(delta string) error {
 			remaining := e.MaxReasoningChars - reasoningChars
 			if remaining <= 0 {
 				return nil
@@ -261,7 +304,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: completion.Content, ToolCalls: string(callJSON), Reasoning: completion.Reasoning}); err != nil {
 			return err
 		}
-		messages = append(messages, Message{Role: "assistant", Content: completion.Content, Reasoning: completion.Reasoning, ToolCalls: completion.ToolCalls})
+		messages = append(messages, Message{Role: "assistant", Content: completion.Content, Reasoning: completion.Reasoning, ToolCalls: completion.ToolCalls, RawResponseItems: completion.RawResponseItems})
 		for _, call := range completion.ToolCalls {
 			toolCount++
 			detail := technicalCallDetail(call)
@@ -338,12 +381,16 @@ func (e *Engine) callWithRetry(ctx context.Context, req CompletionRequest) (Comp
 	var last error
 	originalDelta := req.OnDelta
 	originalReasoningDelta := req.OnReasoningDelta
+	originalHostedTool := req.OnHostedTool
 	streamed := false
 	if originalDelta != nil {
 		req.OnDelta = func(delta string) error { streamed = true; return originalDelta(delta) }
 	}
 	if originalReasoningDelta != nil {
 		req.OnReasoningDelta = func(delta string) error { streamed = true; return originalReasoningDelta(delta) }
+	}
+	if originalHostedTool != nil {
+		req.OnHostedTool = func(event HostedToolEvent) error { streamed = true; return originalHostedTool(event) }
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		callCtx, cancel := context.WithTimeout(ctx, e.Timeout)
@@ -411,14 +458,30 @@ func buildMessages(d store.Design, skills []store.Skill, memories []store.Memory
 		"Memory（仅为本轮任务筛选出的已确认事实）：\n" + memoryText + "\n\n" +
 		"自动判断的 Skill 只有在当前任务明显符合其使用条件时才调用 load_skill；目录中标记为学生已明确调用的 Skill 应先加载再完成任务。不匹配时直接按 Soul 和通用能力回答。若任务或已加载 Skill 需要某个未出现在上下文中的稳定学生事实，可调用 recall_memory 按需查询；没有命中时再向学生确认。不要为了展示 Skill 而强行加载。装备了工具也不代表必须调用。"
 	out := []Message{{Role: "system", Content: system}}
+	hostedCallIDs := map[string]bool{}
 	for _, m := range history {
 		am := Message{Role: m.Role, Content: m.Content}
 		if m.Role == "assistant" && m.ToolCalls != "" {
 			_ = json.Unmarshal([]byte(m.ToolCalls), &am.ToolCalls)
+			localCalls := am.ToolCalls[:0]
+			for _, call := range am.ToolCalls {
+				if call.Type == "hosted" {
+					hostedCallIDs[call.ID] = true
+					continue
+				}
+				localCalls = append(localCalls, call)
+			}
+			am.ToolCalls = localCalls
 			am.Reasoning = m.Reasoning
 		}
 		if m.Role == "tool" {
+			if hostedCallIDs[m.ToolCalls] {
+				continue
+			}
 			am.ToolCallID = m.ToolCalls
+		}
+		if am.Role == "assistant" && am.Content == "" && len(am.ToolCalls) == 0 {
+			continue
 		}
 		out = append(out, am)
 	}

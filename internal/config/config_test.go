@@ -56,6 +56,31 @@ func TestValidateRejectsUnsafeLimits(t *testing.T) {
 	}
 }
 
+func TestValidateWebSearchProvider(t *testing.T) {
+	t.Run("deepseek uses model key", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.WebSearchProvider = "deepseek"
+		if err := cfg.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("zhipu requires search key", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.WebSearchProvider = "zhipu"
+		cfg.ZhipuSearchEngine = "search_std"
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ZHIPU_SEARCH_API_KEY") {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("rejects unknown provider", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.WebSearchProvider = "brave"
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "WEB_SEARCH_PROVIDER") {
+			t.Fatalf("got %v", err)
+		}
+	})
+}
+
 func validConfig() Config {
 	return Config{
 		AdminPassword:        "teacher-secret",

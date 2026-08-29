@@ -17,7 +17,9 @@ type Config struct {
 	DeepSeekBaseURL      string
 	DeepSeekModel        string
 	DeepSeekAPIKey       string
-	BraveSearchAPIKey    string
+	WebSearchProvider    string
+	ZhipuSearchAPIKey    string
+	ZhipuSearchEngine    string
 	AdminPassword        string
 	AnonymousHMACKey     string
 	CookieSecure         bool
@@ -53,7 +55,9 @@ func Load(version string) (Config, error) {
 	flag.StringVar(&c.DeepSeekBaseURL, "deepseek-base-url", env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), "DeepSeek API base URL")
 	flag.StringVar(&c.DeepSeekModel, "deepseek-model", env("DEEPSEEK_MODEL", "deepseek-v4-flash"), "DeepSeek model name")
 	flag.StringVar(&c.DeepSeekAPIKey, "deepseek-api-key", os.Getenv("DEEPSEEK_API_KEY"), "DeepSeek API key")
-	flag.StringVar(&c.BraveSearchAPIKey, "brave-search-api-key", os.Getenv("BRAVE_SEARCH_API_KEY"), "optional Brave Search API key")
+	flag.StringVar(&c.WebSearchProvider, "web-search-provider", env("WEB_SEARCH_PROVIDER", "disabled"), "web search provider: disabled, zhipu, or deepseek")
+	flag.StringVar(&c.ZhipuSearchAPIKey, "zhipu-search-api-key", os.Getenv("ZHIPU_SEARCH_API_KEY"), "Zhipu Web Search API key")
+	flag.StringVar(&c.ZhipuSearchEngine, "zhipu-search-engine", env("ZHIPU_SEARCH_ENGINE", "search_std"), "Zhipu search engine: search_std, search_pro, search_pro_sogou, or search_pro_quark")
 	flag.StringVar(&c.AdminPassword, "admin-password", os.Getenv("ADMIN_PASSWORD"), "teacher password")
 	flag.StringVar(&c.AnonymousHMACKey, "anonymous-hmac-key", os.Getenv("ANONYMOUS_HMAC_KEY"), "HMAC key for anonymous provider IDs")
 	flag.BoolVar(&c.CookieSecure, "cookie-secure", envBool("COOKIE_SECURE", false), "mark cookies Secure")
@@ -99,6 +103,17 @@ func (c Config) Validate() error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required configuration: %s", strings.Join(missing, ", "))
+	}
+	provider := strings.ToLower(strings.TrimSpace(c.WebSearchProvider))
+	if provider != "" && provider != "disabled" && provider != "zhipu" && provider != "deepseek" {
+		return errors.New("WEB_SEARCH_PROVIDER must be disabled, zhipu, or deepseek")
+	}
+	if provider == "zhipu" && strings.TrimSpace(c.ZhipuSearchAPIKey) == "" {
+		return errors.New("ZHIPU_SEARCH_API_KEY is required when WEB_SEARCH_PROVIDER=zhipu")
+	}
+	engines := map[string]bool{"search_std": true, "search_pro": true, "search_pro_sogou": true, "search_pro_quark": true}
+	if engine := strings.TrimSpace(c.ZhipuSearchEngine); engine != "" && !engines[engine] {
+		return errors.New("ZHIPU_SEARCH_ENGINE must be search_std, search_pro, search_pro_sogou, or search_pro_quark")
 	}
 	if c.LLMConcurrency < 1 || c.StudentTokenBudget < 1 || c.MaxToolCalls < 1 {
 		return errors.New("concurrency, token budget, and max tool calls must be positive")

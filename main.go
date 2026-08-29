@@ -52,13 +52,18 @@ func main() {
 		logger.Error("import students", "error", err, "path", cfg.StudentsCSV)
 		os.Exit(1)
 	}
+	searchProvider := strings.ToLower(strings.TrimSpace(cfg.WebSearchProvider))
 	toolItems := []tools.Tool{tools.Calculator{}, tools.NewWebFetch()}
-	if strings.TrimSpace(cfg.BraveSearchAPIKey) != "" {
-		toolItems = append(toolItems, tools.NewBraveSearch(cfg.BraveSearchAPIKey))
+	switch searchProvider {
+	case "zhipu":
+		toolItems = append(toolItems, tools.NewZhipuSearch(cfg.ZhipuSearchAPIKey, cfg.ZhipuSearchEngine))
+	case "deepseek":
+		toolItems = append(toolItems, tools.HostedWebSearch{})
 	}
 	registry := tools.NewRegistry(toolItems...)
-	client := &agent.DeepSeekClient{BaseURL: cfg.DeepSeekBaseURL, APIKey: cfg.DeepSeekAPIKey, HTTP: &http.Client{Transport: &http.Transport{MaxIdleConns: 100, MaxIdleConnsPerHost: 50, IdleConnTimeout: 90 * time.Second}}}
+	client := &agent.DeepSeekClient{BaseURL: cfg.DeepSeekBaseURL, APIKey: cfg.DeepSeekAPIKey, UseResponses: searchProvider == "deepseek", HTTP: &http.Client{Transport: &http.Transport{MaxIdleConns: 100, MaxIdleConnsPerHost: 50, IdleConnTimeout: 90 * time.Second}}}
 	engine := agent.NewEngine(st, client, registry, cfg.DeepSeekModel, cfg.AnonymousHMACKey, cfg.LLMTimeout, cfg.LLMConcurrency)
+	engine.HostedWebSearch = searchProvider == "deepseek"
 	engine.TokenBudget = cfg.StudentTokenBudget
 	engine.MaxToolCalls = cfg.MaxToolCalls
 	engine.MaxToolCallsByName = map[string]int{"web_search": 2, "web_fetch": 2, "recall_memory": 2}

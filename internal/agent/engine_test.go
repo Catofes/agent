@@ -28,6 +28,12 @@ type timeoutClient struct {
 
 type extractorFunc func(context.Context, string, string) ([]string, error)
 
+type completionClientFunc func(context.Context, CompletionRequest) (Completion, error)
+
+func (f completionClientFunc) Complete(ctx context.Context, req CompletionRequest) (Completion, error) {
+	return f(ctx, req)
+}
+
 func (f extractorFunc) Extract(ctx context.Context, user, assistant string) ([]string, error) {
 	return f(ctx, user, assistant)
 }
@@ -136,6 +142,80 @@ func TestEngineToolLoop(t *testing.T) {
 	u, err := st.Usage(ctx, run.ID, "2101")
 	if err != nil || u.TokensIn != 25 || u.TokensOut != 6 {
 		t.Fatalf("usage=%#v err=%v", u, err)
+	}
+}
+
+func TestEngineHostedSearchUsesProviderAndPersistsVisibleTrace(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvPath := filepath.Join(dir, "students.csv")
+	_ = os.WriteFile(csvPath, []byte("id,name\n2101,张三\n"), 0o600)
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.CreateConversation(ctx, store.Conversation{ID: "conv", RunID: run.ID, StudentID: "2101"}); err != nil {
+		t.Fatal(err)
+	}
+	var captured CompletionRequest
+	client := completionClientFunc(func(_ context.Context, req CompletionRequest) (Completion, error) {
+		captured = req
+		if req.OnHostedTool != nil {
+			if err := req.OnHostedTool(HostedToolEvent{ID: "ws_1", Phase: "start", Name: "web_search", Summary: "正在搜索"}); err != nil {
+				return Completion{}, err
+			}
+			if err := req.OnHostedTool(HostedToolEvent{ID: "ws_1", Phase: "result", Name: "web_search", Summary: "搜索完成"}); err != nil {
+				return Completion{}, err
+			}
+		}
+		return Completion{Content: "杭州晴", Deltas: []string{"杭州晴"}, TokensIn: 10, TokensOut: 2}, nil
+	})
+	engine := NewEngine(st, client, tools.NewRegistry(tools.Calculator{}, tools.HostedWebSearch{}), "model", "secret", time.Second, 1)
+	engine.HostedWebSearch = true
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	var events []Event
+	err = engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "杭州天气", Design: store.Design{Tools: []string{"web_search"}, MaxTurns: 2}}, func(event Event) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !captured.EnableWebSearch || len(captured.Tools) != 0 {
+		t.Fatalf("hosted search request=%#v", captured)
+	}
+	msgs, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 4 || msgs[1].Role != "assistant" || msgs[2].Role != "tool" || msgs[3].Content != "杭州晴" {
+		t.Fatalf("messages=%#v", msgs)
+	}
+	rebuilt := buildMessages(store.Design{}, nil, nil, msgs)
+	for _, message := range rebuilt {
+		if message.Role == "tool" || len(message.ToolCalls) > 0 {
+			t.Fatalf("hosted trace leaked into model history: %#v", rebuilt)
+		}
+	}
+	var starts, results int
+	for _, event := range events {
+		if event.Type == "tool_start" {
+			starts++
+		}
+		if event.Type == "tool_result" {
+			results++
+		}
+	}
+	if starts != 1 || results != 1 {
+		t.Fatalf("events=%#v", events)
 	}
 }
 

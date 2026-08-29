@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"classroom-agent/internal/tools"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -99,5 +101,95 @@ func TestDecodeStreamAcrossJSONAndUTF8ChunkBoundaries(t *testing.T) {
 		if got.Reasoning != "先想" || got.Content != "中文" || len(got.Deltas) != 2 {
 			t.Fatalf("chunk size %d: %#v", max, got)
 		}
+	}
+}
+
+func TestDecodeResponseStreamWithHostedSearch(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"type":"response.web_search_call.in_progress","item_id":"ws_1"}`,
+		`data: {"type":"response.web_search_call.searching","item_id":"ws_1"}`,
+		`data: {"type":"response.web_search_call.completed","item_id":"ws_1"}`,
+		`data: {"type":"response.reasoning_text.delta","delta":"先查"}`,
+		`data: {"type":"response.output_text.delta","delta":"杭州晴"}`,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"reasoning","id":"rs_1","content":[{"type":"reasoning_text","text":"先查"}]},{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"杭州天气"}},{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"杭州晴"}]}],"usage":{"input_tokens":120,"output_tokens":8}}}`,
+		"",
+	}, "\n")
+	var text, reasoning string
+	var hosted []HostedToolEvent
+	got, err := decodeResponseStream(strings.NewReader(stream), func(delta string) error { text += delta; return nil }, func(delta string) error { reasoning += delta; return nil }, func(event HostedToolEvent) error { hosted = append(hosted, event); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != "杭州晴" || got.Reasoning != "先查" || text != got.Content || reasoning != got.Reasoning {
+		t.Fatalf("completion=%#v deltas=%q/%q", got, reasoning, text)
+	}
+	if len(hosted) != 2 || hosted[0].Phase != "start" || hosted[1].Phase != "result" {
+		t.Fatalf("hosted events=%#v", hosted)
+	}
+	if got.TokensIn != 120 || got.TokensOut != 8 || len(got.RawResponseItems) != 3 {
+		t.Fatalf("usage/raw output=%#v", got)
+	}
+}
+
+func TestDeepSeekResponsesRequestUsesBuiltinAndFlatFunctionTools(t *testing.T) {
+	var requestBody map[string]any
+	client := &DeepSeekClient{BaseURL: "https://api.deepseek.com", APIKey: "secret", UseResponses: true, HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &requestBody); err != nil {
+			t.Fatal(err)
+		}
+		stream := `data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"答案"}]}],"usage":{"input_tokens":3,"output_tokens":1}}}` + "\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil
+	})}}
+	definition := tools.Calculator{}.Definition()
+	got, err := client.Complete(context.Background(), CompletionRequest{Model: "deepseek-v4-flash", UserID: "anonymous", Messages: []Message{{Role: "system", Content: "规则"}, {Role: "user", Content: "问题"}}, Tools: []tools.Definition{definition}, EnableWebSearch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != "答案" || requestBody["user"] != "anonymous" {
+		t.Fatalf("completion/body=%#v %#v", got, requestBody)
+	}
+	toolList, _ := requestBody["tools"].([]any)
+	if len(toolList) != 2 {
+		t.Fatalf("tools=%#v", requestBody["tools"])
+	}
+	function, _ := toolList[0].(map[string]any)
+	if function["type"] != "function" || function["name"] != "calculator" || function["function"] != nil {
+		t.Fatalf("function tool was not flattened: %#v", function)
+	}
+	builtin, _ := toolList[1].(map[string]any)
+	if builtin["type"] != "web_search" {
+		t.Fatalf("builtin=%#v", builtin)
+	}
+}
+
+func TestDeepSeekHostedModeKeepsChatProtocolWhenSearchIsNotEnabled(t *testing.T) {
+	var path string
+	client := &DeepSeekClient{BaseURL: "https://api.deepseek.com", APIKey: "secret", UseResponses: true, HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		path = r.URL.Path
+		stream := "data: {\"choices\":[{\"delta\":{\"content\":\"答案\"}}]}\n\ndata: [DONE]\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil
+	})}}
+	if _, err := client.Complete(context.Background(), CompletionRequest{Model: "deepseek-v4-flash", Messages: []Message{{Role: "user", Content: "问题"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/chat/completions" {
+		t.Fatalf("path=%s", path)
+	}
+}
+
+func TestResponseInputReplaysRawProviderItemsBeforeToolOutput(t *testing.T) {
+	raw := json.RawMessage(`{"type":"function_call","call_id":"call_1","name":"calculator","arguments":"{\"expression\":\"2+2\"}"}`)
+	input := responseInput([]Message{{Role: "assistant", RawResponseItems: []json.RawMessage{raw}}, {Role: "tool", ToolCallID: "call_1", Content: "4"}})
+	if len(input) != 2 {
+		t.Fatalf("input=%#v", input)
+	}
+	first := input[0].(map[string]any)
+	second := input[1].(map[string]any)
+	if first["type"] != "function_call" || second["type"] != "function_call_output" || second["call_id"] != "call_1" {
+		t.Fatalf("input=%#v", input)
 	}
 }
