@@ -494,6 +494,89 @@ func TestEngineLoadsMatchedSkillBodyOnDemandAndUpdatesReceipt(t *testing.T) {
 	}
 }
 
+func TestLoadedSkillCanRecallScopedConfirmedMemoryAndUpdateReceipt(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddMemory(ctx, store.Memory{ID: "city", RunID: run.ID, StudentID: "2101", Content: "学生住在北京", Status: "confirmed"}); err != nil {
+		t.Fatal(err)
+	}
+	skill := store.Skill{ID: "weather", Name: "查询天气", Summary: "查询天气并给出建议", WhenToUse: "学生询问天气时", TriggerMode: store.SkillTriggerAuto, Content: "如果上下文没有城市，先调用 recall_memory 查询学生的居住城市。", Enabled: true}
+	loadCall := ToolCall{ID: "load_1", Type: "function", Function: ToolFunction{Name: "load_skill", Arguments: `{"skill_id":"weather"}`}}
+	recallCall := ToolCall{ID: "memory_1", Type: "function", Function: ToolFunction{Name: "recall_memory", Arguments: `{"query":"学生所在城市"}`}}
+	fake := &fakeClient{answers: []Completion{
+		{ToolCalls: []ToolCall{loadCall}, TokensIn: 2, TokensOut: 1},
+		{ToolCalls: []ToolCall{recallCall}, TokensIn: 2, TokensOut: 1},
+		{Content: "我来查询北京天气", Deltas: []string{"我来查询北京天气"}, TokensIn: 3, TokensOut: 2},
+	}}
+	engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	var events []Event
+	if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "skill_memory_turn", Input: "明天天气如何", Design: store.Design{Persona: "助手", MaxTurns: 3}, Skills: []store.Skill{skill}, MemoryMode: store.MemoryModeReviewRequired}, func(event Event) error {
+		events = append(events, event)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(fake.requests[0].Messages[0].Content, "学生住在北京") {
+		t.Fatalf("location should be recalled on demand, not preloaded: %s", fake.requests[0].Messages[0].Content)
+	}
+	foundDefinition := false
+	for _, definition := range fake.requests[1].Tools {
+		if definition.Function.Name == "recall_memory" {
+			foundDefinition = true
+		}
+	}
+	if !foundDefinition {
+		t.Fatalf("recall_memory was not exposed: %#v", fake.requests[1].Tools)
+	}
+	thirdMessages := fake.requests[2].Messages
+	if !strings.Contains(thirdMessages[len(thirdMessages)-1].Content, "学生住在北京") {
+		t.Fatalf("recalled Memory missing from tool result: %#v", thirdMessages)
+	}
+	foundRecall := false
+	for _, event := range events {
+		if event.Type == "memory_recalled" && len(event.Memories) == 1 && event.Memories[0].ID == "city" && len(event.Skills) == 1 {
+			foundRecall = true
+		}
+	}
+	if !foundRecall {
+		t.Fatalf("memory_recalled event missing: %#v", events)
+	}
+	messages, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+	if err != nil || !strings.Contains(messages[0].ContextReceipt, "学生住在北京") || !strings.Contains(messages[0].ContextReceipt, skill.Name) {
+		t.Fatalf("updated context receipt messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestRecallMemoryUsesConceptMatchAndRequiresMemoryToRemainEnabled(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddMemory(ctx, store.Memory{ID: "city", RunID: run.ID, StudentID: "2101", Content: "学生住在北京", Status: "confirmed"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddMemory(ctx, store.Memory{ID: "candidate", RunID: run.ID, StudentID: "2101", Content: "学生住在上海", Status: "candidate"}); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine(st, &fakeClient{}, tools.NewRegistry(), "model", "secret", time.Second, 1)
+	engine.MaxMemoryTokens = 1200
+	items, result, err := engine.recallMemory(ctx, Request{RunID: run.ID, StudentID: "2101"}, `{"query":"学生所在城市"}`)
+	if err != nil || len(items) != 1 || items[0].ID != "city" || !strings.Contains(result.ModelText, "北京") || strings.Contains(result.ModelText, "上海") {
+		t.Fatalf("items=%#v result=%#v err=%v", items, result, err)
+	}
+	if err := st.SetMemoryEnabled(ctx, run.ID, "2101", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := engine.recallMemory(ctx, Request{RunID: run.ID, StudentID: "2101"}, `{"query":"学生所在城市"}`); err == nil {
+		t.Fatal("recall succeeded after Memory was disabled")
+	}
+}
+
 func TestExplicitSkillIsOnlyExposedAfterAtMention(t *testing.T) {
 	skills := []store.Skill{
 		{ID: "auto", Name: "自动验算", Summary: "核验答案", WhenToUse: "计算任务", TriggerMode: store.SkillTriggerAuto, Content: "自动正文", Enabled: true},

@@ -71,6 +71,10 @@ func (e *Engine) relevantMemories(ctx context.Context, runID, studentID, input, 
 	if err != nil {
 		return nil, err
 	}
+	return selectRelevantMemories(items, input, 5, e.MaxMemoryTokens, true), nil
+}
+
+func selectRelevantMemories(items []store.Memory, input string, limit, tokenLimit int, includeCore bool) []store.Memory {
 	type scoredMemory struct {
 		item  store.Memory
 		score int
@@ -79,7 +83,7 @@ func (e *Engine) relevantMemories(ctx context.Context, runID, studentID, input, 
 	candidates := make([]scoredMemory, 0, len(items))
 	for _, item := range items {
 		score := sharedTermCount(wanted, memoryTerms(item.Content))
-		if isCoreMemory(item.Content) {
+		if includeCore && isCoreMemory(item.Content) {
 			score += 1000
 		}
 		if score > 0 {
@@ -87,21 +91,21 @@ func (e *Engine) relevantMemories(ctx context.Context, runID, studentID, input, 
 		}
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
-	selected := make([]store.Memory, 0, min(len(candidates), 5))
+	selected := make([]store.Memory, 0, min(len(candidates), limit))
 	tokens := 0
 	for _, candidate := range candidates {
 		item := candidate.item
 		itemTokens := estimateTokens(item.Content)
-		if e.MaxMemoryTokens > 0 && tokens+itemTokens > e.MaxMemoryTokens {
+		if tokenLimit > 0 && tokens+itemTokens > tokenLimit {
 			continue
 		}
 		selected = append(selected, item)
 		tokens += itemTokens
-		if len(selected) == 5 {
+		if len(selected) == limit {
 			break
 		}
 	}
-	return selected, nil
+	return selected
 }
 
 func (e *Engine) scheduleMemoryExtraction(req Request, answer string) {
@@ -230,6 +234,18 @@ func estimateTokens(value string) int {
 func memoryTerms(value string) map[string]bool {
 	value = strings.ToLower(value)
 	out := map[string]bool{}
+	concepts := map[string][]string{
+		"@location": {"城市", "地区", "所在地", "位置", "居住", "住在", "家住", "家在", "来自", "哪里", "哪儿"},
+		"@name":     {"称呼", "名字", "姓名", "昵称", "叫我", "怎么叫", "叫啥"},
+	}
+	for concept, markers := range concepts {
+		for _, marker := range markers {
+			if strings.Contains(value, marker) {
+				out[concept] = true
+				break
+			}
+		}
+	}
 	var word []rune
 	flush := func() {
 		if len(word) >= 2 {

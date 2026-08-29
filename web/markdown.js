@@ -3,6 +3,28 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.MarkdownRenderer = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  function matchListItem(line) {
+    let match = String(line || "").match(/^(\s*)[-+*]\s+(.+)$/);
+    if (match) return { type: "unordered-list", indent: match[1].length, text: match[2] };
+    match = String(line || "").match(/^(\s*)\d+[.)]\s+(.+)$/);
+    if (match) return { type: "ordered-list", indent: match[1].length, text: match[2] };
+    return null;
+  }
+
+  function isRule(line) {
+    return /^\s*(?:(?:-\s*){3,}|(?:_\s*){3,}|(?:\*\s*){3,})$/.test(line);
+  }
+
+  function startsBlock(line) {
+    return (
+      /^\s*```/.test(line) ||
+      /^(#{1,6})\s+/.test(line) ||
+      /^\s*>\s?/.test(line) ||
+      Boolean(matchListItem(line)) ||
+      isRule(line)
+    );
+  }
+
   function parseBlocks(source) {
     const lines = String(source || "").replace(/\r\n?/g, "\n").split("\n");
     const blocks = [];
@@ -30,6 +52,15 @@
         index++;
         continue;
       }
+      if (index + 1 < lines.length && /^\s*(?:=+|-+)\s*$/.test(lines[index + 1])) {
+        blocks.push({
+          type: "heading",
+          level: lines[index + 1].includes("=") ? 1 : 2,
+          text: line.trim(),
+        });
+        index += 2;
+        continue;
+      }
       if (/^\s*>\s?/.test(line)) {
         const content = [];
         while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
@@ -38,24 +69,45 @@
         blocks.push({ type: "quote", text: content.join("\n") });
         continue;
       }
-      const unordered = line.match(/^\s*[-+*]\s+(.+)$/);
-      const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-      if (unordered || ordered) {
-        const type = ordered ? "ordered-list" : "unordered-list";
-        const pattern = ordered ? /^\s*\d+[.)]\s+(.+)$/ : /^\s*[-+*]\s+(.+)$/;
-        const items = [];
-        while (index < lines.length) {
-          const item = lines[index].match(pattern);
-          if (!item) break;
-          items.push(item[1]);
-          index++;
-        }
-        blocks.push({ type, items });
-        continue;
-      }
-      if (/^\s*(?:---+|___+|\*\*\*+)\s*$/.test(line)) {
+      if (isRule(line)) {
         blocks.push({ type: "rule" });
         index++;
+        continue;
+      }
+      const firstItem = matchListItem(line);
+      if (firstItem) {
+        const type = firstItem.type;
+        const items = [];
+        let current = "";
+        while (index < lines.length) {
+          const item = matchListItem(lines[index]);
+          if (item && item.type === type) {
+            if (current) items.push(current);
+            current = item.text;
+            index++;
+            continue;
+          }
+          if (!lines[index].trim()) {
+            let next = index + 1;
+            while (next < lines.length && !lines[next].trim()) next++;
+            const nextItem = next < lines.length ? matchListItem(lines[next]) : null;
+            if (nextItem && nextItem.type === type) {
+              index = next;
+              continue;
+            }
+            break;
+          }
+          // Models commonly emit a long list item on several source lines. Keep
+          // lazy or indented continuation lines attached to the current item.
+          if (current && !startsBlock(lines[index])) {
+            current += "\n" + lines[index].trimStart();
+            index++;
+            continue;
+          }
+          break;
+        }
+        if (current) items.push(current);
+        blocks.push({ type, items });
         continue;
       }
       const content = [line];
@@ -63,10 +115,8 @@
       while (
         index < lines.length &&
         lines[index].trim() &&
-        !/^\s*```/.test(lines[index]) &&
-        !/^(#{1,6})\s+/.test(lines[index]) &&
-        !/^\s*>\s?/.test(lines[index]) &&
-        !/^\s*(?:[-+*]|\d+[.)])\s+/.test(lines[index])
+        !startsBlock(lines[index]) &&
+        !(index + 1 < lines.length && /^\s*(?:=+|-+)\s*$/.test(lines[index + 1]))
       ) {
         content.push(lines[index++]);
       }
@@ -117,7 +167,10 @@
   function appendTextWithBreaks(parent, value, doc) {
     String(value).split("\n").forEach((part, index) => {
       if (index) parent.append(doc.createElement("br"));
-      if (part) parent.append(doc.createTextNode(part));
+      // In chat mode every source newline is visible. Markdown hard-break
+      // markers are therefore redundant and should not leak into the message.
+      const visible = part.replace(/[ \t]+$/, "").replace(/\\$/, "");
+      if (visible) parent.append(doc.createTextNode(visible));
     });
   }
 

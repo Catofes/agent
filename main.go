@@ -61,7 +61,7 @@ func main() {
 	engine := agent.NewEngine(st, client, registry, cfg.DeepSeekModel, cfg.AnonymousHMACKey, cfg.LLMTimeout, cfg.LLMConcurrency)
 	engine.TokenBudget = cfg.StudentTokenBudget
 	engine.MaxToolCalls = cfg.MaxToolCalls
-	engine.MaxToolCallsByName = map[string]int{"web_search": 2, "web_fetch": 2}
+	engine.MaxToolCallsByName = map[string]int{"web_search": 2, "web_fetch": 2, "recall_memory": 2}
 	engine.MaxOutputChars = cfg.MaxOutputChars
 	engine.MaxReasoningChars = cfg.MaxReasoningChars
 	engine.MemoryExtractor = agent.LLMMemoryExtractor{Client: client, Model: cfg.DeepSeekModel}

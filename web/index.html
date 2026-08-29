@@ -507,6 +507,7 @@
           web_search: "网上搜索",
           web_fetch: "网页访问",
           load_skill: "加载 Skill",
+          recall_memory: "读取 Memory",
         }[name] || name;
       }
       function markDirty() {
@@ -1139,8 +1140,12 @@
           if (ev.type === "turn_start") {
             receiptEvent = ev;
             receiptBox = contextReceipt(ev);
-          } else if (ev.type === "skill_loaded") {
-            receiptEvent = { ...(receiptEvent || {}), skills: ev.skills || [ev.skill_name] };
+          } else if (ev.type === "skill_loaded" || ev.type === "memory_recalled") {
+            receiptEvent = {
+              ...(receiptEvent || {}),
+              skills: ev.skills || receiptEvent?.skills || (ev.skill_name ? [ev.skill_name] : []),
+              memories: ev.memories || receiptEvent?.memories || [],
+            };
             const value = [];
             if (receiptEvent.soul_used) value.push("Soul：已提供");
             if (receiptEvent.skills?.length) value.push("Skill：" + receiptEvent.skills.join("、"));

@@ -334,7 +334,7 @@ p { line-height: 1.65; }
 .student-page #chatForm { flex-wrap: nowrap; padding-top: 12px; border-top: 1px solid var(--line); }
 .student-page #chatInput { min-height: 46px; border-radius: 13px; background: #fafafe; }
 
-.markdown-body { white-space: normal; line-height: 1.65; }
+.markdown-body { white-space: normal; overflow-wrap: anywhere; line-height: 1.65; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
 .markdown-body p { margin: .35em 0 .7em; line-height: inherit; }
@@ -349,7 +349,7 @@ p { line-height: 1.65; }
 .markdown-body h2 { font-size: 1.28em; }
 .markdown-body h3 { font-size: 1.13em; }
 .markdown-body ul, .markdown-body ol { margin: .45em 0 .75em; padding-left: 1.5em; }
-.markdown-body li { margin: .22em 0; }
+.markdown-body li { margin: .28em 0; line-height: inherit; }
 .markdown-body blockquote {
   margin: .65em 0;
   padding: .25em 0 .25em .85em;
