@@ -147,7 +147,11 @@
         Promise.resolve().then(callback);
       }
       function toolLabel(name) {
-        return { calculator: "计算器", web_fetch: "网页访问" }[name] || name;
+        return {
+          calculator: "计算器",
+          web_search: "网上搜索",
+          web_fetch: "网页访问",
+        }[name] || name;
       }
       function render(d) {
         $("empty").hidden = !d.empty;

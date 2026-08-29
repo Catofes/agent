@@ -78,6 +78,7 @@ type Engine struct {
 	Semaphore                       chan struct{}
 	TokenBudget                     int64
 	MaxToolCalls                    int
+	MaxToolCallsByName              map[string]int
 	MaxOutputChars                  int
 	MaxReasoningChars               int
 	MemoryExtractor                 MemoryExtractor
@@ -138,6 +139,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	var totalIn, totalOut int64
 	var unknownUsage int64
 	toolCount := 0
+	toolCounts := map[string]int{}
 	loadedSkills := map[string]bool{}
 	reasoningChars := 0
 	defer func() {
@@ -237,6 +239,21 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			}
 			return ErrToolLimit
 		}
+		nextToolCounts := make(map[string]int, len(toolCounts))
+		for name, count := range toolCounts {
+			nextToolCounts[name] = count
+		}
+		for _, call := range completion.ToolCalls {
+			name := call.Function.Name
+			nextToolCounts[name]++
+			if limit := e.MaxToolCallsByName[name]; limit > 0 && nextToolCounts[name] > limit {
+				if err := e.saveTermination(ctx, req, "tool_limit_reached", fmt.Sprintf("Agent 已达到本轮工具 %q 的调用上限（%d 次），请缩小任务范围后重试。", name, limit)); err != nil {
+					return err
+				}
+				return ErrToolLimit
+			}
+		}
+		toolCounts = nextToolCounts
 		callJSON, _ := json.Marshal(completion.ToolCalls)
 		if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: completion.Content, ToolCalls: string(callJSON), Reasoning: completion.Reasoning}); err != nil {
 			return err

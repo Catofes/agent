@@ -398,6 +398,7 @@
           <div class="design-options">
             <div class="tool-options" aria-label="Agent 工具">
               <label class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
+              <label id="webSearchOption" class="tool-option hidden"><input id="webSearch" type="checkbox" /> <span>🔎 搜索网上信息</span></label>
               <label class="tool-option"><input id="webFetch" type="checkbox" /> <span>🌐 访问公开网页</span></label>
             </div>
             <div class="turn-option">
@@ -503,6 +504,7 @@
       function toolLabel(name) {
         return {
           calculator: "计算器",
+          web_search: "网上搜索",
           web_fetch: "网页访问",
           load_skill: "加载 Skill",
         }[name] || name;
@@ -512,7 +514,7 @@
         $("saveStatus").textContent = "设计尚未保存";
         $("saveStatus").className = "status unsaved";
       }
-      ["persona", "calculator", "webFetch", "maxTurns"].forEach((id) =>
+      ["persona", "calculator", "webSearch", "webFetch", "maxTurns"].forEach((id) =>
         $(id).addEventListener("input", () => {
           if (id === "maxTurns")
             $("turnValue").textContent = $("maxTurns").value;
@@ -576,12 +578,17 @@
           ]);
           $("persona").value = d.persona;
           $("calculator").checked = d.tools.includes("calculator");
+          $("webSearch").checked = d.tools.includes("web_search");
           $("webFetch").checked = d.tools.includes("web_fetch");
           $("maxTurns").value = d.max_turns;
           $("turnValue").textContent = d.max_turns;
           templates = t.templates;
           memoryState = memory;
           capabilities = caps;
+          $("webSearchOption").classList.toggle(
+            "hidden",
+            !caps.available_tools.includes("web_search"),
+          );
           skillItems = skills.skills || [];
           skillLimit = skills.limit || 12;
           activeSkillID = skillItems[0]?.id || null;
@@ -865,6 +872,10 @@
             skill_md: "",
             tools: [
               $("calculator").checked ? "calculator" : "",
+              capabilities?.available_tools.includes("web_search") &&
+              $("webSearch").checked
+                ? "web_search"
+                : "",
               $("webFetch").checked ? "web_fetch" : "",
             ].filter(Boolean),
             max_turns: Number($("maxTurns").value),
@@ -1233,6 +1244,7 @@
           "skillContent",
           "skillEnabled",
           "calculator",
+          "webSearch",
           "webFetch",
           "maxTurns",
           "templates",
@@ -1255,7 +1267,10 @@
           !capabilities || capabilities.allowed_tools.includes("calculator");
         const webFetchAllowed =
           !capabilities || capabilities.allowed_tools.includes("web_fetch");
+        const webSearchAllowed =
+          !capabilities || capabilities.allowed_tools.includes("web_search");
         $("calculator").disabled = locked || !!controller || !calculatorAllowed;
+        $("webSearch").disabled = locked || !!controller || !webSearchAllowed;
         $("webFetch").disabled = locked || !!controller || !webFetchAllowed;
         renderMemory();
         $("conversationTabs")

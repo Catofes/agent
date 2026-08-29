@@ -1,6 +1,6 @@
 # 课堂 Agent 平台
 
-一个面向公开课的极简 Agent 平台：Go 单二进制、SQLite 单文件、学生/教师/大屏三个内嵌页面。平台提供学号登录、Soul 设计、多 Skill 目录与按需加载、多 Tab 对话与删除、长期 Memory、计算器工具调用、行动记录、教师状态墙、课堂能力控制、全班锁定、场次隔离和投屏。
+一个面向公开课的极简 Agent 平台：Go 单二进制、SQLite 单文件、学生/教师/大屏三个内嵌页面。平台提供学号登录、Soul 设计、多 Skill 目录与按需加载、多 Tab 对话与删除、长期 Memory、计算器、受控网页访问与网上搜索、行动记录、教师状态墙、课堂能力控制、全班锁定、场次隔离和投屏。
 
 ## 本地运行
 
@@ -18,6 +18,7 @@ id,name
 DEEPSEEK_API_KEY='替换为真实 Key'
 ADMIN_PASSWORD='替换为教师口令'
 ANONYMOUS_HMAC_KEY='替换为独立的长随机字符串'
+BRAVE_SEARCH_API_KEY='可选；配置后启用网上搜索 Tool'
 ```
 
 构建并运行二进制：
@@ -87,4 +88,4 @@ Nginx HTTPS 配置和流式检查步骤见 [HTTPS 反向代理部署](doc/HTTPS�
 
 ## 当前边界
 
-Memory 对每个学生仍默认关闭，老师可以按场次选择关闭、确认后记忆或自然记忆，并控制本场可用 Tool。Memory 只在同一课堂场次内跨对话生效；MVP 边界见 [Memory MVP 设计](doc/MemoryMVP设计.md)，演进状态见 [Memory V2 设计与实施计划](doc/MemoryV2设计与实施计划.md)。v0.3 已提供受控网页访问 Tool：它只读取公开 HTTP/HTTPS 文本页面，阻止本机、内网、非标准端口和重定向绕过，并且需要教师按场次显式开放、学生自行装备。zip 导出、随机点名、优秀池、联网搜索、绘图和多智能体演示仍在 [todo.md](todo.md) 的后续版本清单中。
+Memory 对每个学生仍默认关闭，老师可以按场次选择关闭、确认后记忆或自然记忆，并控制本场可用 Tool。Memory 只在同一课堂场次内跨对话生效；MVP 边界见 [Memory MVP 设计](doc/MemoryMVP设计.md)，演进状态见 [Memory V2 设计与实施计划](doc/MemoryV2设计与实施计划.md)。v0.3 已提供 `web_search → web_fetch` 受控联网链路：Brave 搜索只返回有限结果，网页访问只读取公开 HTTP/HTTPS 文本页面；两者都需要教师按场次显式开放、学生自行装备，每轮分别最多调用 2 次。zip 导出、随机点名、优秀池、绘图和多智能体演示仍在 [todo.md](todo.md) 的后续版本清单中。

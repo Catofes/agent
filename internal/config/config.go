@@ -17,6 +17,7 @@ type Config struct {
 	DeepSeekBaseURL      string
 	DeepSeekModel        string
 	DeepSeekAPIKey       string
+	BraveSearchAPIKey    string
 	AdminPassword        string
 	AnonymousHMACKey     string
 	CookieSecure         bool
@@ -52,6 +53,7 @@ func Load(version string) (Config, error) {
 	flag.StringVar(&c.DeepSeekBaseURL, "deepseek-base-url", env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), "DeepSeek API base URL")
 	flag.StringVar(&c.DeepSeekModel, "deepseek-model", env("DEEPSEEK_MODEL", "deepseek-v4-flash"), "DeepSeek model name")
 	flag.StringVar(&c.DeepSeekAPIKey, "deepseek-api-key", os.Getenv("DEEPSEEK_API_KEY"), "DeepSeek API key")
+	flag.StringVar(&c.BraveSearchAPIKey, "brave-search-api-key", os.Getenv("BRAVE_SEARCH_API_KEY"), "optional Brave Search API key")
 	flag.StringVar(&c.AdminPassword, "admin-password", os.Getenv("ADMIN_PASSWORD"), "teacher password")
 	flag.StringVar(&c.AnonymousHMACKey, "anonymous-hmac-key", os.Getenv("ANONYMOUS_HMAC_KEY"), "HMAC key for anonymous provider IDs")
 	flag.BoolVar(&c.CookieSecure, "cookie-secure", envBool("COOKIE_SECURE", false), "mark cookies Secure")
