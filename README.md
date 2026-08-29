@@ -87,6 +87,28 @@ DEEPSEEK_API_KEY='...' make smoke-real
 
 两种模式都沿用教师的课堂 Tool 开关和学生装备状态。`web_fetch` 仍是独立的本地网页读取工具；若不希望课堂服务器直接访问搜索结果网址，应由教师关闭它。
 
+## Docker 与 GitHub 发布
+
+本地构建镜像：
+
+```bash
+docker build --build-arg VERSION="$(git rev-parse --short HEAD)" -t classroom-agent:local .
+```
+
+运行镜像基于 Alpine，并以非 root 用户运行；配置仍通过环境变量注入，SQLite、学生名单和备份统一放在 `/data`。请先准备一个包含 `students.csv` 的数据目录：
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -p 8080:8080 \
+  -v "$(pwd)/data:/data" \
+  ghcr.io/catofes/agent:latest
+```
+
+镜像不包含 `.env`、真实学生名单、SQLite 数据库、日志或 Git 历史。直接运行镜像而不挂载 `/data` 时会使用内置的示例名单，容器删除后数据不会保留。
+
+推送 `v*` 标签会触发 GitHub Release：先对完整 Git 历史执行 Gitleaks 密钥扫描，再运行测试，生成 amd64/arm64 二进制与校验文件，并发布对应的 GHCR 多架构镜像。任一密钥扫描或测试步骤失败都不会创建 Release 或推送镜像。
+
 ## 生产部署
 
 - 用 HTTPS 反向代理发布服务，并设置 `COOKIE_SECURE=true`。
