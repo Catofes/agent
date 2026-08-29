@@ -461,8 +461,11 @@
         const d = await api("/api/teacher/student/" + encodeURIComponent(id));
         current = d;
         $("studentTitle").textContent = `${d.student.id}　${d.student.name}`;
+        const skills = (d.skills || []).map((skill) =>
+          `${skill.enabled ? "✓" : "○"} ${skill.name}\n适用场景：${skill.description || "（未填写）"}`,
+        ).join("\n\n");
         $("design").textContent =
-          `人设\n${d.design.persona || "（未填写）"}\n\n技能手册\n${d.design.skill_md || "（未填写）"}\n\n装备：${d.design.tools.join("、") || "无"}\n最大步数：${d.design.max_turns}`;
+          `人设\n${d.design.persona || "（未填写）"}\n\nSkill 目录\n${skills || "（未创建）"}\n\n装备：${d.design.tools.join("、") || "无"}\n最大步数：${d.design.max_turns}`;
         $("messages").replaceChildren(
           ...d.messages.map((m) => {
             const e = document.createElement("div"),

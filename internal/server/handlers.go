@@ -96,9 +96,10 @@ func (s *Server) saveDesign(w http.ResponseWriter, r *http.Request) {
 }
 
 type templateDTO struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Content string `json:"content"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Content     string `json:"content"`
 }
 
 func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +109,11 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	names := map[string]string{"quiz-master.md": "出题官", "weekly-editor.md": "周报小编", "debate-coach.md": "辩论教练"}
+	descriptions := map[string]string{
+		"quiz-master.md":   "根据学习主题设计题目、逐步提示并讲解答案。",
+		"weekly-editor.md": "把零散事项整理成结构清晰、重点明确的周报。",
+		"debate-coach.md":  "帮助构建立论、预判反驳并进行辩论训练。",
+	}
 	var out []templateDTO
 	for _, e := range entries {
 		if e.IsDir() || !safeFileBase(e.Name()) {
@@ -121,10 +127,135 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 		if display == "" {
 			display = strings.TrimSuffix(e.Name(), ".md")
 		}
-		out = append(out, templateDTO{ID: strings.TrimSuffix(e.Name(), ".md"), Name: display, Content: string(b)})
+		out = append(out, templateDTO{ID: strings.TrimSuffix(e.Name(), ".md"), Name: display, Description: descriptions[e.Name()], Content: string(b)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	writeJSON(w, 200, map[string]any{"templates": out})
+}
+
+func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	items, err := s.Store.Skills(r.Context(), p.Session.RunID, p.Session.StudentID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取 Skill 列表失败")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"skills": items, "limit": maxSkillsPerStudent})
+}
+
+func (s *Server) createSkill(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	var in struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Content     string `json:"content"`
+		Enabled     bool   `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &in) || !s.validateSkillInput(w, in.Name, in.Description, in.Content) {
+		return
+	}
+	if !s.studentCanMutate(r.Context(), p, w) {
+		return
+	}
+	items, err := s.Store.Skills(r.Context(), p.Session.RunID, p.Session.StudentID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取 Skill 列表失败")
+		return
+	}
+	if len(items) >= maxSkillsPerStudent {
+		writeError(w, 400, "SKILL_LIMIT_REACHED", fmt.Sprintf("每名学生最多创建 %d 个 Skill", maxSkillsPerStudent))
+		return
+	}
+	created, err := s.Store.CreateSkill(r.Context(), store.Skill{ID: newID("skill_"), RunID: p.Session.RunID, StudentID: p.Session.StudentID, Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), Content: strings.TrimSpace(in.Content), Enabled: in.Enabled})
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "创建 Skill 失败")
+		return
+	}
+	s.wallHub.Publish(struct{}{})
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateSkill(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" || runeLen(id) > maxSkillIDChars {
+		writeError(w, 404, "SKILL_NOT_FOUND", "未找到该 Skill")
+		return
+	}
+	var in struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Content     string `json:"content"`
+		Enabled     bool   `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &in) || !s.validateSkillInput(w, in.Name, in.Description, in.Content) {
+		return
+	}
+	if !s.studentCanMutate(r.Context(), p, w) {
+		return
+	}
+	updated, err := s.Store.UpdateSkill(r.Context(), store.Skill{ID: id, RunID: p.Session.RunID, StudentID: p.Session.StudentID, Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), Content: strings.TrimSpace(in.Content), Enabled: in.Enabled})
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, 404, "SKILL_NOT_FOUND", "未找到该 Skill")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "更新 Skill 失败")
+		return
+	}
+	s.wallHub.Publish(struct{}{})
+	writeJSON(w, 200, updated)
+}
+
+func (s *Server) deleteSkill(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" || runeLen(id) > maxSkillIDChars {
+		writeError(w, 404, "SKILL_NOT_FOUND", "未找到该 Skill")
+		return
+	}
+	if !s.studentCanMutate(r.Context(), p, w) {
+		return
+	}
+	err := s.Store.DeleteSkill(r.Context(), p.Session.RunID, p.Session.StudentID, id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, 404, "SKILL_NOT_FOUND", "未找到该 Skill")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "删除 Skill 失败")
+		return
+	}
+	s.wallHub.Publish(struct{}{})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) validateSkillInput(w http.ResponseWriter, name, description, content string) bool {
+	name, description, content = strings.TrimSpace(name), strings.TrimSpace(description), strings.TrimSpace(content)
+	if name == "" || runeLen(name) > maxSkillNameChars {
+		writeError(w, 400, "INVALID_SKILL_NAME", fmt.Sprintf("Skill 名称不能为空且不能超过 %d 个字", maxSkillNameChars))
+		return false
+	}
+	if description == "" || runeLen(description) > maxSkillDescChars {
+		writeError(w, 400, "INVALID_SKILL_DESCRIPTION", fmt.Sprintf("适用场景不能为空且不能超过 %d 个字", maxSkillDescChars))
+		return false
+	}
+	if content == "" || runeLen(content) > s.Config.MaxSkillChars {
+		writeError(w, 400, "INVALID_SKILL_CONTENT", fmt.Sprintf("Skill 正文不能为空且不能超过 %d 个字", s.Config.MaxSkillChars))
+		return false
+	}
+	return true
+}
+
+func (s *Server) studentCanMutate(ctx context.Context, p principal, w http.ResponseWriter) bool {
+	s.controlMu.RLock()
+	defer s.controlMu.RUnlock()
+	run, err := s.Store.Run(ctx, p.Session.RunID)
+	if err != nil || run.Status != "active" || run.Locked {
+		writeError(w, 423, "CLASS_LOCKED", "老师已暂停课堂操作")
+		return false
+	}
+	return true
 }
 
 func (s *Server) conversations(w http.ResponseWriter, r *http.Request) {
@@ -421,6 +552,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
 		return
 	}
+	skills, err := s.Store.Skills(r.Context(), p.Session.RunID, p.Session.StudentID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取 Skill 列表失败")
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -473,7 +609,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		target := p.Session.RunID + "\x00" + p.Session.StudentID
 		s.studentMemoryHub.Publish(target, classroomEvent{Type: "memory_status", RunID: p.Session.RunID, MemoryStatus: update.Status, MemoryItems: items})
 	}
-	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
+	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, Skills: skills, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
 	if err != nil {
 		code, msg := agentError(err)
 		if !emitted {
@@ -497,6 +633,21 @@ func intersectStrings(selected, allowed []string) []string {
 		}
 	}
 	return out
+}
+
+func formatSkillsForDisplay(skills []store.Skill) string {
+	sections := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		if !skill.Enabled {
+			continue
+		}
+		heading := "## " + strings.TrimSpace(skill.Name)
+		if description := strings.TrimSpace(skill.Description); description != "" {
+			heading += "\n\n适用场景：" + description
+		}
+		sections = append(sections, heading+"\n\n"+strings.TrimSpace(skill.Content))
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 func agentError(err error) (string, string) {
@@ -682,7 +833,8 @@ func (s *Server) teacherStudent(w http.ResponseWriter, r *http.Request) {
 	}
 	usage, _ := s.Store.Usage(r.Context(), run.ID, id)
 	conversations, _ := s.Store.Conversations(r.Context(), run.ID, id, 100)
-	writeJSON(w, 200, map[string]any{"student": st, "design": d, "conversations": conversations, "messages": msgs, "usage": usage})
+	skills, _ := s.Store.Skills(r.Context(), run.ID, id)
+	writeJSON(w, 200, map[string]any{"student": st, "design": d, "skills": skills, "conversations": conversations, "messages": msgs, "usage": usage})
 }
 
 func (s *Server) getTeacherPolicy(w http.ResponseWriter, r *http.Request) {
@@ -851,6 +1003,11 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取设计失败")
 		return
 	}
+	skills, err := s.Store.Skills(r.Context(), run.ID, in.ID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取 Skill 列表失败")
+		return
+	}
 	all, err := s.Store.StudentMessages(r.Context(), run.ID, in.ID, 0, 500)
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "读取对话失败")
@@ -899,7 +1056,7 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 	for _, conversation := range conversations {
 		titles[conversation.ID] = conversation.Title
 	}
-	state := screenState{SpotlightID: newID("screen_"), Name: st.Name, Persona: d.Persona, SkillMD: d.SkillMD, Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: publicScreenMessages(history, titles, turnID), Empty: false}
+	state := screenState{SpotlightID: newID("screen_"), Name: st.Name, Persona: d.Persona, SkillMD: formatSkillsForDisplay(skills), Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: publicScreenMessages(history, titles, turnID), Empty: false}
 	ack := make(chan struct{})
 	s.screenMu.Lock()
 	s.screenRevision++

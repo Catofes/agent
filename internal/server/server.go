@@ -35,6 +35,10 @@ const (
 	maxTurnIDChars       = 64
 	maxTeacherPassChars  = 512
 	maxMemoryIDChars     = 64
+	maxSkillIDChars      = 64
+	maxSkillNameChars    = 80
+	maxSkillDescChars    = 300
+	maxSkillsPerStudent  = 12
 )
 
 type principal struct {
@@ -141,6 +145,10 @@ func (s *Server) Routes() http.Handler {
 				r.Put("/design", s.saveDesign)
 				r.Get("/capabilities", s.capabilities)
 				r.Get("/templates", s.listTemplates)
+				r.Get("/skills", s.listSkills)
+				r.Post("/skills", s.createSkill)
+				r.Put("/skills/{id}", s.updateSkill)
+				r.Delete("/skills/{id}", s.deleteSkill)
 				r.Get("/conversations", s.conversations)
 				r.Post("/conversations", s.createConversation)
 				r.Delete("/conversations/{id}", s.deleteConversation)

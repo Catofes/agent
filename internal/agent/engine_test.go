@@ -384,7 +384,7 @@ func TestTechnicalToolDetailIsValidAndBounded(t *testing.T) {
 
 func TestBuildMessagesKeepsPromptLayersAndToolProtocol(t *testing.T) {
 	calls := `[{"id":"call_1","type":"function","function":{"name":"calculator","arguments":"{\"expression\":\"2+2\"}"}}]`
-	messages := buildMessages(store.Design{Persona: "耐心数学老师", SkillMD: "仅在精确计算时使用"}, nil, []store.Message{
+	messages := buildMessages(store.Design{Persona: "耐心数学老师"}, []store.Skill{{ID: "math", Name: "精确计算", Description: "需要精确计算时使用", Content: "使用计算器核验结果", Enabled: true}}, nil, []store.Message{
 		{Role: "user", Content: "计算 2+2"},
 		{Role: "assistant", Content: "", Reasoning: "需要精确计算", ToolCalls: calls},
 		{Role: "tool", Content: "结果：4", ToolCalls: "call_1"},
@@ -393,15 +393,18 @@ func TestBuildMessagesKeepsPromptLayersAndToolProtocol(t *testing.T) {
 		t.Fatalf("messages=%#v", messages)
 	}
 	for _, want := range []string{
-		"平台安全规则 > Soul > 当前任务相关的 Skill > 可用 Memory > 当前对话",
+		"平台安全规则 > Soul > 已加载的当前任务相关 Skill > 可用 Memory > 当前对话",
 		"耐心数学老师",
-		"仅在精确计算时使用",
-		"不适用时按 Soul 和通用能力正常回答",
+		"需要精确计算时使用",
+		"不匹配时直接按 Soul 和通用能力回答",
 		"装备了工具也不代表必须调用",
 	} {
 		if !strings.Contains(messages[0].Content, want) {
 			t.Fatalf("system prompt misses %q: %s", want, messages[0].Content)
 		}
+	}
+	if strings.Contains(messages[0].Content, "使用计算器核验结果") {
+		t.Fatalf("skill body leaked into catalog prompt: %s", messages[0].Content)
 	}
 	if len(messages[2].ToolCalls) != 1 || messages[2].ToolCalls[0].Function.Name != "calculator" || messages[2].Reasoning != "需要精确计算" {
 		t.Fatalf("assistant tool protocol=%#v", messages[2])
@@ -441,12 +444,69 @@ func TestEngineReadsOnlyConfirmedRelevantMemoryAndPersistsReceipt(t *testing.T) 
 	if !strings.Contains(system, "我喜欢篮球") || strings.Contains(system, "篮球校队") || strings.Contains(system, "学习钢琴") {
 		t.Fatalf("wrong memory selection in prompt: %s", system)
 	}
-	if len(events) == 0 || len(events[0].Memories) != 1 || events[0].Memories[0].ID != "relevant" || len(events[0].Skills) != 1 {
+	if len(events) == 0 || len(events[0].Memories) != 1 || events[0].Memories[0].ID != "relevant" || len(events[0].Skills) != 0 {
 		t.Fatalf("context receipt=%#v", events)
 	}
 	messages, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
 	if err != nil || len(messages) != 2 || !strings.Contains(messages[0].ContextReceipt, "relevant") {
 		t.Fatalf("persisted receipt messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestEngineLoadsMatchedSkillBodyOnDemandAndUpdatesReceipt(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	skill := store.Skill{ID: "math", Name: "数学验算", Description: "需要验算数值结果时使用", Content: "先列式，再用计算器交叉核验。", Enabled: true}
+	call := ToolCall{ID: "load_1", Type: "function", Function: ToolFunction{Name: "load_skill", Arguments: `{"skill_id":"math"}`}}
+	fake := &fakeClient{answers: []Completion{
+		{ToolCalls: []ToolCall{call}, TokensIn: 2, TokensOut: 1},
+		{Content: "验算完成", Deltas: []string{"验算完成"}, TokensIn: 3, TokensOut: 1},
+	}}
+	engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	var events []Event
+	if err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "skill_turn", Input: "帮我验算", Design: store.Design{Persona: "老师", MaxTurns: 2}, Skills: []store.Skill{skill}}, func(event Event) error {
+		events = append(events, event)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	firstSystem := fake.requests[0].Messages[0].Content
+	if !strings.Contains(firstSystem, skill.Name) || !strings.Contains(firstSystem, skill.Description) || strings.Contains(firstSystem, skill.Content) {
+		t.Fatalf("first prompt should contain only catalog metadata: %s", firstSystem)
+	}
+	secondMessages := fake.requests[1].Messages
+	if !strings.Contains(secondMessages[len(secondMessages)-1].Content, skill.Content) {
+		t.Fatalf("loaded skill body was not returned as tool content: %#v", secondMessages)
+	}
+	foundLoaded := false
+	for _, event := range events {
+		if event.Type == "skill_loaded" && event.SkillID == skill.ID && len(event.Skills) == 1 {
+			foundLoaded = true
+		}
+	}
+	if !foundLoaded {
+		t.Fatalf("skill_loaded event missing: %#v", events)
+	}
+	messages, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
+	if err != nil || !strings.Contains(messages[0].ContextReceipt, skill.Name) {
+		t.Fatalf("updated receipt messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestCoreIdentityMemoryIsRecalledAcrossDifferentWording(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddMemory(ctx, store.Memory{ID: "name", RunID: run.ID, StudentID: "2101", Content: "学生希望将AI助手称为豆豆", Status: "confirmed"}); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine(st, &fakeClient{}, tools.NewRegistry(), "model", "secret", time.Second, 1)
+	items, err := engine.relevantMemories(ctx, run.ID, "2101", "你叫啥", store.MemoryModeReviewRequired)
+	if err != nil || len(items) != 1 || items[0].ID != "name" {
+		t.Fatalf("core memory=%#v err=%v", items, err)
 	}
 }
 
@@ -686,10 +746,13 @@ func TestEngineUsesLatestDesignAndOnlySelectedConversation(t *testing.T) {
 	for _, m := range fake.requests[0].Messages {
 		joined += "\n" + m.Content
 	}
-	for _, want := range []string{"全新人设", "全新技能规则", "新的任务"} {
+	for _, want := range []string{"全新人设", "我的 Skill", "新的任务"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("request misses %q: %s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "全新技能规则") {
+		t.Fatalf("legacy skill body leaked before load_skill: %s", joined)
 	}
 	if strings.Contains(joined, "旧对话里的秘密暗号") {
 		t.Fatalf("old conversation leaked into request: %s", joined)

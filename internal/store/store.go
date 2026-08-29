@@ -70,6 +70,18 @@ type Design struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type Skill struct {
+	ID          string    `json:"id"`
+	RunID       string    `json:"-"`
+	StudentID   string    `json:"-"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Content     string    `json:"content"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 type Conversation struct {
 	ID           string    `json:"id"`
 	RunID        string    `json:"-"`
@@ -168,8 +180,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 8 {
-		return fmt.Errorf("database version %d is newer than supported version 8", version)
+	if version > 9 {
+		return fmt.Errorf("database version %d is newer than supported version 9", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -246,7 +258,40 @@ PRAGMA user_version = 1;`
 			return fmt.Errorf("migrate run policies: %w", err)
 		}
 	}
+	if version < 9 {
+		if err := s.migrateSkills(ctx); err != nil {
+			return fmt.Errorf("migrate skills: %w", err)
+		}
+	}
 	return nil
+}
+
+func (s *Store) migrateSkills(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS skills(
+ id TEXT NOT NULL, run_id TEXT NOT NULL, student_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+ content TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY(run_id,student_id,id), FOREIGN KEY(run_id,student_id) REFERENCES students(run_id,id)
+)`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS skills_student_updated ON skills(run_id,student_id,updated_at DESC,id)`); err != nil {
+		return err
+	}
+	now := formatTime(time.Now().UTC())
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO skills(id,run_id,student_id,name,description,content,enabled,created_at,updated_at)
+ SELECT 'skill_default',run_id,student_id,'我的 Skill','从原有 Skill 迁移；模型在任务匹配时按需加载。',skill_md,1,?,?
+ FROM designs WHERE trim(skill_md)<>''`, now, now); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 9`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateRunPolicies(ctx context.Context) error {
@@ -754,6 +799,81 @@ func (s *Store) SaveDesign(ctx context.Context, d Design) (Design, error) {
 	return d, err
 }
 
+func (s *Store) Skills(ctx context.Context, runID, studentID string) ([]Skill, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,name,description,content,enabled,created_at,updated_at
+ FROM skills WHERE run_id=? AND student_id=? ORDER BY updated_at DESC,id`, runID, studentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Skill, 0)
+	for rows.Next() {
+		skill, scanErr := scanSkill(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, skill)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Skill(ctx context.Context, runID, studentID, id string) (Skill, error) {
+	return scanSkill(s.db.QueryRowContext(ctx, `SELECT id,run_id,student_id,name,description,content,enabled,created_at,updated_at
+ FROM skills WHERE run_id=? AND student_id=? AND id=?`, runID, studentID, id))
+}
+
+func scanSkill(row rowScanner) (Skill, error) {
+	var skill Skill
+	var created, updated string
+	if err := row.Scan(&skill.ID, &skill.RunID, &skill.StudentID, &skill.Name, &skill.Description, &skill.Content, &skill.Enabled, &created, &updated); err != nil {
+		return Skill{}, err
+	}
+	skill.CreatedAt, _ = parseTime(created)
+	skill.UpdatedAt, _ = parseTime(updated)
+	return skill, nil
+}
+
+func (s *Store) CreateSkill(ctx context.Context, skill Skill) (Skill, error) {
+	now := time.Now().UTC()
+	skill.CreatedAt, skill.UpdatedAt = now, now
+	res, err := s.db.ExecContext(ctx, `INSERT INTO skills(id,run_id,student_id,name,description,content,enabled,created_at,updated_at)
+ SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`, skill.ID, skill.RunID, skill.StudentID, skill.Name, skill.Description, skill.Content, skill.Enabled, formatTime(now), formatTime(now), skill.RunID, skill.StudentID)
+	if err != nil {
+		return Skill{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Skill{}, ErrNotFound
+	}
+	return skill, nil
+}
+
+func (s *Store) UpdateSkill(ctx context.Context, skill Skill) (Skill, error) {
+	skill.UpdatedAt = time.Now().UTC()
+	res, err := s.db.ExecContext(ctx, `UPDATE skills SET name=?,description=?,content=?,enabled=?,updated_at=?
+ WHERE run_id=? AND student_id=? AND id=?`, skill.Name, skill.Description, skill.Content, skill.Enabled, formatTime(skill.UpdatedAt), skill.RunID, skill.StudentID, skill.ID)
+	if err != nil {
+		return Skill{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Skill{}, ErrNotFound
+	}
+	return s.Skill(ctx, skill.RunID, skill.StudentID, skill.ID)
+}
+
+func (s *Store) DeleteSkill(ctx context.Context, runID, studentID, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM skills WHERE run_id=? AND student_id=? AND id=?`, runID, studentID, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) CreateConversation(ctx context.Context, c Conversation) (Conversation, error) {
 	now := time.Now().UTC()
 	c.CreatedAt, c.UpdatedAt = now, now
@@ -865,6 +985,18 @@ func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {
 		return Message{}, err
 	}
 	return m, nil
+}
+
+func (s *Store) UpdateMessageContextReceipt(ctx context.Context, runID, studentID, conversationID, turnID, receipt string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE messages SET context_receipt=? WHERE run_id=? AND student_id=? AND conversation_id=? AND turn_id=? AND role='user'`, receipt, runID, studentID, conversationID, turnID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) Messages(ctx context.Context, runID, studentID, conversationID string, afterID int64, limit int) ([]Message, error) {
@@ -1101,7 +1233,8 @@ func (s *Store) ClearMemories(ctx context.Context, runID, studentID string) erro
 func (s *Store) Wall(ctx context.Context, runID string) ([]WallStudent, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT st.id,st.name,
  EXISTS(SELECT 1 FROM sessions se WHERE se.run_id=st.run_id AND se.student_id=st.id AND se.is_teacher=0 AND se.revoked_at IS NULL AND se.expires_at>?),
- COALESCE(length(trim(d.persona))>0,0),COALESCE(length(trim(d.skill_md))>0,0),
+	 COALESCE(length(trim(d.persona))>0,0),
+	 (COALESCE(length(trim(d.skill_md))>0,0) OR EXISTS(SELECT 1 FROM skills sk WHERE sk.run_id=st.run_id AND sk.student_id=st.id AND sk.enabled=1 AND trim(sk.content)<>'')),
  (SELECT count(DISTINCT turn_id) FROM messages m WHERE m.run_id=st.run_id AND m.student_id=st.id AND m.role='user'),
  (SELECT max(last_seen_at) FROM sessions se WHERE se.run_id=st.run_id AND se.student_id=st.id AND se.revoked_at IS NULL)
  FROM students st LEFT JOIN designs d ON d.run_id=st.run_id AND d.student_id=st.id WHERE st.run_id=? ORDER BY st.id`, formatTime(time.Now().UTC()), runID)

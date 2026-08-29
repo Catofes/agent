@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -70,19 +71,35 @@ func (e *Engine) relevantMemories(ctx context.Context, runID, studentID, input, 
 	if err != nil {
 		return nil, err
 	}
+	type scoredMemory struct {
+		item  store.Memory
+		score int
+	}
 	wanted := memoryTerms(input)
-	selected := make([]store.Memory, 0, len(items))
-	tokens := 0
+	candidates := make([]scoredMemory, 0, len(items))
 	for _, item := range items {
-		if !termsOverlap(wanted, memoryTerms(item.Content)) {
-			continue
+		score := sharedTermCount(wanted, memoryTerms(item.Content))
+		if isCoreMemory(item.Content) {
+			score += 1000
 		}
+		if score > 0 {
+			candidates = append(candidates, scoredMemory{item: item, score: score})
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	selected := make([]store.Memory, 0, min(len(candidates), 5))
+	tokens := 0
+	for _, candidate := range candidates {
+		item := candidate.item
 		itemTokens := estimateTokens(item.Content)
 		if e.MaxMemoryTokens > 0 && tokens+itemTokens > e.MaxMemoryTokens {
 			continue
 		}
 		selected = append(selected, item)
 		tokens += itemTokens
+		if len(selected) == 5 {
+			break
+		}
 	}
 	return selected, nil
 }
@@ -245,9 +262,26 @@ func memoryTerms(value string) map[string]bool {
 	return out
 }
 
-func termsOverlap(a, b map[string]bool) bool {
+func sharedTermCount(a, b map[string]bool) int {
+	count := 0
 	for term := range a {
 		if b[term] {
+			count++
+		}
+	}
+	return count
+}
+
+// Core identity and naming preferences are stable profile facts. Until Memory
+// gains an explicit kind column, keep a narrow compatibility classifier so
+// these facts are available without relying on the user's exact wording.
+func isCoreMemory(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, marker := range []string{
+		"称呼", "叫我", "我的名字", "我的姓名", "我的昵称",
+		"ai助手称为", "agent称为", "助手叫", "agent叫", "名字叫", "昵称是",
+	} {
+		if strings.Contains(value, marker) {
 			return true
 		}
 	}

@@ -258,6 +258,42 @@ func TestStudentLoginDesignChatAndReplacement(t *testing.T) {
 	}
 }
 
+func TestStudentSkillCRUDIsScoped(t *testing.T) {
+	handler, _ := testServer(t)
+	student := newClient(handler)
+	other := newClient(handler)
+	if status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"}); status != http.StatusOK {
+		t.Fatalf("login status=%d", status)
+	}
+	if status, _, _ := requestJSON(t, other, http.MethodPost, "/api/login", map[string]string{"id": "2102"}); status != http.StatusOK {
+		t.Fatalf("other login status=%d", status)
+	}
+	status, created, _ := requestJSON(t, student, http.MethodPost, "/api/skills", map[string]any{
+		"name": "数学验算", "description": "需要验算数值时使用", "content": "先列式，再交叉核验。", "enabled": true,
+	})
+	if status != http.StatusCreated || created["id"] == "" {
+		t.Fatalf("create status=%d body=%v", status, created)
+	}
+	id := created["id"].(string)
+	status, listed, _ := requestJSON(t, student, http.MethodGet, "/api/skills", nil)
+	if status != http.StatusOK || len(listed["skills"].([]any)) != 1 {
+		t.Fatalf("list status=%d body=%v", status, listed)
+	}
+	status, isolated, _ := requestJSON(t, other, http.MethodGet, "/api/skills", nil)
+	if status != http.StatusOK || len(isolated["skills"].([]any)) != 0 {
+		t.Fatalf("other student saw skills: status=%d body=%v", status, isolated)
+	}
+	status, updated, _ := requestJSON(t, student, http.MethodPut, "/api/skills/"+id, map[string]any{
+		"name": "数学验算", "description": "涉及数字结果时使用", "content": "逐步核验。", "enabled": false,
+	})
+	if status != http.StatusOK || updated["enabled"] != false {
+		t.Fatalf("update status=%d body=%v", status, updated)
+	}
+	if status, _, _ := requestJSON(t, student, http.MethodDelete, "/api/skills/"+id, nil); status != http.StatusNoContent {
+		t.Fatalf("delete status=%d", status)
+	}
+}
+
 func TestStudentMemoryCRUDLimitsAndPrivacyIsolation(t *testing.T) {
 	handler, st := testServer(t)
 	first, second := newClient(handler), newClient(handler)

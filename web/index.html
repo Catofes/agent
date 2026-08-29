@@ -151,6 +151,24 @@
         min-height: 260px;
         font-family: ui-monospace, monospace;
       }
+      .skill-workspace {
+        display: grid;
+        grid-template-columns: minmax(150px, 0.34fr) minmax(0, 1fr);
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .skill-list { display: grid; align-content: start; gap: 8px; }
+      .skill-list button {
+        width: 100%; text-align: left; background: #f3f4f8;
+        color: #263047; box-shadow: none;
+      }
+      .skill-list button.active {
+        background: #e9e7ff; color: #4838d1; outline: 2px solid #c9c2ff;
+      }
+      .skill-list small { display: block; margin-top: 4px; color: #667085; }
+      .skill-editor { min-width: 0; }
+      .skill-editor .field { margin-top: 0; }
+      .skill-actions { justify-content: space-between; margin-top: 10px; }
       .row {
         display: flex;
         align-items: center;
@@ -264,6 +282,9 @@
         .conversation-bar {
           grid-template-columns: 1fr;
         }
+        .skill-workspace {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
     <link rel="stylesheet" href="/assets/ui.css" />
@@ -340,14 +361,18 @@
                   <option value="">选择模板…</option></select
                 ><button id="useTemplate" class="secondary" type="button">
                   使用模板
-                </button>
+                </button><button id="newSkill" class="secondary" type="button">＋ 新建 Skill</button>
               </div>
-              <textarea
-                id="skill"
-                class="skill"
-                aria-label="Skill 内容"
-                placeholder="# 技能名称&#10;&#10;## 什么时候使用&#10;当用户希望……时使用。&#10;&#10;## 工作步骤&#10;1. ……"
-              ></textarea>
+              <div class="skill-workspace">
+                <div id="skillList" class="skill-list" aria-label="Skill 列表"></div>
+                <div class="skill-editor">
+                  <div class="field"><label for="skillName">名称</label><input id="skillName" maxlength="80" placeholder="例如：数学验算" /></div>
+                  <div class="field"><label for="skillDescription">适用场景</label><input id="skillDescription" maxlength="300" placeholder="例如：需要列式计算、验算数值结果时使用" /></div>
+                  <label class="tool-option"><input id="skillEnabled" type="checkbox" checked /> <span>向 Agent 提供这个 Skill</span></label>
+                  <div class="field"><label for="skillContent">方法正文</label><textarea id="skillContent" class="skill" placeholder="# 工作步骤&#10;1. ……&#10;2. ……"></textarea></div>
+                  <div class="row skill-actions"><span id="skillStatus" class="status"></span><button id="deleteSkill" class="danger" type="button">删除 Skill</button></div>
+                </div>
+              </div>
             </section>
             <section id="memoryPanel" class="design-panel" role="tabpanel" hidden>
               <div class="panel-intro">
@@ -421,6 +446,11 @@
       const $ = (id) => document.getElementById(id);
       let student = null,
         templates = [],
+        skillItems = [],
+        skillLimit = 12,
+        activeSkillID = null,
+        creatingSkill = false,
+        skillDirty = false,
         conversationItems = [],
         activeConversation = null,
         memoryState = null,
@@ -470,11 +500,18 @@
         $("saveStatus").textContent = "设计尚未保存";
         $("saveStatus").className = "status unsaved";
       }
-      ["persona", "skill", "calculator", "maxTurns"].forEach((id) =>
+      ["persona", "calculator", "maxTurns"].forEach((id) =>
         $(id).addEventListener("input", () => {
           if (id === "maxTurns")
             $("turnValue").textContent = $("maxTurns").value;
           markDirty();
+        }),
+      );
+      ["skillName", "skillDescription", "skillContent", "skillEnabled"].forEach((id) =>
+        $(id).addEventListener("input", () => {
+          skillDirty = true;
+          markDirty();
+          renderSkillList();
         }),
       );
       $("loginForm").onsubmit = async (e) => {
@@ -516,21 +553,25 @@
       resume();
       async function load() {
         try {
-          const [d, t, c, memory, caps] = await Promise.all([
+          const [d, t, c, memory, caps, skills] = await Promise.all([
             api("/api/design"),
             api("/api/templates"),
             api("/api/conversations"),
             api("/api/memory"),
             api("/api/capabilities"),
+            api("/api/skills"),
           ]);
           $("persona").value = d.persona;
-          $("skill").value = d.skill_md;
           $("calculator").checked = d.tools.includes("calculator");
           $("maxTurns").value = d.max_turns;
           $("turnValue").textContent = d.max_turns;
           templates = t.templates;
           memoryState = memory;
           capabilities = caps;
+          skillItems = skills.skills || [];
+          skillLimit = skills.limit || 12;
+          activeSkillID = skillItems[0]?.id || null;
+          renderSkillEditor();
           renderMemory();
           $("templates").replaceChildren(
             new Option("选择模板…", ""),
@@ -676,9 +717,92 @@
       $("useTemplate").onclick = () => {
         const t = templates.find((x) => x.id === $("templates").value);
         if (t) {
-          $("skill").value = t.content;
+          if (!activeSkillID) beginNewSkill();
+          $("skillName").value = t.name;
+          $("skillDescription").value = t.description || "";
+          $("skillContent").value = t.content;
+          skillDirty = true;
           markDirty();
+          renderSkillList();
         }
+      };
+      function currentSkillDraft() {
+        return {
+          name: $("skillName").value.trim(),
+          description: $("skillDescription").value.trim(),
+          content: $("skillContent").value.trim(),
+          enabled: $("skillEnabled").checked,
+        };
+      }
+      function renderSkillList() {
+        const draft = currentSkillDraft();
+        $("skillList").replaceChildren(
+          ...skillItems.map((item) => {
+            const button = document.createElement("button"),
+              name = text("strong", item.id === activeSkillID && skillDirty ? draft.name || "未命名 Skill" : item.name),
+              state = text("small", item.enabled ? item.description || "已启用" : "已停用");
+            button.type = "button";
+            button.className = item.id === activeSkillID ? "active" : "";
+            button.append(name, state);
+            button.onclick = () => selectSkill(item.id);
+            return button;
+          }),
+        );
+        if (!skillItems.length) $("skillList").append(text("div", "还没有 Skill。可以新建或使用模板。", "status"));
+      }
+      function renderSkillEditor() {
+        const item = skillItems.find((x) => x.id === activeSkillID);
+        $("skillName").value = item?.name || "";
+        $("skillDescription").value = item?.description || "";
+        $("skillContent").value = item?.content || "";
+        $("skillEnabled").checked = item?.enabled ?? true;
+        skillDirty = false;
+        $("skillStatus").textContent = item ? "目录会提供名称和适用场景；正文由 Agent 按需加载。" : creatingSkill ? "填写后点击“保存设计”一起保存。" : "新建一个 Skill，或从模板开始。";
+        renderSkillList();
+        applyLock();
+      }
+      function selectSkill(id) {
+        if (id === activeSkillID) return;
+        if (skillDirty && !confirm("当前 Skill 还没有保存，放弃修改并切换吗？")) return;
+        activeSkillID = id;
+        creatingSkill = false;
+        renderSkillEditor();
+      }
+      function beginNewSkill() {
+        if (skillItems.length >= skillLimit) {
+          $("skillStatus").textContent = `最多创建 ${skillLimit} 个 Skill`;
+          return;
+        }
+        if (skillDirty && !confirm("当前 Skill 还没有保存，放弃修改并新建吗？")) return;
+        activeSkillID = null;
+        creatingSkill = true;
+        renderSkillEditor();
+        $("skillName").focus();
+      }
+      async function saveActiveSkill() {
+        if (!skillDirty) return;
+        const draft = currentSkillDraft();
+        if (!draft.name || !draft.description || !draft.content) throw new Error("Skill 的名称、适用场景和正文都需要填写");
+        const saved = activeSkillID
+          ? await api("/api/skills/" + encodeURIComponent(activeSkillID), { method: "PUT", body: JSON.stringify(draft) })
+          : await api("/api/skills", { method: "POST", body: JSON.stringify(draft) });
+        const index = skillItems.findIndex((x) => x.id === saved.id);
+        if (index >= 0) skillItems[index] = saved;
+        else skillItems.unshift(saved);
+        activeSkillID = saved.id;
+        creatingSkill = false;
+        skillDirty = false;
+        renderSkillEditor();
+      }
+      $("newSkill").onclick = beginNewSkill;
+      $("deleteSkill").onclick = async () => {
+        if (!activeSkillID || !confirm("删除这个 Skill？")) return;
+        await api("/api/skills/" + encodeURIComponent(activeSkillID), { method: "DELETE" });
+        skillItems = skillItems.filter((x) => x.id !== activeSkillID);
+        activeSkillID = skillItems[0]?.id || null;
+        creatingSkill = false;
+        renderSkillEditor();
+        $("saveStatus").textContent = "Skill 已删除";
       };
       $("save").onclick = () => saveDesign().catch(() => {});
       $("logout").onclick = async () => {
@@ -699,9 +823,10 @@
       async function saveDesign() {
         try {
           $("save").disabled = true;
+          await saveActiveSkill();
           const d = {
             persona: $("persona").value,
-            skill_md: $("skill").value,
+            skill_md: "",
             tools: $("calculator").checked ? ["calculator"] : [],
             max_turns: Number($("maxTurns").value),
           };
@@ -898,7 +1023,8 @@
       function actionBox(ev) {
         const box = document.createElement("div");
         box.className = "action";
-        box.textContent = `第 ${ev.step} 步：${ev.tool}｜${ev.summary || ""}`;
+        const toolName = ev.tool === "load_skill" ? "加载 Skill" : ev.tool;
+        box.textContent = `第 ${ev.step} 步：${toolName}｜${ev.summary || ""}`;
         if (ev.detail) {
           const d = document.createElement("details"),
             s = document.createElement("summary"),
@@ -912,12 +1038,11 @@
       }
       function contextReceipt(ev) {
         const parts = [];
-        if (ev.soul_used) parts.push("Soul：已应用");
+        if (ev.soul_used) parts.push("Soul：已提供");
         if (ev.skills?.length) parts.push("Skill：" + ev.skills.join("、"));
-        else parts.push("Skill：本轮未提供");
         if (ev.memories?.length)
           parts.push("Memory：读取 " + ev.memories.map((m) => `「${m.content}」`).join("、"));
-        else parts.push("Memory：本轮未读取");
+        if (!parts.length) return null;
         const box = text("div", "本轮上下文｜" + parts.join("；"), "context-receipt");
         $("messages").append(box);
         return box;
@@ -957,9 +1082,22 @@
         applyLock();
         $("stop").classList.remove("hidden");
         let answer = null,
-          reasoning = null;
+          reasoning = null,
+          receiptBox = null,
+          receiptEvent = null;
         const handleEvent = (ev) => {
-          if (ev.type === "turn_start") contextReceipt(ev);
+          if (ev.type === "turn_start") {
+            receiptEvent = ev;
+            receiptBox = contextReceipt(ev);
+          } else if (ev.type === "skill_loaded") {
+            receiptEvent = { ...(receiptEvent || {}), skills: ev.skills || [ev.skill_name] };
+            const value = [];
+            if (receiptEvent.soul_used) value.push("Soul：已提供");
+            if (receiptEvent.skills?.length) value.push("Skill：" + receiptEvent.skills.join("、"));
+            if (receiptEvent.memories?.length) value.push("Memory：读取 " + receiptEvent.memories.map((m) => `「${m.content}」`).join("、"));
+            if (!receiptBox) receiptBox = contextReceipt(receiptEvent);
+            else receiptBox.textContent = "本轮上下文｜" + value.join("；");
+          }
           else if (ev.type === "reasoning_delta") {
             if (!reasoning) reasoning = appendReasoning();
             reasoning.content.textContent += ev.delta;
@@ -973,8 +1111,11 @@
           } else if (ev.type === "tool_start") actionBox(ev);
           else if (ev.type === "tool_result")
             appendMessage(`工具返回：${ev.summary}`, "action");
-          else if (ev.type === "turn_end" && reasoning)
-            reasoning.summary.textContent = "思考草稿";
+          else if (ev.type === "turn_end") {
+            flushDeltas(true);
+            if (answer) MarkdownRenderer.render(answer, answer.textContent);
+            if (reasoning) reasoning.summary.textContent = "思考草稿";
+          }
           else if (ev.type === "error") throw new Error(ev.message);
         };
         try {
@@ -1046,16 +1187,26 @@
       function applyLock() {
         [
           "persona",
-          "skill",
+          "skillName",
+          "skillDescription",
+          "skillContent",
+          "skillEnabled",
           "calculator",
           "maxTurns",
           "templates",
           "useTemplate",
+          "newSkill",
+          "deleteSkill",
           "save",
           "chatInput",
           "send",
           "newConversation",
         ].forEach((id) => ($(id).disabled = locked || !!controller));
+        const hasSkill = !!activeSkillID || creatingSkill;
+        ["skillName", "skillDescription", "skillContent", "skillEnabled"].forEach((id) => {
+          $(id).disabled = locked || !!controller || !hasSkill;
+        });
+        $("deleteSkill").disabled = locked || !!controller || !activeSkillID;
         const calculatorAllowed =
           !capabilities || capabilities.allowed_tools.includes("calculator");
         $("calculator").disabled = locked || !!controller || !calculatorAllowed;

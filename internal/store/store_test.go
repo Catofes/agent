@@ -271,3 +271,51 @@ func TestVersionOneMessagesMigrateIntoLegacyConversation(t *testing.T) {
 		t.Fatalf("messages=%#v err=%v", messages, err)
 	}
 }
+
+func TestVersionEightDesignSkillMigratesToStructuredSkill(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "skills-v8.db")
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvPath := filepath.Join(t.TempDir(), "students.csv")
+	if err = os.WriteFile(csvPath, []byte("id,name\n2101,张三\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.SaveDesign(ctx, Design{RunID: run.ID, StudentID: "2101", SkillMD: "先拆解，再核验", Tools: []string{}, MaxTurns: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec(`DROP TABLE skills`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec(`PRAGMA user_version = 8`); err != nil {
+		t.Fatal(err)
+	}
+	if err = raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+	items, err := migrated.Skills(ctx, run.ID, "2101")
+	if err != nil || len(items) != 1 || items[0].Name != "我的 Skill" || items[0].Content != "先拆解，再核验" || !items[0].Enabled {
+		t.Fatalf("skills=%#v err=%v", items, err)
+	}
+}
