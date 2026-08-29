@@ -146,6 +146,9 @@
       function afterDOMUpdate(callback) {
         Promise.resolve().then(callback);
       }
+      function toolLabel(name) {
+        return { calculator: "计算器", web_fetch: "网页访问" }[name] || name;
+      }
       function render(d) {
         $("empty").hidden = !d.empty;
         $("screen").hidden = d.empty;
@@ -154,7 +157,7 @@
           $("persona").textContent = d.persona || "（未填写）";
           $("skill").textContent = d.skill_md || "（未填写）";
           $("meta").textContent =
-            `装备：${(d.tools || []).join("、") || "无"}　｜　最大步数：${d.max_turns}`;
+            `装备：${(d.tools || []).map(toolLabel).join("、") || "无"}　｜　最大步数：${d.max_turns}`;
           const history = [],
             messages = d.messages || [];
           let conversation = "";

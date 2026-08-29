@@ -326,7 +326,7 @@
         );
       }
       function toolLabel(name) {
-        return name === "calculator" ? "计算器" : name;
+        return { calculator: "计算器", web_fetch: "网页访问" }[name] || name;
       }
       function selectedPolicy() {
         return {
@@ -465,7 +465,7 @@
 		  `${skill.enabled ? "✓" : "○"} ${skill.name}\n能力：${skill.summary || "（未填写）"}\n何时使用：${skill.when_to_use || "（未填写）"}\n触发：${skill.trigger_mode === "explicit" ? "仅明确调用" : "自动判断"}`,
         ).join("\n\n");
         $("design").textContent =
-          `人设\n${d.design.persona || "（未填写）"}\n\nSkill 目录\n${skills || "（未创建）"}\n\n装备：${d.design.tools.join("、") || "无"}\n最大步数：${d.design.max_turns}`;
+          `人设\n${d.design.persona || "（未填写）"}\n\nSkill 目录\n${skills || "（未创建）"}\n\n装备：${d.design.tools.map(toolLabel).join("、") || "无"}\n最大步数：${d.design.max_turns}`;
         $("messages").replaceChildren(
           ...d.messages.map((m) => {
             const e = document.createElement("div"),

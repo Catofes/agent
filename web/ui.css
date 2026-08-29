@@ -191,6 +191,7 @@ p { line-height: 1.65; }
 .skill-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 10px 0; }
 .design-panel .skill { width: 100%; min-height: 235px; }
 .design-options { display: grid; grid-template-columns: auto minmax(190px, 1fr); gap: 18px; align-items: center; margin-top: 18px; padding: 15px 16px; border-top: 1px solid var(--line); border-radius: 0 0 13px 13px; background: #fafafe; }
+.tool-options { display: flex; flex-wrap: wrap; gap: 10px 16px; }
 .tool-option, .memory-toggle { display: flex; align-items: center; gap: 8px; white-space: nowrap; cursor: pointer; }
 .tool-option input, .memory-toggle input { width: auto; accent-color: var(--primary); }
 .turn-option { display: grid; grid-template-columns: auto minmax(110px, 1fr); gap: 10px; align-items: center; }

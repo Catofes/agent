@@ -51,7 +51,7 @@ func main() {
 		logger.Error("import students", "error", err, "path", cfg.StudentsCSV)
 		os.Exit(1)
 	}
-	registry := tools.NewRegistry(tools.Calculator{})
+	registry := tools.NewRegistry(tools.Calculator{}, tools.NewWebFetch())
 	client := &agent.DeepSeekClient{BaseURL: cfg.DeepSeekBaseURL, APIKey: cfg.DeepSeekAPIKey, HTTP: &http.Client{Transport: &http.Transport{MaxIdleConns: 100, MaxIdleConnsPerHost: 50, IdleConnTimeout: 90 * time.Second}}}
 	engine := agent.NewEngine(st, client, registry, cfg.DeepSeekModel, cfg.AnonymousHMACKey, cfg.LLMTimeout, cfg.LLMConcurrency)
 	engine.TokenBudget = cfg.StudentTokenBudget

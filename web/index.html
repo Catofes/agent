@@ -396,7 +396,10 @@
             </section>
           </div>
           <div class="design-options">
-            <label class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
+            <div class="tool-options" aria-label="Agent 工具">
+              <label class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
+              <label class="tool-option"><input id="webFetch" type="checkbox" /> <span>🌐 访问公开网页</span></label>
+            </div>
             <div class="turn-option">
               <label for="maxTurns">最大步数 <strong id="turnValue">30</strong></label>
               <input id="maxTurns" type="range" min="1" max="60" value="30" />
@@ -497,12 +500,19 @@
         el.textContent = value;
         return el;
       }
+      function toolLabel(name) {
+        return {
+          calculator: "计算器",
+          web_fetch: "网页访问",
+          load_skill: "加载 Skill",
+        }[name] || name;
+      }
       function markDirty() {
         dirty = true;
         $("saveStatus").textContent = "设计尚未保存";
         $("saveStatus").className = "status unsaved";
       }
-      ["persona", "calculator", "maxTurns"].forEach((id) =>
+      ["persona", "calculator", "webFetch", "maxTurns"].forEach((id) =>
         $(id).addEventListener("input", () => {
           if (id === "maxTurns")
             $("turnValue").textContent = $("maxTurns").value;
@@ -566,6 +576,7 @@
           ]);
           $("persona").value = d.persona;
           $("calculator").checked = d.tools.includes("calculator");
+          $("webFetch").checked = d.tools.includes("web_fetch");
           $("maxTurns").value = d.max_turns;
           $("turnValue").textContent = d.max_turns;
           templates = t.templates;
@@ -852,7 +863,10 @@
           const d = {
             persona: $("persona").value,
             skill_md: "",
-            tools: $("calculator").checked ? ["calculator"] : [],
+            tools: [
+              $("calculator").checked ? "calculator" : "",
+              $("webFetch").checked ? "web_fetch" : "",
+            ].filter(Boolean),
             max_turns: Number($("maxTurns").value),
           };
           await api("/api/design", { method: "PUT", body: JSON.stringify(d) });
@@ -1048,7 +1062,7 @@
       function actionBox(ev) {
         const box = document.createElement("div");
         box.className = "action";
-        const toolName = ev.tool === "load_skill" ? "加载 Skill" : ev.tool;
+        const toolName = toolLabel(ev.tool);
         box.textContent = `第 ${ev.step} 步：${toolName}｜${ev.summary || ""}`;
         if (ev.detail) {
           const d = document.createElement("details"),
@@ -1219,6 +1233,7 @@
           "skillContent",
           "skillEnabled",
           "calculator",
+          "webFetch",
           "maxTurns",
           "templates",
           "useTemplate",
@@ -1238,7 +1253,10 @@
         $("invokeSkill").disabled = locked || !!controller || !activeSkillID;
         const calculatorAllowed =
           !capabilities || capabilities.allowed_tools.includes("calculator");
+        const webFetchAllowed =
+          !capabilities || capabilities.allowed_tools.includes("web_fetch");
         $("calculator").disabled = locked || !!controller || !calculatorAllowed;
+        $("webFetch").disabled = locked || !!controller || !webFetchAllowed;
         renderMemory();
         $("conversationTabs")
           .querySelectorAll("button")
@@ -1255,7 +1273,7 @@
           locked = d.locked;
           if (d.memory_mode) {
             capabilities = {
-              ...(capabilities || { available_tools: ["calculator"] }),
+              ...(capabilities || { available_tools: ["calculator", "web_fetch"] }),
               memory_mode: d.memory_mode,
               allowed_tools: d.allowed_tools || [],
               revision: d.revision,
