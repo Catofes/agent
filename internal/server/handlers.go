@@ -96,10 +96,11 @@ func (s *Server) saveDesign(w http.ResponseWriter, r *http.Request) {
 }
 
 type templateDTO struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Content     string `json:"content"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Summary   string `json:"summary"`
+	WhenToUse string `json:"when_to_use"`
+	Content   string `json:"content"`
 }
 
 func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
@@ -109,10 +110,15 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	names := map[string]string{"quiz-master.md": "出题官", "weekly-editor.md": "周报小编", "debate-coach.md": "辩论教练"}
-	descriptions := map[string]string{
+	summaries := map[string]string{
 		"quiz-master.md":   "根据学习主题设计题目、逐步提示并讲解答案。",
 		"weekly-editor.md": "把零散事项整理成结构清晰、重点明确的周报。",
 		"debate-coach.md":  "帮助构建立论、预判反驳并进行辩论训练。",
+	}
+	whenToUse := map[string]string{
+		"quiz-master.md":   "用户希望练习、测验或检查某个学科知识点时。",
+		"weekly-editor.md": "用户提供一周的事件、人物或感想，希望整理成周报时。",
+		"debate-coach.md":  "用户希望分析辩题、寻找论据或模拟攻辩时。",
 	}
 	var out []templateDTO
 	for _, e := range entries {
@@ -127,7 +133,7 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 		if display == "" {
 			display = strings.TrimSuffix(e.Name(), ".md")
 		}
-		out = append(out, templateDTO{ID: strings.TrimSuffix(e.Name(), ".md"), Name: display, Description: descriptions[e.Name()], Content: string(b)})
+		out = append(out, templateDTO{ID: strings.TrimSuffix(e.Name(), ".md"), Name: display, Summary: summaries[e.Name()], WhenToUse: whenToUse[e.Name()], Content: string(b)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	writeJSON(w, 200, map[string]any{"templates": out})
@@ -145,13 +151,8 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSkill(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
-	var in struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Content     string `json:"content"`
-		Enabled     bool   `json:"enabled"`
-	}
-	if !decodeJSON(w, r, &in) || !s.validateSkillInput(w, in.Name, in.Description, in.Content) {
+	var in skillInput
+	if !decodeJSON(w, r, &in) || !s.normalizeAndValidateSkillInput(w, &in) {
 		return
 	}
 	if !s.studentCanMutate(r.Context(), p, w) {
@@ -166,7 +167,7 @@ func (s *Server) createSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "SKILL_LIMIT_REACHED", fmt.Sprintf("每名学生最多创建 %d 个 Skill", maxSkillsPerStudent))
 		return
 	}
-	created, err := s.Store.CreateSkill(r.Context(), store.Skill{ID: newID("skill_"), RunID: p.Session.RunID, StudentID: p.Session.StudentID, Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), Content: strings.TrimSpace(in.Content), Enabled: in.Enabled})
+	created, err := s.Store.CreateSkill(r.Context(), store.Skill{ID: newID("skill_"), RunID: p.Session.RunID, StudentID: p.Session.StudentID, Name: in.Name, Summary: in.Summary, WhenToUse: in.WhenToUse, TriggerMode: in.TriggerMode, Content: in.Content, Enabled: in.Enabled})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "创建 Skill 失败")
 		return
@@ -182,19 +183,14 @@ func (s *Server) updateSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "SKILL_NOT_FOUND", "未找到该 Skill")
 		return
 	}
-	var in struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Content     string `json:"content"`
-		Enabled     bool   `json:"enabled"`
-	}
-	if !decodeJSON(w, r, &in) || !s.validateSkillInput(w, in.Name, in.Description, in.Content) {
+	var in skillInput
+	if !decodeJSON(w, r, &in) || !s.normalizeAndValidateSkillInput(w, &in) {
 		return
 	}
 	if !s.studentCanMutate(r.Context(), p, w) {
 		return
 	}
-	updated, err := s.Store.UpdateSkill(r.Context(), store.Skill{ID: id, RunID: p.Session.RunID, StudentID: p.Session.StudentID, Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), Content: strings.TrimSpace(in.Content), Enabled: in.Enabled})
+	updated, err := s.Store.UpdateSkill(r.Context(), store.Skill{ID: id, RunID: p.Session.RunID, StudentID: p.Session.StudentID, Name: in.Name, Summary: in.Summary, WhenToUse: in.WhenToUse, TriggerMode: in.TriggerMode, Content: in.Content, Enabled: in.Enabled})
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, 404, "SKILL_NOT_FOUND", "未找到该 Skill")
 		return
@@ -230,17 +226,48 @@ func (s *Server) deleteSkill(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) validateSkillInput(w http.ResponseWriter, name, description, content string) bool {
-	name, description, content = strings.TrimSpace(name), strings.TrimSpace(description), strings.TrimSpace(content)
-	if name == "" || runeLen(name) > maxSkillNameChars {
+type skillInput struct {
+	Name        string `json:"name"`
+	Summary     string `json:"summary"`
+	WhenToUse   string `json:"when_to_use"`
+	TriggerMode string `json:"trigger_mode"`
+	Description string `json:"description"` // v9 client compatibility
+	Content     string `json:"content"`
+	Enabled     bool   `json:"enabled"`
+}
+
+func (s *Server) normalizeAndValidateSkillInput(w http.ResponseWriter, in *skillInput) bool {
+	in.Name = strings.TrimSpace(in.Name)
+	in.Summary = strings.TrimSpace(in.Summary)
+	in.WhenToUse = strings.TrimSpace(in.WhenToUse)
+	in.TriggerMode = strings.TrimSpace(in.TriggerMode)
+	in.Content = strings.TrimSpace(in.Content)
+	if in.WhenToUse == "" {
+		in.WhenToUse = strings.TrimSpace(in.Description)
+	}
+	if in.Summary == "" {
+		in.Summary = in.Name
+	}
+	if in.TriggerMode == "" {
+		in.TriggerMode = store.SkillTriggerAuto
+	}
+	if in.Name == "" || runeLen(in.Name) > maxSkillNameChars {
 		writeError(w, 400, "INVALID_SKILL_NAME", fmt.Sprintf("Skill 名称不能为空且不能超过 %d 个字", maxSkillNameChars))
 		return false
 	}
-	if description == "" || runeLen(description) > maxSkillDescChars {
-		writeError(w, 400, "INVALID_SKILL_DESCRIPTION", fmt.Sprintf("适用场景不能为空且不能超过 %d 个字", maxSkillDescChars))
+	if in.Summary == "" || runeLen(in.Summary) > maxSkillSummaryChars {
+		writeError(w, 400, "INVALID_SKILL_SUMMARY", fmt.Sprintf("能力说明不能为空且不能超过 %d 个字", maxSkillSummaryChars))
 		return false
 	}
-	if content == "" || runeLen(content) > s.Config.MaxSkillChars {
+	if in.WhenToUse == "" || runeLen(in.WhenToUse) > maxSkillWhenChars {
+		writeError(w, 400, "INVALID_SKILL_TRIGGER", fmt.Sprintf("使用条件不能为空且不能超过 %d 个字", maxSkillWhenChars))
+		return false
+	}
+	if in.TriggerMode != store.SkillTriggerAuto && in.TriggerMode != store.SkillTriggerExplicit {
+		writeError(w, 400, "INVALID_SKILL_TRIGGER_MODE", "Skill 触发模式不正确")
+		return false
+	}
+	if in.Content == "" || runeLen(in.Content) > s.Config.MaxSkillChars {
 		writeError(w, 400, "INVALID_SKILL_CONTENT", fmt.Sprintf("Skill 正文不能为空且不能超过 %d 个字", s.Config.MaxSkillChars))
 		return false
 	}
@@ -642,8 +669,11 @@ func formatSkillsForDisplay(skills []store.Skill) string {
 			continue
 		}
 		heading := "## " + strings.TrimSpace(skill.Name)
-		if description := strings.TrimSpace(skill.Description); description != "" {
-			heading += "\n\n适用场景：" + description
+		if summary := strings.TrimSpace(skill.Summary); summary != "" {
+			heading += "\n\n能力说明：" + summary
+		}
+		if when := strings.TrimSpace(skill.WhenToUse); when != "" {
+			heading += "\n\n何时使用：" + when
 		}
 		sections = append(sections, heading+"\n\n"+strings.TrimSpace(skill.Content))
 	}

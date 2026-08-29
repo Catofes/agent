@@ -462,7 +462,7 @@
         current = d;
         $("studentTitle").textContent = `${d.student.id}　${d.student.name}`;
         const skills = (d.skills || []).map((skill) =>
-          `${skill.enabled ? "✓" : "○"} ${skill.name}\n适用场景：${skill.description || "（未填写）"}`,
+		  `${skill.enabled ? "✓" : "○"} ${skill.name}\n能力：${skill.summary || "（未填写）"}\n何时使用：${skill.when_to_use || "（未填写）"}\n触发：${skill.trigger_mode === "explicit" ? "仅明确调用" : "自动判断"}`,
         ).join("\n\n");
         $("design").textContent =
           `人设\n${d.design.persona || "（未填写）"}\n\nSkill 目录\n${skills || "（未创建）"}\n\n装备：${d.design.tools.join("、") || "无"}\n最大步数：${d.design.max_turns}`;

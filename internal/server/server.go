@@ -37,7 +37,8 @@ const (
 	maxMemoryIDChars     = 64
 	maxSkillIDChars      = 64
 	maxSkillNameChars    = 80
-	maxSkillDescChars    = 300
+	maxSkillSummaryChars = 200
+	maxSkillWhenChars    = 300
 	maxSkillsPerStudent  = 12
 )
 

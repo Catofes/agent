@@ -32,6 +32,8 @@ const (
 	MemoryModeDisabled       = "disabled"
 	MemoryModeReviewRequired = "review_required"
 	MemoryModeAdaptive       = "adaptive"
+	SkillTriggerAuto         = "auto"
+	SkillTriggerExplicit     = "explicit"
 )
 
 type RunPolicy struct {
@@ -75,7 +77,9 @@ type Skill struct {
 	RunID       string    `json:"-"`
 	StudentID   string    `json:"-"`
 	Name        string    `json:"name"`
-	Description string    `json:"description"`
+	Summary     string    `json:"summary"`
+	WhenToUse   string    `json:"when_to_use"`
+	TriggerMode string    `json:"trigger_mode"`
 	Content     string    `json:"content"`
 	Enabled     bool      `json:"enabled"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -180,8 +184,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 9 {
-		return fmt.Errorf("database version %d is newer than supported version 9", version)
+	if version > 10 {
+		return fmt.Errorf("database version %d is newer than supported version 10", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -263,7 +267,47 @@ PRAGMA user_version = 1;`
 			return fmt.Errorf("migrate skills: %w", err)
 		}
 	}
+	if version < 10 {
+		if err := s.migrateSkillIndex(ctx); err != nil {
+			return fmt.Errorf("migrate skill index metadata: %w", err)
+		}
+	}
 	return nil
+}
+
+func (s *Store) migrateSkillIndex(ctx context.Context) error {
+	columns := []struct {
+		name string
+		sql  string
+	}{
+		{"summary", `ALTER TABLE skills ADD COLUMN summary TEXT NOT NULL DEFAULT ''`},
+		{"when_to_use", `ALTER TABLE skills ADD COLUMN when_to_use TEXT NOT NULL DEFAULT ''`},
+		{"trigger_mode", `ALTER TABLE skills ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'auto' CHECK(trigger_mode IN ('auto','explicit'))`},
+	}
+	missing := make([]string, 0, len(columns))
+	for _, column := range columns {
+		has, err := s.tableHasColumn(ctx, "skills", column.name)
+		if err != nil {
+			return err
+		}
+		if !has {
+			missing = append(missing, column.sql)
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, query := range append(missing,
+		`UPDATE skills SET summary=name,when_to_use=description WHERE summary='' AND when_to_use=''`,
+		`PRAGMA user_version = 10`,
+	) {
+		if _, err = tx.ExecContext(ctx, query); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateSkills(ctx context.Context) error {
@@ -800,7 +844,7 @@ func (s *Store) SaveDesign(ctx context.Context, d Design) (Design, error) {
 }
 
 func (s *Store) Skills(ctx context.Context, runID, studentID string) ([]Skill, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,name,description,content,enabled,created_at,updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,name,summary,when_to_use,trigger_mode,content,enabled,created_at,updated_at
  FROM skills WHERE run_id=? AND student_id=? ORDER BY updated_at DESC,id`, runID, studentID)
 	if err != nil {
 		return nil, err
@@ -818,14 +862,14 @@ func (s *Store) Skills(ctx context.Context, runID, studentID string) ([]Skill, e
 }
 
 func (s *Store) Skill(ctx context.Context, runID, studentID, id string) (Skill, error) {
-	return scanSkill(s.db.QueryRowContext(ctx, `SELECT id,run_id,student_id,name,description,content,enabled,created_at,updated_at
+	return scanSkill(s.db.QueryRowContext(ctx, `SELECT id,run_id,student_id,name,summary,when_to_use,trigger_mode,content,enabled,created_at,updated_at
  FROM skills WHERE run_id=? AND student_id=? AND id=?`, runID, studentID, id))
 }
 
 func scanSkill(row rowScanner) (Skill, error) {
 	var skill Skill
 	var created, updated string
-	if err := row.Scan(&skill.ID, &skill.RunID, &skill.StudentID, &skill.Name, &skill.Description, &skill.Content, &skill.Enabled, &created, &updated); err != nil {
+	if err := row.Scan(&skill.ID, &skill.RunID, &skill.StudentID, &skill.Name, &skill.Summary, &skill.WhenToUse, &skill.TriggerMode, &skill.Content, &skill.Enabled, &created, &updated); err != nil {
 		return Skill{}, err
 	}
 	skill.CreatedAt, _ = parseTime(created)
@@ -834,10 +878,13 @@ func scanSkill(row rowScanner) (Skill, error) {
 }
 
 func (s *Store) CreateSkill(ctx context.Context, skill Skill) (Skill, error) {
+	if skill.TriggerMode == "" {
+		skill.TriggerMode = SkillTriggerAuto
+	}
 	now := time.Now().UTC()
 	skill.CreatedAt, skill.UpdatedAt = now, now
-	res, err := s.db.ExecContext(ctx, `INSERT INTO skills(id,run_id,student_id,name,description,content,enabled,created_at,updated_at)
- SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`, skill.ID, skill.RunID, skill.StudentID, skill.Name, skill.Description, skill.Content, skill.Enabled, formatTime(now), formatTime(now), skill.RunID, skill.StudentID)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO skills(id,run_id,student_id,name,summary,when_to_use,trigger_mode,description,content,enabled,created_at,updated_at)
+	 SELECT ?,?,?,?,?,?,?,?, ?,?,?,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`, skill.ID, skill.RunID, skill.StudentID, skill.Name, skill.Summary, skill.WhenToUse, skill.TriggerMode, skill.WhenToUse, skill.Content, skill.Enabled, formatTime(now), formatTime(now), skill.RunID, skill.StudentID)
 	if err != nil {
 		return Skill{}, err
 	}
@@ -849,9 +896,12 @@ func (s *Store) CreateSkill(ctx context.Context, skill Skill) (Skill, error) {
 }
 
 func (s *Store) UpdateSkill(ctx context.Context, skill Skill) (Skill, error) {
+	if skill.TriggerMode == "" {
+		skill.TriggerMode = SkillTriggerAuto
+	}
 	skill.UpdatedAt = time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE skills SET name=?,description=?,content=?,enabled=?,updated_at=?
- WHERE run_id=? AND student_id=? AND id=?`, skill.Name, skill.Description, skill.Content, skill.Enabled, formatTime(skill.UpdatedAt), skill.RunID, skill.StudentID, skill.ID)
+	res, err := s.db.ExecContext(ctx, `UPDATE skills SET name=?,summary=?,when_to_use=?,trigger_mode=?,description=?,content=?,enabled=?,updated_at=?
+	 WHERE run_id=? AND student_id=? AND id=?`, skill.Name, skill.Summary, skill.WhenToUse, skill.TriggerMode, skill.WhenToUse, skill.Content, skill.Enabled, formatTime(skill.UpdatedAt), skill.RunID, skill.StudentID, skill.ID)
 	if err != nil {
 		return Skill{}, err
 	}

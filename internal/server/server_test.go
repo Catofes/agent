@@ -269,7 +269,7 @@ func TestStudentSkillCRUDIsScoped(t *testing.T) {
 		t.Fatalf("other login status=%d", status)
 	}
 	status, created, _ := requestJSON(t, student, http.MethodPost, "/api/skills", map[string]any{
-		"name": "数学验算", "description": "需要验算数值时使用", "content": "先列式，再交叉核验。", "enabled": true,
+		"name": "数学验算", "summary": "独立核验数值结果", "when_to_use": "需要验算数值时使用", "trigger_mode": "auto", "content": "先列式，再交叉核验。", "enabled": true,
 	})
 	if status != http.StatusCreated || created["id"] == "" {
 		t.Fatalf("create status=%d body=%v", status, created)
@@ -284,9 +284,9 @@ func TestStudentSkillCRUDIsScoped(t *testing.T) {
 		t.Fatalf("other student saw skills: status=%d body=%v", status, isolated)
 	}
 	status, updated, _ := requestJSON(t, student, http.MethodPut, "/api/skills/"+id, map[string]any{
-		"name": "数学验算", "description": "涉及数字结果时使用", "content": "逐步核验。", "enabled": false,
+		"name": "数学验算", "summary": "检查数字答案", "when_to_use": "涉及数字结果时使用", "trigger_mode": "explicit", "content": "逐步核验。", "enabled": false,
 	})
-	if status != http.StatusOK || updated["enabled"] != false {
+	if status != http.StatusOK || updated["enabled"] != false || updated["trigger_mode"] != "explicit" || updated["summary"] != "检查数字答案" {
 		t.Fatalf("update status=%d body=%v", status, updated)
 	}
 	if status, _, _ := requestJSON(t, student, http.MethodDelete, "/api/skills/"+id, nil); status != http.StatusNoContent {

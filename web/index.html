@@ -366,11 +366,13 @@
               <div class="skill-workspace">
                 <div id="skillList" class="skill-list" aria-label="Skill 列表"></div>
                 <div class="skill-editor">
-                  <div class="field"><label for="skillName">名称</label><input id="skillName" maxlength="80" placeholder="例如：数学验算" /></div>
-                  <div class="field"><label for="skillDescription">适用场景</label><input id="skillDescription" maxlength="300" placeholder="例如：需要列式计算、验算数值结果时使用" /></div>
+                  <div class="field"><label for="skillName">索引名称（可修改）</label><input id="skillName" maxlength="80" placeholder="例如：数学验算" /><small>内部 ID 保持稳定；改名不会丢失 Skill。</small></div>
+                  <div class="field"><label for="skillSummary">能力说明</label><input id="skillSummary" maxlength="200" placeholder="例如：独立重算并核验数值结果" /></div>
+                  <div class="field"><label for="skillWhenToUse">何时使用</label><input id="skillWhenToUse" maxlength="300" placeholder="例如：任务包含列式计算或要求检查答案时" /></div>
+                  <div class="field"><label for="skillTriggerMode">触发模式</label><select id="skillTriggerMode"><option value="auto">自动判断</option><option value="explicit">仅明确调用（@名称）</option></select><small id="skillTriggerHelp">Agent 根据能力说明和使用条件判断是否加载。</small></div>
                   <label class="tool-option"><input id="skillEnabled" type="checkbox" checked /> <span>向 Agent 提供这个 Skill</span></label>
                   <div class="field"><label for="skillContent">方法正文</label><textarea id="skillContent" class="skill" placeholder="# 工作步骤&#10;1. ……&#10;2. ……"></textarea></div>
-                  <div class="row skill-actions"><span id="skillStatus" class="status"></span><button id="deleteSkill" class="danger" type="button">删除 Skill</button></div>
+                  <div class="row skill-actions"><span id="skillStatus" class="status"></span><div class="row"><button id="invokeSkill" class="secondary hidden" type="button">在对话中 @调用</button><button id="deleteSkill" class="danger" type="button">删除 Skill</button></div></div>
                 </div>
               </div>
             </section>
@@ -507,11 +509,12 @@
           markDirty();
         }),
       );
-      ["skillName", "skillDescription", "skillContent", "skillEnabled"].forEach((id) =>
+      ["skillName", "skillSummary", "skillWhenToUse", "skillTriggerMode", "skillContent", "skillEnabled"].forEach((id) =>
         $(id).addEventListener("input", () => {
           skillDirty = true;
           markDirty();
           renderSkillList();
+          if (id === "skillTriggerMode") renderSkillTriggerHelp();
         }),
       );
       $("loginForm").onsubmit = async (e) => {
@@ -719,7 +722,9 @@
         if (t) {
           if (!activeSkillID) beginNewSkill();
           $("skillName").value = t.name;
-          $("skillDescription").value = t.description || "";
+          $("skillSummary").value = t.summary || "";
+          $("skillWhenToUse").value = t.when_to_use || "";
+          $("skillTriggerMode").value = "auto";
           $("skillContent").value = t.content;
           skillDirty = true;
           markDirty();
@@ -729,7 +734,9 @@
       function currentSkillDraft() {
         return {
           name: $("skillName").value.trim(),
-          description: $("skillDescription").value.trim(),
+          summary: $("skillSummary").value.trim(),
+          when_to_use: $("skillWhenToUse").value.trim(),
+          trigger_mode: $("skillTriggerMode").value,
           content: $("skillContent").value.trim(),
           enabled: $("skillEnabled").checked,
         };
@@ -740,7 +747,8 @@
           ...skillItems.map((item) => {
             const button = document.createElement("button"),
               name = text("strong", item.id === activeSkillID && skillDirty ? draft.name || "未命名 Skill" : item.name),
-              state = text("small", item.enabled ? item.description || "已启用" : "已停用");
+              mode = item.trigger_mode === "explicit" ? "明确调用" : "自动判断",
+              state = text("small", item.enabled ? `${mode} · ${item.id === activeSkillID && skillDirty ? draft.summary || draft.name : item.summary || item.name}` : "已停用");
             button.type = "button";
             button.className = item.id === activeSkillID ? "active" : "";
             button.append(name, state);
@@ -753,11 +761,14 @@
       function renderSkillEditor() {
         const item = skillItems.find((x) => x.id === activeSkillID);
         $("skillName").value = item?.name || "";
-        $("skillDescription").value = item?.description || "";
+        $("skillSummary").value = item?.summary || "";
+        $("skillWhenToUse").value = item?.when_to_use || "";
+        $("skillTriggerMode").value = item?.trigger_mode || "auto";
         $("skillContent").value = item?.content || "";
         $("skillEnabled").checked = item?.enabled ?? true;
         skillDirty = false;
-        $("skillStatus").textContent = item ? "目录会提供名称和适用场景；正文由 Agent 按需加载。" : creatingSkill ? "填写后点击“保存设计”一起保存。" : "新建一个 Skill，或从模板开始。";
+        $("skillStatus").textContent = item ? "目录只提供索引元数据；正文仍由 Agent 按需加载。" : creatingSkill ? "填写后点击“保存设计”一起保存。" : "新建一个 Skill，或从模板开始。";
+        renderSkillTriggerHelp();
         renderSkillList();
         applyLock();
       }
@@ -782,7 +793,7 @@
       async function saveActiveSkill() {
         if (!skillDirty) return;
         const draft = currentSkillDraft();
-        if (!draft.name || !draft.description || !draft.content) throw new Error("Skill 的名称、适用场景和正文都需要填写");
+        if (!draft.name || !draft.summary || !draft.when_to_use || !draft.content) throw new Error("Skill 的名称、能力说明、使用条件和正文都需要填写");
         const saved = activeSkillID
           ? await api("/api/skills/" + encodeURIComponent(activeSkillID), { method: "PUT", body: JSON.stringify(draft) })
           : await api("/api/skills", { method: "POST", body: JSON.stringify(draft) });
@@ -795,6 +806,20 @@
         renderSkillEditor();
       }
       $("newSkill").onclick = beginNewSkill;
+      function renderSkillTriggerHelp() {
+        const explicit = $("skillTriggerMode").value === "explicit";
+        $("skillTriggerHelp").textContent = explicit
+          ? "只有对话中出现 @当前名称 时，服务端才会向 Agent 提供这个 Skill。"
+          : "Agent 根据能力说明和使用条件判断是否加载。";
+        $("invokeSkill").classList.toggle("hidden", !explicit || !activeSkillID);
+      }
+      $("invokeSkill").onclick = () => {
+        const name = $("skillName").value.trim();
+        if (!name) return;
+        const prefix = `@${name} `;
+        if (!$("chatInput").value.includes(prefix)) $("chatInput").value = prefix + $("chatInput").value;
+        $("chatInput").focus();
+      };
       $("deleteSkill").onclick = async () => {
         if (!activeSkillID || !confirm("删除这个 Skill？")) return;
         await api("/api/skills/" + encodeURIComponent(activeSkillID), { method: "DELETE" });
@@ -1188,7 +1213,9 @@
         [
           "persona",
           "skillName",
-          "skillDescription",
+          "skillSummary",
+          "skillWhenToUse",
+          "skillTriggerMode",
           "skillContent",
           "skillEnabled",
           "calculator",
@@ -1197,16 +1224,18 @@
           "useTemplate",
           "newSkill",
           "deleteSkill",
+          "invokeSkill",
           "save",
           "chatInput",
           "send",
           "newConversation",
         ].forEach((id) => ($(id).disabled = locked || !!controller));
         const hasSkill = !!activeSkillID || creatingSkill;
-        ["skillName", "skillDescription", "skillContent", "skillEnabled"].forEach((id) => {
+        ["skillName", "skillSummary", "skillWhenToUse", "skillTriggerMode", "skillContent", "skillEnabled"].forEach((id) => {
           $(id).disabled = locked || !!controller || !hasSkill;
         });
         $("deleteSkill").disabled = locked || !!controller || !activeSkillID;
+        $("invokeSkill").disabled = locked || !!controller || !activeSkillID;
         const calculatorAllowed =
           !capabilities || capabilities.allowed_tools.includes("calculator");
         $("calculator").disabled = locked || !!controller || !calculatorAllowed;

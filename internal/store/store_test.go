@@ -315,7 +315,7 @@ func TestVersionEightDesignSkillMigratesToStructuredSkill(t *testing.T) {
 	}
 	defer migrated.Close()
 	items, err := migrated.Skills(ctx, run.ID, "2101")
-	if err != nil || len(items) != 1 || items[0].Name != "我的 Skill" || items[0].Content != "先拆解，再核验" || !items[0].Enabled {
+	if err != nil || len(items) != 1 || items[0].Name != "我的 Skill" || items[0].Summary != "我的 Skill" || items[0].WhenToUse == "" || items[0].TriggerMode != SkillTriggerAuto || items[0].Content != "先拆解，再核验" || !items[0].Enabled {
 		t.Fatalf("skills=%#v err=%v", items, err)
 	}
 }

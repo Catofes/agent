@@ -384,7 +384,7 @@ func TestTechnicalToolDetailIsValidAndBounded(t *testing.T) {
 
 func TestBuildMessagesKeepsPromptLayersAndToolProtocol(t *testing.T) {
 	calls := `[{"id":"call_1","type":"function","function":{"name":"calculator","arguments":"{\"expression\":\"2+2\"}"}}]`
-	messages := buildMessages(store.Design{Persona: "耐心数学老师"}, []store.Skill{{ID: "math", Name: "精确计算", Description: "需要精确计算时使用", Content: "使用计算器核验结果", Enabled: true}}, nil, []store.Message{
+	messages := buildMessages(store.Design{Persona: "耐心数学老师"}, []store.Skill{{ID: "math", Name: "精确计算", Summary: "核验数值结果", WhenToUse: "需要精确计算时使用", TriggerMode: store.SkillTriggerAuto, Content: "使用计算器核验结果", Enabled: true}}, nil, []store.Message{
 		{Role: "user", Content: "计算 2+2"},
 		{Role: "assistant", Content: "", Reasoning: "需要精确计算", ToolCalls: calls},
 		{Role: "tool", Content: "结果：4", ToolCalls: "call_1"},
@@ -456,7 +456,7 @@ func TestEngineReadsOnlyConfirmedRelevantMemoryAndPersistsReceipt(t *testing.T) 
 func TestEngineLoadsMatchedSkillBodyOnDemandAndUpdatesReceipt(t *testing.T) {
 	ctx := context.Background()
 	st, run := newEngineTestStore(t)
-	skill := store.Skill{ID: "math", Name: "数学验算", Description: "需要验算数值结果时使用", Content: "先列式，再用计算器交叉核验。", Enabled: true}
+	skill := store.Skill{ID: "math", Name: "数学验算", Summary: "独立核验数值结果", WhenToUse: "需要验算数值结果时使用", TriggerMode: store.SkillTriggerAuto, Content: "先列式，再用计算器交叉核验。", Enabled: true}
 	call := ToolCall{ID: "load_1", Type: "function", Function: ToolFunction{Name: "load_skill", Arguments: `{"skill_id":"math"}`}}
 	fake := &fakeClient{answers: []Completion{
 		{ToolCalls: []ToolCall{call}, TokensIn: 2, TokensOut: 1},
@@ -472,7 +472,7 @@ func TestEngineLoadsMatchedSkillBodyOnDemandAndUpdatesReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstSystem := fake.requests[0].Messages[0].Content
-	if !strings.Contains(firstSystem, skill.Name) || !strings.Contains(firstSystem, skill.Description) || strings.Contains(firstSystem, skill.Content) {
+	if !strings.Contains(firstSystem, skill.Name) || !strings.Contains(firstSystem, skill.Summary) || !strings.Contains(firstSystem, skill.WhenToUse) || strings.Contains(firstSystem, skill.Content) {
 		t.Fatalf("first prompt should contain only catalog metadata: %s", firstSystem)
 	}
 	secondMessages := fake.requests[1].Messages
@@ -491,6 +491,21 @@ func TestEngineLoadsMatchedSkillBodyOnDemandAndUpdatesReceipt(t *testing.T) {
 	messages, err := st.Messages(ctx, run.ID, "2101", "conv", 0, 20)
 	if err != nil || !strings.Contains(messages[0].ContextReceipt, skill.Name) {
 		t.Fatalf("updated receipt messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestExplicitSkillIsOnlyExposedAfterAtMention(t *testing.T) {
+	skills := []store.Skill{
+		{ID: "auto", Name: "自动验算", Summary: "核验答案", WhenToUse: "计算任务", TriggerMode: store.SkillTriggerAuto, Content: "自动正文", Enabled: true},
+		{ID: "manual", Name: "苏格拉底提问", Summary: "只提出引导问题", WhenToUse: "学生主动选择时", TriggerMode: store.SkillTriggerExplicit, Content: "明确调用正文", Enabled: true},
+	}
+	withoutMention := availableSkills(Request{Input: "帮我理解这道题", Skills: skills})
+	if len(withoutMention) != 1 || withoutMention[0].ID != "auto" {
+		t.Fatalf("explicit skill leaked without mention: %#v", withoutMention)
+	}
+	withMention := availableSkills(Request{Input: "请用 @苏格拉底提问 帮我理解", Skills: skills})
+	if len(withMention) != 2 || withMention[1].ID != "manual" {
+		t.Fatalf("explicit skill missing after mention: %#v", withMention)
 	}
 }
 
