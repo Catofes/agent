@@ -431,7 +431,7 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 		t.Fatal(status)
 	}
 	status, capabilities, _ := requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
-	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || len(capabilities["allowed_tools"].([]any)) != 1 {
+	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || len(capabilities["allowed_tools"].([]any)) != 1 || capabilities["max_input_chars"].(float64) != 100 {
 		t.Fatalf("default capabilities status=%d body=%#v", status, capabilities)
 	}
 	status, _, _ = requestJSON(t, student, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})

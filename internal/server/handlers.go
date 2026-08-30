@@ -44,6 +44,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		"memory_mode":     policy.MemoryMode,
 		"allowed_tools":   policy.AllowedTools,
 		"available_tools": s.Agent.Tools.Names(),
+		"max_input_chars": s.Config.MaxInputChars,
 		"revision":        policy.Revision,
 	})
 }
@@ -564,7 +565,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if runeLen(in.Message) > s.Config.MaxInputChars {
-		writeError(w, 400, "TEXT_TOO_LONG", "消息超过长度限制")
+		writeError(w, 400, "TEXT_TOO_LONG", fmt.Sprintf("消息超过长度限制（最多 %d 字）", s.Config.MaxInputChars))
 		return
 	}
 	d, err := s.Store.Design(r.Context(), p.Session.RunID, p.Session.StudentID)

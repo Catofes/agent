@@ -14,7 +14,7 @@
 
 - `proxy_buffering off`：禁止 Nginx 聚合 `/api/chat` 的 NDJSON 和三类 SSE 响应。
 - `gzip off`：避免压缩缓冲将多个小 delta 合并后才发送。
-- `proxy_read_timeout 300s`：允许长模型请求和 SSE 连接持续存活；应大于应用的 `LLM_TIMEOUT`。
+- `proxy_read_timeout 300s`：允许长模型请求和 SSE 连接持续存活；应大于应用默认的 `LLM_TIMEOUT=180s`。如果现场约 60 秒固定断开，应检查实际生效的代理配置，而不是只调大应用超时。
 - `X-Accel-Buffering: no`：代理与应用都显式标记禁用缓冲。
 - 应用的流式测试会校验 `Cache-Control: no-transform` 和 `X-Accel-Buffering: no`；实际部署仍需在目标代理和局域网 Pad 上观察首段到达时间。
 

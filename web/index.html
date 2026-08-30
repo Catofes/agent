@@ -432,12 +432,19 @@
           <div id="messages" class="messages"></div>
           <div id="memoryNotice" class="memory-notice hidden" role="status" aria-live="polite"></div>
           <form id="chatForm" class="row">
-            <input
-              id="chatInput"
-              placeholder="给你的 Agent 一个任务……"
-              autocomplete="off"
-              style="flex: 1; min-width: 200px"
-            /><button id="send">发送</button
+            <div class="chat-composer">
+              <textarea
+                id="chatInput"
+                rows="3"
+                placeholder="给你的 Agent 一个任务……"
+                aria-describedby="chatInputHelp chatInputCount"
+              ></textarea>
+              <div class="chat-input-meta">
+                <span id="chatInputHelp">Enter 换行，Ctrl/⌘ + Enter 发送</span>
+                <span id="chatInputCount">0 字</span>
+              </div>
+            </div>
+            <button id="send">发送</button
             ><button id="stop" type="button" class="secondary hidden">
               停止
             </button>
@@ -586,6 +593,9 @@
           templates = t.templates;
           memoryState = memory;
           capabilities = caps;
+          const maxInputChars = caps.max_input_chars || 12000;
+          $("chatInput").maxLength = maxInputChars;
+          updateChatInput();
           $("webSearchOption").classList.toggle(
             "hidden",
             !caps.available_tools.includes("web_search"),
@@ -1029,6 +1039,21 @@
         $("messages").scrollTop = $("messages").scrollHeight;
         return el;
       }
+      function updateChatInput() {
+        const input = $("chatInput");
+        const length = Array.from(input.value).length;
+        const limit = Number(input.maxLength) > 0 ? Number(input.maxLength) : 12000;
+        $("chatInputCount").textContent = `${length}/${limit} 字`;
+        input.style.height = "auto";
+        input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+      }
+      $("chatInput").addEventListener("input", updateChatInput);
+      $("chatInput").addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+          event.preventDefault();
+          $("chatForm").requestSubmit();
+        }
+      });
       function appendReasoning() {
         const box = document.createElement("details"),
           summary = document.createElement("summary"),
@@ -1129,6 +1154,7 @@
         if (!value || !activeConversation || locked || controller) return;
         appendMessage(value, "user");
         $("chatInput").value = "";
+        updateChatInput();
         controller = new AbortController();
         applyLock();
         $("stop").classList.remove("hidden");

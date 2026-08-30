@@ -17,3 +17,11 @@ test('student UI manages structured skills and reports only actual context', () 
   assert.doesNotMatch(html, /Skill：本轮未提供/);
   assert.doesNotMatch(html, /Memory：本轮未读取/);
 });
+
+test('student chat input supports multiline text and explicit keyboard sending', () => {
+  assert.match(html, /<textarea\s+id="chatInput"/);
+  assert.match(html, /Enter 换行，Ctrl\/⌘ \+ Enter 发送/);
+  assert.match(html, /event\.ctrlKey \|\| event\.metaKey/);
+  assert.match(html, /\$\("chatForm"\)\.requestSubmit\(\)/);
+  assert.match(html, /caps\.max_input_chars/);
+});
