@@ -14,8 +14,21 @@ test('student UI manages structured skills and reports only actual context', () 
   assert.match(html, /`@\$\{name\} `/);
   assert.match(html, /api\("\/api\/skills"/);
   assert.match(html, /ev\.type === "skill_loaded"/);
+  assert.match(html, /state = text\("small", item\.enabled \? mode : "已停用"\)/);
+  assert.doesNotMatch(html, /state = text\("small", item\.enabled \? `\$\{mode\} ·/);
   assert.doesNotMatch(html, /Skill：本轮未提供/);
   assert.doesNotMatch(html, /Memory：本轮未读取/);
+});
+
+test('stream completion renders markdown from the original answer source', () => {
+  assert.match(html, /answerSource \+= ev\.delta/);
+  assert.match(html, /MarkdownRenderer\.render\(answer, answerSource\)/);
+  assert.doesNotMatch(html, /MarkdownRenderer\.render\(answer, answer\.textContent\)/);
+});
+
+test('conversation history restores persisted reasoning drafts', () => {
+  assert.match(html, /function appendReasoning\(value = "", open = true\)/);
+  assert.match(html, /if \(m\.reasoning\) appendReasoning\(m\.reasoning, false\)/);
 });
 
 test('student chat input supports multiline text and explicit keyboard sending', () => {

@@ -777,7 +777,7 @@
             const button = document.createElement("button"),
               name = text("strong", item.id === activeSkillID && skillDirty ? draft.name || "未命名 Skill" : item.name),
               mode = item.trigger_mode === "explicit" ? "明确调用" : "自动判断",
-              state = text("small", item.enabled ? `${mode} · ${item.id === activeSkillID && skillDirty ? draft.summary || draft.name : item.summary || item.name}` : "已停用");
+              state = text("small", item.enabled ? mode : "已停用");
             button.type = "button";
             button.className = item.id === activeSkillID ? "active" : "";
             button.append(name, state);
@@ -1054,14 +1054,15 @@
           $("chatForm").requestSubmit();
         }
       });
-      function appendReasoning() {
+      function appendReasoning(value = "", open = true) {
         const box = document.createElement("details"),
           summary = document.createElement("summary"),
           content = document.createElement("pre"),
           note = document.createElement("small");
         box.className = "reasoning";
-        box.open = true;
-        summary.textContent = "正在思考…";
+        box.open = open;
+        summary.textContent = open ? "正在思考…" : "思考草稿";
+        content.textContent = value;
         note.textContent = "这是模型生成的思考草稿，可能不准确。";
         box.append(summary, content, note);
         $("messages").append(box);
@@ -1132,19 +1133,21 @@
             } catch {}
           }
         }
-        else if (m.role === "assistant" && !m.tool_calls)
-          appendMessage(m.content, "assistant", true);
-        else if (m.role === "assistant" && m.tool_calls) {
-          try {
-            JSON.parse(m.tool_calls).forEach((c, i) =>
-              actionBox({
-                step: i + 1,
-                tool: c.function?.name || "工具",
-                summary: c.function?.arguments || "",
-                detail: c,
-              }),
-            );
-          } catch {}
+        else if (m.role === "assistant") {
+          if (m.reasoning) appendReasoning(m.reasoning, false);
+          if (!m.tool_calls) appendMessage(m.content, "assistant", true);
+          else {
+            try {
+              JSON.parse(m.tool_calls).forEach((c, i) =>
+                actionBox({
+                  step: i + 1,
+                  tool: c.function?.name || "工具",
+                  summary: c.function?.arguments || "",
+                  detail: c,
+                }),
+              );
+            } catch {}
+          }
         } else if (m.role === "tool")
           appendMessage("工具结果：" + m.content, "action");
       }
@@ -1159,9 +1162,17 @@
         applyLock();
         $("stop").classList.remove("hidden");
         let answer = null,
+          answerSource = "",
+          answerRendered = false,
           reasoning = null,
           receiptBox = null,
           receiptEvent = null;
+        const renderAnswer = () => {
+          if (!answer || answerRendered) return;
+          flushDeltas(true);
+          MarkdownRenderer.render(answer, answerSource);
+          answerRendered = true;
+        };
         const handleEvent = (ev) => {
           if (ev.type === "turn_start") {
             receiptEvent = ev;
@@ -1188,13 +1199,13 @@
               reasoning.summary.textContent = "思考草稿";
             }
             if (!answer) answer = appendMessage("", "assistant");
+            answerSource += ev.delta;
             queueDelta(answer, ev.delta);
           } else if (ev.type === "tool_start") actionBox(ev);
           else if (ev.type === "tool_result")
             appendMessage(`工具返回：${ev.summary}`, "action");
           else if (ev.type === "turn_end") {
-            flushDeltas(true);
-            if (answer) MarkdownRenderer.render(answer, answer.textContent);
+            renderAnswer();
             if (reasoning) reasoning.summary.textContent = "思考草稿";
           }
           else if (ev.type === "error") throw new Error(ev.message);
@@ -1233,7 +1244,7 @@
           $("chatStatus").textContent =
             err.name === "AbortError" ? "已停止生成" : err.message;
         } finally {
-          if (answer) MarkdownRenderer.render(answer, answer.textContent);
+          renderAnswer();
           controller = null;
           $("stop").classList.add("hidden");
           applyLock();

@@ -176,6 +176,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		}
 		streamedText := false
 		streamedChars := 0
+		var displayedReasoning strings.Builder
 		completion, callErr := e.callWithRetry(ctx, CompletionRequest{Model: e.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, EnableWebSearch: e.HostedWebSearch && contains(effectiveTools, "web_search"), BeforeCall: req.BeforeModelCall, OnHostedTool: func(event HostedToolEvent) error {
 			id := strings.TrimSpace(event.ID)
 			if id == "" {
@@ -218,6 +219,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 				return nil
 			}
 			reasoningChars += utf8.RuneCountInString(delta)
+			displayedReasoning.WriteString(delta)
 			return emit(Event{Type: "reasoning_delta", Delta: delta})
 		}, OnDelta: func(delta string) error {
 			remaining := e.MaxOutputChars - streamedChars
@@ -235,6 +237,17 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		if callErr != nil {
 			return callErr
 		}
+		if displayedReasoning.Len() == 0 && completion.Reasoning != "" {
+			delta := truncateRunes(completion.Reasoning, e.MaxReasoningChars-reasoningChars)
+			if delta != "" {
+				reasoningChars += utf8.RuneCountInString(delta)
+				displayedReasoning.WriteString(delta)
+				if err := emit(Event{Type: "reasoning_delta", Delta: delta}); err != nil {
+					return err
+				}
+			}
+		}
+		visibleReasoning := displayedReasoning.String()
 		totalIn += completion.TokensIn
 		totalOut += completion.TokensOut
 		if completion.TokensIn == 0 && completion.TokensOut == 0 {
@@ -264,7 +277,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 				}
 			}
 			final := truncateRunes(completion.Content, e.MaxOutputChars)
-			if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: final, FinishReason: "completed"}); err != nil {
+			if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: final, Reasoning: visibleReasoning, FinishReason: "completed"}); err != nil {
 				return err
 			}
 			if err := emit(Event{Type: "turn_end", TurnID: req.TurnID, Reason: "completed", TokensIn: totalIn, TokensOut: totalOut}); err != nil {
@@ -301,7 +314,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		}
 		toolCounts = nextToolCounts
 		callJSON, _ := json.Marshal(completion.ToolCalls)
-		if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: completion.Content, ToolCalls: string(callJSON), Reasoning: completion.Reasoning}); err != nil {
+		if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", Content: completion.Content, ToolCalls: string(callJSON), Reasoning: visibleReasoning}); err != nil {
 			return err
 		}
 		messages = append(messages, Message{Role: "assistant", Content: completion.Content, Reasoning: completion.Reasoning, ToolCalls: completion.ToolCalls, RawResponseItems: completion.RawResponseItems})

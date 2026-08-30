@@ -258,6 +258,38 @@ func TestStudentLoginDesignChatAndReplacement(t *testing.T) {
 	}
 }
 
+func TestStudentMessageHistoryIncludesPersistedReasoning(t *testing.T) {
+	handler, st := testServer(t)
+	student := newClient(handler)
+	if status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"}); status != http.StatusOK {
+		t.Fatalf("login status=%d", status)
+	}
+	status, conversation, _ := requestJSON(t, student, http.MethodPost, "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatalf("create conversation status=%d", status)
+	}
+	run, err := st.ActiveRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversationID := conversation["id"].(string)
+	if _, err = st.AddMessage(context.Background(), store.Message{
+		RunID: run.ID, StudentID: "2101", ConversationID: conversationID,
+		TurnID: "turn_reasoning", Role: "assistant", Content: "最终答案", Reasoning: "先检查条件",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status, history, raw := requestJSON(t, student, http.MethodGet, "/api/messages?conversation_id="+conversationID, nil)
+	if status != http.StatusOK {
+		t.Fatalf("history status=%d body=%s", status, raw)
+	}
+	messages := history["messages"].([]any)
+	message := messages[0].(map[string]any)
+	if message["reasoning"] != "先检查条件" || strings.Contains(raw, "reasoning_content") {
+		t.Fatalf("history did not expose the persisted display draft safely: %s", raw)
+	}
+}
+
 func TestStudentSkillCRUDIsScoped(t *testing.T) {
 	handler, _ := testServer(t)
 	student := newClient(handler)

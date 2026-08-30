@@ -371,7 +371,16 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 	if len(items) > 0 {
 		next = items[len(items)-1].ID
 	}
-	writeJSON(w, 200, map[string]any{"messages": items, "next_cursor": next})
+	messages := make([]studentMessage, 0, len(items))
+	for _, item := range items {
+		messages = append(messages, studentMessage{
+			ID: item.ID, ConversationID: item.ConversationID, TurnID: item.TurnID,
+			Role: item.Role, Content: item.Content, ToolCalls: item.ToolCalls,
+			Reasoning: item.Reasoning, FinishReason: item.FinishReason,
+			ContextReceipt: item.ContextReceipt, CreatedAt: item.CreatedAt,
+		})
+	}
+	writeJSON(w, 200, map[string]any{"messages": messages, "next_cursor": next})
 }
 
 func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {

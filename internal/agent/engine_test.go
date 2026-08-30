@@ -136,6 +136,9 @@ func TestEngineToolLoop(t *testing.T) {
 	if msgs[1].Reasoning != "需要精确计算" {
 		t.Fatalf("tool protocol reasoning was not persisted: %#v", msgs[1])
 	}
+	if msgs[3].Reasoning != "工具结果可用" {
+		t.Fatalf("final reasoning was not persisted: %#v", msgs[3])
+	}
 	if msgs[3].FinishReason != "completed" {
 		t.Fatalf("completion reason was not persisted: %#v", msgs[3])
 	}

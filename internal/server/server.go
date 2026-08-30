@@ -83,6 +83,19 @@ type screenMessage struct {
 	Current      bool   `json:"current,omitempty"`
 }
 
+type studentMessage struct {
+	ID             int64     `json:"id"`
+	ConversationID string    `json:"conversation_id"`
+	TurnID         string    `json:"turn_id"`
+	Role           string    `json:"role"`
+	Content        string    `json:"content"`
+	ToolCalls      string    `json:"tool_calls,omitempty"`
+	Reasoning      string    `json:"reasoning,omitempty"`
+	FinishReason   string    `json:"finish_reason,omitempty"`
+	ContextReceipt string    `json:"context_receipt,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 type Server struct {
 	Config              config.Config
 	Store               *store.Store
