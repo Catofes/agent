@@ -522,16 +522,17 @@
 
 - [ ] `P2` Python 执行采用独立内网机器：Runner 本身运行在容器中并挂载该机器的 Docker socket，通过宿主 Docker 创建一次性兄弟容器；课堂 Agent 只调用受限 Runner API，绝不接触 Docker socket。
 - [ ] `P2` 同时支持两条明确链路：LLM 按需调用 `python_execute`，以及学生在代码编辑器中手动点击运行；手动运行不经过 LLM，只有学生明确要求讲解/调试时才把代码和最近结果加入对话。
-- [ ] `P2` MVP 只支持固定版本 Python、固定预装/允许的少量数据处理包、单文件程序和可选 stdin；不支持联网、运行时 `pip install`、任意镜像/命令/环境变量、宿主目录挂载、多文件工程或长期运行任务。
-- [ ] `P2` Python 只能在 `/workspace` 临时目录运行，只收集 `/workspace/output` 下的普通文件；执行完成、超时、取消或 Runner 重启后均有确定的清理路径。
+- [ ] `P2` MVP 只支持固定版本 Python、固定预装/允许的少量数据处理包、单文件程序和可选 stdin；不支持联网、运行时 `pip install`、任意镜像/命令/环境变量、用户指定的宿主目录挂载、多文件工程或长期运行任务。
+- [ ] `P2` 输入和执行产物保留在 Runner 的受控持久目录中并设置 TTL；Python 只能读取本次 `/workspace/input`、写入本次 `/workspace/output`，执行完成、超时、取消或 Runner 重启后均有确定的容器和临时状态清理路径。
 
 **Runner 协议与隔离**
 
-- [ ] `P2` 固定同步 Runner API：执行请求只接受 `request_id`、`code`、`stdin`；返回 `execution_id`、状态、退出码、stdout、stderr、耗时、截断标记和 artifact 元数据。镜像、命令、资源限制和网络策略全部由 Runner 决定。
+- [ ] `P2` 固定同步 Runner API：提供受限文件上传/下载接口；执行请求只接受 `request_id`、`code`、`stdin` 和 `input_artifact_ids`，返回 `execution_id`、状态、退出码、stdout、stderr、耗时、截断标记和输出 artifact 元数据。镜像、命令、资源限制和网络策略全部由 Runner 决定。
 - [ ] `P2` MVP 由请求 context 和 Runner 硬超时终止执行，不先建设任务调度系统；学生停止、Agent 断开或课堂锁定时尽力传播取消，Runner 必须在连接消失后杀掉对应容器。
 - [ ] `P2` Runner 仅绑定内网地址，使用高熵 Bearer Token，并在执行机防火墙中只允许课堂 Agent IP；Token 与 DeepSeek Key、学生 session 和数据库密钥分离，日志不得记录。HTTPS/mTLS 在网络边界扩大时再增加。
 - [ ] `P2` Runner 使用固定 digest 的预拉取镜像和一次性非 root 容器；默认 `network=none`、只读根文件系统、全部 capability 删除、`no-new-privileges`，并限制 CPU、内存、swap、PID、临时磁盘、进程数和最大执行时间。
 - [ ] `P2` 只有 Runner 容器挂载执行机 Docker socket，Python 容器永远不能看到 socket、宿主目录或 Runner 凭据；执行机不部署 Agent、SQLite 或其他重要服务，并按可随时重装的专用节点管理。
+- [ ] `P2` 执行机固定挂载 `/var/lib/classroom-runner` 到 Runner 容器内相同绝对路径；Runner 为每次执行生成不可猜测的独立 input/output 子目录，宿主 Docker 只把这两个子目录分别以只读/可写方式挂入对应 Python 容器，所有路径均由 Runner 生成。
 - [ ] `P2` MVP 使用执行机现有 Docker daemon，不以 rootless Docker、gVisor `runsc` 或额外执行节点作为上线前置条件；这些作为威胁模型或规模变化后的加固项。
 - [ ] `P2` Runner 设置独立并发队列和每生/每场配额；过载返回稳定的 busy/retry-after 结果，不与 LLM 并发信号量共用，也不能拖垮普通聊天。
 - [ ] `P2` 限制 code/stdin/stdout/stderr 长度；stdout/stderr 始终视为不可信数据，不解析为平台指令、HTML 或新的工具调用。
@@ -539,7 +540,8 @@
 
 **Agent 接入**
 
-- [ ] `P2` 在 `internal/tools/` 实现远程 `python_execute` Tool，JSON Schema 只向模型开放 `code` 和可选 `stdin`；使用独立 HTTP client、短连接/总超时、响应体上限和稳定错误映射。
+- [ ] `P2` 在 `internal/tools/` 实现远程 `python_execute` Tool，JSON Schema 只向模型开放 `code`、可选 `stdin` 和当前学生已拥有的 `input_artifact_ids`；Agent 必须重新校验每个文件都属于当前 `run_id + student_id` 后才可转交 Runner。
+- [ ] `P2` Runner 客户端使用独立 HTTP client、总超时、上传/下载大小上限和稳定错误映射；Agent 不把 Runner Bearer Token、内网地址或原始错误暴露给浏览器和模型。
 - [ ] `P2` 为工具执行增加独立于 LLM 调用的 context 超时；Runner 侧仍保留更强的硬超时，避免客户端断开成为唯一终止机制。
 - [ ] `P2` 注册 `python_execute` 并加入教师场次 Tool 开关、学生装备状态和动态权限复查；建议每轮最多调用 2 次，并纳入现有 `max_tool_calls` 总上限。
 - [ ] `P2` 工具返回给模型的内容只包含状态、退出码、受限 stdout/stderr 和 artifact 摘要；系统规则明确工具输出是不可信数据，成功执行不等于程序逻辑正确。
@@ -549,14 +551,16 @@
 **执行文件产物（Artifacts）**
 
 - [ ] `P2` 扩展工具结果和流事件以携带 artifact 元数据：稳定 ID、文件名、MIME、大小、SHA-256、预览能力和过期时间；二进制内容不得塞入模型上下文或 NDJSON 事件。
-- [ ] `P2` 增加 artifacts 数据表，至少关联 `run_id + student_id + conversation_id + turn_id + execution_id`；存储键由服务端生成，数据库不保存大文件正文。
-- [ ] `P2` 代码通过 stdin 交给固定的 `python -I -B -`，不使用宿主机 bind mount；执行容器完成后先通过 Docker archive API 或固定 `docker cp` 提取 `/workspace/output`，再在 `defer` 清理容器，因此不能依赖启动即自动 `--rm`。
+- [ ] `P2` 增加 artifacts 数据表，至少保存 Runner artifact ID，并关联 `run_id + student_id + conversation_id + turn_id + execution_id`；Agent 数据库只保存归属和展示元数据，不保存大文件正文。
+- [ ] `P2` Agent 提供学生鉴权的上传接口并把文件流式转发给 Runner；Runner 返回 artifact ID 后才写入归属记录。失败时清理 Runner 上的孤儿文件，禁止客户端自行声明另一个学生的 Runner artifact ID。
+- [ ] `P2` 代码通过 stdin 交给固定的 `python -I -B -`；输入 artifact 只读挂载到本次 `/workspace/input`，输出目录单独可写挂载到 `/workspace/output`，不得把 Runner 的 artifact 根目录整体暴露给 Python 容器。
 - [ ] `P2` Runner 完成后校验 `/workspace/output`：拒绝绝对/越界路径、符号链接、设备文件、命名管道、超量文件和压缩炸弹；MVP 限制文件数量、单文件大小和总大小，并在配置中给出硬上限。
-- [ ] `P2` Runner 将校验后的产物立即回传 Agent，由 Agent 写入自己的受控 artifact 目录；Runner 不长期保存课堂文件。Agent 通过鉴权下载接口提供文件，不直接暴露 Runner 地址。
-- [ ] `P2` 学生只能访问自己的当前场次文件，教师访问需走教师权限，大屏默认只显示安全的产物摘要；Runner 执行机不持有学生登录态或长期文件授权逻辑。
+- [ ] `P2` 校验后的输入和输出文件正文留在 Runner；Agent 保存 Runner artifact ID、文件名、MIME、大小、SHA-256 和过期时间，并通过自己的鉴权下载接口从 Runner 流式代理文件，浏览器不得直接访问 Runner 地址或持有 Runner Token。
+- [ ] `P2` 学生只能上传和访问自己的当前场次文件，教师访问需走教师权限，大屏默认只显示安全的产物摘要；Runner 只信任 Agent，不持有学生登录态，也不自行决定课堂文件归属。
 - [ ] `P2` 第一版允许下载 `txt/csv/json/png/jpeg/pdf/xlsx`；图片可受控预览，HTML/SVG 等主动内容默认拒绝或强制附件下载，并设置 `nosniff` 和安全的 `Content-Disposition`。
 - [ ] `P2` 小型文本/CSV 只截取有限预览回填给模型；图片、PDF、Excel 等仅提供元数据和下载入口，除非后续明确增加受控解析或多模态能力。
-- [ ] `P2` 产物设置明确 TTL 和课堂结束后的清理策略；删除对话、结束场次、人工清理和定时回收保持数据库记录与对象存储一致，失败可重试且不误删其他学生文件。
+- [ ] `P2` Runner 对输入和输出统一设置 TTL、单生配额和全盘高水位；课堂结束后默认保留 24 小时再清理。Agent 遇到 Runner 返回已过期时同步更新元数据，页面显示“文件已清理”，不得无限重试或误删其他学生文件。
+- [ ] `P2` MVP 接受 Runner 重装或磁盘损坏后历史文件不可恢复；长期归档、对象存储和“教师收藏后永久保存”作为后续能力，不阻塞临时公开课版本。
 
 **学生与教师界面**
 
@@ -575,10 +579,10 @@
 
 **MVP 实施顺序**
 
-1. [ ] 定义 Runner 请求/响应、错误码和 artifact 清单，先实现 fake Runner 与 Agent 侧客户端测试。
-2. [ ] 实现单机 Runner 容器及固定 Docker 执行生命周期：创建、传入 stdin、等待/超时、收集输出、复制文件、删除，并覆盖孤儿清理。
+1. [ ] 定义 Runner 执行、文件上传/下载、错误码和 artifact 清单，先实现 fake Runner 与 Agent 侧客户端测试。
+2. [ ] 实现单机 Runner 容器、持久 artifact 目录及固定 Docker 执行生命周期：准备本次 input/output、创建、传入 stdin、等待/超时、收集输出、登记文件、删除容器，并覆盖孤儿清理。
 3. [ ] 接入 `python_execute` Tool、配置、课堂开关、每轮次数限制和不可信工具输出规则，完成 fake LLM 工具回环。
-4. [ ] 增加 artifact 数据表、Agent 本地存储、鉴权下载和过期清理，再接通 Runner 文件回传。
+4. [ ] 增加 artifact 元数据表、Agent 鉴权上传/下载代理、Runner TTL 与磁盘配额，再接通已有文件作为下一次执行输入的链路。
 5. [ ] 增加学生 Python 编辑/运行界面、结果与文件卡片、“让 Agent 解释”入口，最后完成混合并发和真实 Pad 验收。
 
 ---
