@@ -48,6 +48,12 @@ type principal struct {
 	Student store.Student
 }
 
+const (
+	legacySessionCookie  = "classroom_session"
+	studentSessionCookie = "classroom_student_session"
+	teacherSessionCookie = "classroom_teacher_session"
+)
+
 type classroomEvent struct {
 	Type         string            `json:"type"`
 	Locked       bool              `json:"locked"`
@@ -183,6 +189,8 @@ func (s *Server) Routes() http.Handler {
 			})
 			r.Route("/teacher", func(r chi.Router) {
 				r.Use(s.requireTeacher)
+				r.Get("/me", s.me)
+				r.Post("/logout", s.logout)
 				r.Get("/wall", s.wallEvents)
 				r.Get("/policy", s.getTeacherPolicy)
 				r.Put("/policy", s.setTeacherPolicy)
@@ -278,7 +286,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.studentHub.Publish(classroomEvent{Type: "session_invalidated", Target: st.ID})
-	s.setCookie(w, raw)
+	s.setCookie(w, raw, false)
 	s.wallHub.Publish(struct{}{})
 	writeJSON(w, 200, map[string]any{"student": st, "run": run})
 }
@@ -310,13 +318,13 @@ func (s *Server) teacherLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "INTERNAL_ERROR", "登录失败")
 		return
 	}
-	s.setCookie(w, raw)
+	s.setCookie(w, raw, true)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("classroom_session")
+		cookie, err := sessionCookie(r)
 		if err != nil {
 			writeError(w, 401, "UNAUTHENTICATED", "请先登录")
 			return
@@ -374,11 +382,14 @@ func principalOf(r *http.Request) principal {
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	c, _ := r.Cookie("classroom_session")
-	if c != nil {
-		_ = s.Store.RevokeSession(r.Context(), hashToken(c.Value))
+	p := principalOf(r)
+	_ = s.Store.RevokeSession(r.Context(), p.Session.TokenHash)
+	name := studentSessionCookie
+	if p.Session.IsTeacher {
+		name = teacherSessionCookie
 	}
-	http.SetCookie(w, &http.Cookie{Name: "classroom_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.Config.CookieSecure})
+	s.clearCookie(w, name)
+	s.clearCookie(w, legacySessionCookie)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -395,8 +406,32 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"role": "student", "student": p.Student, "run": run})
 }
-func (s *Server) setCookie(w http.ResponseWriter, raw string) {
-	http.SetCookie(w, &http.Cookie{Name: "classroom_session", Value: raw, Path: "/", MaxAge: int(s.Config.SessionTTL.Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.Config.CookieSecure})
+func (s *Server) setCookie(w http.ResponseWriter, raw string, teacher bool) {
+	name := studentSessionCookie
+	if teacher {
+		name = teacherSessionCookie
+	}
+	http.SetCookie(w, &http.Cookie{Name: name, Value: raw, Path: "/", MaxAge: int(s.Config.SessionTTL.Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.Config.CookieSecure})
+}
+
+func (s *Server) clearCookie(w http.ResponseWriter, name string) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.Config.CookieSecure})
+}
+
+func sessionCookie(r *http.Request) (*http.Cookie, error) {
+	primary, secondary := studentSessionCookie, teacherSessionCookie
+	if strings.HasPrefix(r.URL.Path, "/api/teacher/") {
+		primary, secondary = teacherSessionCookie, studentSessionCookie
+	}
+	// Prefer the role-specific cookie, then the pre-v0.4.2 cookie so an existing
+	// session survives the upgrade. The opposite role is considered last only
+	// to preserve the existing 403 response on cross-role API access.
+	for _, name := range []string{primary, legacySessionCookie, secondary} {
+		if cookie, err := r.Cookie(name); err == nil {
+			return cookie, nil
+		}
+	}
+	return nil, http.ErrNoCookie
 }
 
 func newToken() (string, string, error) {

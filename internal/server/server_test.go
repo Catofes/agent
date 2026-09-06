@@ -188,9 +188,12 @@ func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (
 type testClient struct {
 	handler http.Handler
 	cookie  *http.Cookie
+	cookies map[string]*http.Cookie
 }
 
-func newClient(handler http.Handler) *testClient { return &testClient{handler: handler} }
+func newClient(handler http.Handler) *testClient {
+	return &testClient{handler: handler, cookies: map[string]*http.Cookie{}}
+}
 
 func requestJSON(t *testing.T, c *testClient, method, target string, body any) (int, map[string]any, string) {
 	t.Helper()
@@ -203,18 +206,22 @@ func requestJSON(t *testing.T, c *testClient, method, target string, body any) (
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.cookie != nil {
-		req.AddCookie(c.cookie)
+	for _, cookie := range c.cookies {
+		req.AddCookie(cookie)
 	}
 	rec := httptest.NewRecorder()
 	c.handler.ServeHTTP(rec, req)
 	resp := rec.Result()
 	defer resp.Body.Close()
 	for _, cookie := range resp.Cookies() {
-		if cookie.Name == "classroom_session" {
+		if cookie.Name == legacySessionCookie || cookie.Name == studentSessionCookie || cookie.Name == teacherSessionCookie {
 			if cookie.MaxAge < 0 {
-				c.cookie = nil
+				delete(c.cookies, cookie.Name)
+				if c.cookie != nil && c.cookie.Name == cookie.Name {
+					c.cookie = nil
+				}
 			} else {
+				c.cookies[cookie.Name] = cookie
 				c.cookie = cookie
 			}
 		}
@@ -578,6 +585,38 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 	status, _, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": "magic", "allowed_tools": []string{}})
 	if status != http.StatusBadRequest {
 		t.Fatalf("invalid policy status=%d", status)
+	}
+}
+
+func TestTeacherAndStudentSessionsCoexistInOneBrowser(t *testing.T) {
+	handler, _ := testServer(t)
+	browser := newClient(handler)
+	status, _, _ := requestJSON(t, browser, http.MethodPost, "/api/login", map[string]string{"id": "2101"})
+	if status != http.StatusOK {
+		t.Fatalf("student login status=%d", status)
+	}
+	status, _, _ = requestJSON(t, browser, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"})
+	if status != http.StatusOK {
+		t.Fatalf("teacher login status=%d", status)
+	}
+	if len(browser.cookies) != 2 {
+		t.Fatalf("browser cookies=%v", browser.cookies)
+	}
+	status, student, _ := requestJSON(t, browser, http.MethodGet, "/api/me", nil)
+	if status != http.StatusOK || student["role"] != "student" {
+		t.Fatalf("student refresh status=%d body=%v", status, student)
+	}
+	status, teacher, _ := requestJSON(t, browser, http.MethodGet, "/api/teacher/me", nil)
+	if status != http.StatusOK || teacher["role"] != "teacher" {
+		t.Fatalf("teacher refresh status=%d body=%v", status, teacher)
+	}
+	status, _, _ = requestJSON(t, browser, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeDisabled, "allowed_tools": []string{}})
+	if status != http.StatusOK {
+		t.Fatalf("save policy status=%d", status)
+	}
+	status, student, _ = requestJSON(t, browser, http.MethodGet, "/api/me", nil)
+	if status != http.StatusOK || student["role"] != "student" {
+		t.Fatalf("student refresh after policy save status=%d body=%v", status, student)
 	}
 }
 
