@@ -1,10 +1,10 @@
 services:
   python-runtime:
-    profiles: [image]
     image: classroom-python:latest
     build:
       context: ..
       dockerfile: Dockerfile.python
+    restart: "no"
     command: ["python", "-c", "print('runtime image ready')"]
 
   runner:
@@ -13,9 +13,12 @@ services:
       context: ..
       dockerfile: Dockerfile.runner
     restart: unless-stopped
+    depends_on:
+      python-runtime:
+        condition: service_completed_successfully
     environment:
       RUNNER_LISTEN_ADDR: ":8090"
-      RUNNER_TOKEN: "${RUNNER_TOKEN:?set RUNNER_TOKEN}"
+      RUNNER_TOKEN: "${RUNNER_TOKEN:?set RUNNER_TOKEN in deploy/.env}"
       RUNNER_STORAGE_PATH: /var/lib/classroom-runner
       RUNNER_PYTHON_IMAGE: classroom-python:latest
       RUNNER_EXECUTION_TIMEOUT: 5s

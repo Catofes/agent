@@ -544,15 +544,30 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatal(status)
 	}
+	stream, cancelStream, streamDone := startHandlerStream(handler, http.MethodGet, "/api/events", student.cookie, nil)
+	defer func() {
+		cancelStream()
+		<-streamDone
+	}()
+	if initial := waitSSEJSON(t, stream, 1); initial["type"] != "classroom" {
+		t.Fatalf("initial classroom event=%v", initial)
+	}
 	status, policy, _ := requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeDisabled, "allowed_tools": []string{}})
 	if status != http.StatusOK || policy["memory_mode"] != store.MemoryModeDisabled || policy["revision"].(float64) != 2 {
 		t.Fatalf("policy update status=%d body=%#v", status, policy)
+	}
+	if update := waitSSEJSON(t, stream, 2); update["type"] != "classroom_policy" || update["revision"].(float64) != 2 {
+		t.Fatalf("policy SSE=%v", update)
+	}
+	status, body, _ := requestJSON(t, student, http.MethodGet, "/api/me", nil)
+	if status != http.StatusOK || body["role"] != "student" {
+		t.Fatalf("policy save invalidated student session: status=%d body=%#v", status, body)
 	}
 	status, capabilities, _ = requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
 	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeDisabled || len(capabilities["allowed_tools"].([]any)) != 0 {
 		t.Fatalf("updated capabilities status=%d body=%#v", status, capabilities)
 	}
-	status, body, _ := requestJSON(t, student, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})
+	status, body, _ = requestJSON(t, student, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})
 	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "MEMORY_DISABLED_BY_TEACHER" {
 		t.Fatalf("disabled memory setting status=%d body=%#v", status, body)
 	}

@@ -397,10 +397,11 @@
           </div>
           <div class="design-options">
             <div class="tool-options" aria-label="Agent 工具">
-              <label class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
+              <label id="calculatorOption" class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
               <label id="webSearchOption" class="tool-option hidden"><input id="webSearch" type="checkbox" /> <span>🔎 搜索网上信息</span></label>
-              <label class="tool-option"><input id="webFetch" type="checkbox" /> <span>🌐 访问公开网页</span></label>
+              <label id="webFetchOption" class="tool-option"><input id="webFetch" type="checkbox" /> <span>🌐 访问公开网页</span></label>
               <label id="pythonOption" class="tool-option hidden"><input id="pythonExecute" type="checkbox" /> <span>🐍 使用 Python</span></label>
+              <small id="toolPolicyStatus" class="status"></small>
             </div>
             <div class="turn-option">
               <label for="maxTurns">最大步数 <strong id="turnValue">30</strong></label>
@@ -632,14 +633,8 @@
           const maxInputChars = caps.max_input_chars || 12000;
           $("chatInput").maxLength = maxInputChars;
           updateChatInput();
-          $("webSearchOption").classList.toggle(
-            "hidden",
-            !caps.available_tools.includes("web_search"),
-          );
-          const pythonAvailable = caps.available_tools.includes("python_execute");
-          $("pythonOption").classList.toggle("hidden", !pythonAvailable);
-          $("pythonLab").classList.toggle("hidden", !pythonAvailable);
           $("pythonCode").maxLength = caps.max_python_code_chars || 65536;
+          renderCapabilities();
           skillItems = skills.skills || [];
           skillLimit = skills.limit || 12;
           activeSkillID = skillItems[0]?.id || null;
@@ -1513,6 +1508,32 @@
           );
         $("locked").classList.toggle("hidden", !locked);
       }
+      function renderCapabilities(changed = false) {
+        if (!capabilities) return;
+        const available = new Set(capabilities.available_tools || []),
+          allowed = new Set(capabilities.allowed_tools || []),
+          items = [
+            ["calculator", "calculatorOption", "calculator"],
+            ["web_search", "webSearchOption", "webSearch"],
+            ["web_fetch", "webFetchOption", "webFetch"],
+            ["python_execute", "pythonOption", "pythonExecute"],
+          ];
+        items.forEach(([name, optionID, inputID]) => {
+          const option = $(optionID),
+            exists = available.has(name),
+            enabled = exists && allowed.has(name);
+          option.classList.toggle("hidden", !exists);
+          option.classList.toggle("policy-disabled", exists && !enabled);
+          option.title = exists && !enabled ? "老师当前未开放这项课堂能力" : "";
+          $(inputID).setAttribute("aria-disabled", String(!enabled));
+        });
+        const pythonAllowed =
+          available.has("python_execute") && allowed.has("python_execute");
+        $("pythonLab").classList.toggle("hidden", !pythonAllowed);
+        $("toolPolicyStatus").textContent = changed
+          ? "老师已更新课堂能力，本页状态已自动同步，无需重新登录。"
+          : "未开放的能力会在老师保存设置后自动同步。";
+      }
       function connectEvents() {
         const es = new EventSource("/api/events");
         es.addEventListener("classroom", (e) => {
@@ -1527,6 +1548,9 @@
             };
             if (memoryState) memoryState.mode = d.memory_mode;
           }
+          if (pythonController && !capabilities.allowed_tools.includes("python_execute"))
+            pythonController.abort();
+          renderCapabilities(d.type === "classroom_policy");
           applyLock();
         });
         es.addEventListener("memory", async (e) => {

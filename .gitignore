@@ -4,5 +4,6 @@
 /data/backups/
 /data/students.csv
 /.env
+/deploy/.env
 /config.yaml
 *.log

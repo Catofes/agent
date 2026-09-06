@@ -29,8 +29,10 @@ test("student Python lab supports manual execution, files, cancellation and expl
 });
 
 test("Python is exposed through student and teacher tool controls only when available", () => {
-  assert.match(html, /available_tools\.includes\("python_execute"\)/);
   assert.match(html, /allowed_tools\.includes\("python_execute"\)/);
+  assert.match(html, /function renderCapabilities\(changed = false\)/);
+  assert.match(html, /pythonLab"\)\.classList\.toggle\("hidden", !pythonAllowed\)/);
+  assert.match(html, /无需重新登录/);
   assert.match(html, /python_execute: "Python 执行"/);
   assert.match(teacher, /python_execute: "Python 执行"/);
 });

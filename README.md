@@ -91,20 +91,25 @@ DEEPSEEK_API_KEY='...' make smoke-real
 
 Python 能力默认不注册，不影响原有课堂功能。临时公开课推荐把 Runner 部署在一台专用内网 Docker 主机：Runner 自己运行在容器中、持有该主机的 Docker socket，再为每次运行创建无网络的一次性 Python 兄弟容器。课堂 Agent 只访问 Runner HTTP API，不挂载 Docker socket。
 
-在执行机的仓库目录中准备独立的高熵 Token，然后构建固定运行镜像并启动 Runner：
+第一次部署时，进入 `deploy/`，复制环境变量示例并把其中的占位值替换成与课堂 Agent 完全相同的 `RUNNER_TOKEN`：
 
 ```bash
-export RUNNER_TOKEN="$(openssl rand -hex 32)"
-docker compose -f deploy/python-runner.compose.yaml --profile image build
-docker compose -f deploy/python-runner.compose.yaml up -d runner
+cd deploy
+cp .env.example .env
+# 编辑 .env；文件中只需配置一行 RUNNER_TOKEN=...
+docker compose up -d --build
 curl http://127.0.0.1:8090/healthz
 ```
+
+之后在 `deploy/` 中直接运行 `docker compose up -d` 即可。需要按当前源码重新构建镜像时使用 `docker compose up -d --build`。Compose 会先准备固定的 `classroom-python:latest` 运行镜像，再启动 Runner，不需要手动选择 profile 或传 `-f`。
+
+`deploy/.env` 已加入 `.gitignore`，不会提交；仓库只保留不含真实密钥的 `deploy/.env.example`。不要为两台机器分别生成 Token：Runner 和课堂 Agent 的 `RUNNER_TOKEN` 必须逐字一致，否则执行请求会返回 `401 Unauthorized`。
 
 将同一个 Token 安全地配置到课堂 Agent 机器，并重启 Agent：
 
 ```dotenv
 RUNNER_URL='http://10.16.100.20:8090'
-RUNNER_TOKEN='与执行机相同的高熵 Token'
+RUNNER_TOKEN='与 deploy/.env 完全相同的值'
 RUNNER_TIMEOUT='10s'
 MAX_PYTHON_CODE_CHARS='12000'
 MAX_ARTIFACT_BYTES='10485760'
