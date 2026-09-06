@@ -87,6 +87,33 @@ DEEPSEEK_API_KEY='...' make smoke-real
 
 两种模式都沿用教师的课堂 Tool 开关和学生装备状态。`web_fetch` 仍是独立的本地网页读取工具；若不希望课堂服务器直接访问搜索结果网址，应由教师关闭它。
 
+## Python Runner（可选）
+
+Python 能力默认不注册，不影响原有课堂功能。临时公开课推荐把 Runner 部署在一台专用内网 Docker 主机：Runner 自己运行在容器中、持有该主机的 Docker socket，再为每次运行创建无网络的一次性 Python 兄弟容器。课堂 Agent 只访问 Runner HTTP API，不挂载 Docker socket。
+
+在执行机的仓库目录中准备独立的高熵 Token，然后构建固定运行镜像并启动 Runner：
+
+```bash
+export RUNNER_TOKEN="$(openssl rand -hex 32)"
+docker compose -f deploy/python-runner.compose.yaml --profile image build
+docker compose -f deploy/python-runner.compose.yaml up -d runner
+curl http://127.0.0.1:8090/healthz
+```
+
+将同一个 Token 安全地配置到课堂 Agent 机器，并重启 Agent：
+
+```dotenv
+RUNNER_URL='http://10.16.100.20:8090'
+RUNNER_TOKEN='与执行机相同的高熵 Token'
+RUNNER_TIMEOUT='10s'
+MAX_PYTHON_CODE_CHARS='12000'
+MAX_ARTIFACT_BYTES='10485760'
+```
+
+老师还需在课堂能力中开放“Python 执行”，学生才会看到实验台并可为自己的 Agent 装备该工具。学生手动运行不经过 LLM；上传文件与运行产物留在 Runner 的 `/var/lib/classroom-runner`，Agent 的 SQLite 只保存归属及摘要，下载始终经过 Agent 鉴权代理。产物默认保留 24 小时。
+
+这套 Docker-socket 方案意味着 Runner 事实上拥有执行机的 root 级控制权，因此执行机必须专用、可重装，不得与 Agent、数据库或其他重要服务混部。防火墙只允许 Agent IP 访问 8090；不要把 Runner 暴露到公网。正式部署还应把 `classroom-python:latest` 改为审核后镜像的 digest，并监控 `/var/lib/classroom-runner` 磁盘占用。当前 MVP 有单次文件、文件数、输出、CPU、内存、PID、并发和时间限制，但尚未实现每生配额与全盘高水位熔断。
+
 学生单条消息默认最多 12000 个 Unicode 字符，可通过 `MAX_INPUT_CHARS` 调整。输入框支持多行编辑：`Enter` 换行，`Ctrl+Enter`（macOS 为 `⌘+Enter`）发送。当前对话最多向模型组装 500 条已存消息；模型最终可接受的总上下文仍由所选模型决定。
 
 单次模型调用默认允许 180 秒，可通过 `LLM_TIMEOUT` 调整，例如 `LLM_TIMEOUT=180s`。反向代理的读取超时必须更长；仓库提供的 Nginx 示例使用 300 秒。仅调大应用超时无法绕过外层代理的 60 秒限制。

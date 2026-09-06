@@ -21,8 +21,19 @@ type FunctionSpec struct {
 }
 
 type Result struct {
-	ModelText string `json:"model_text"`
-	Summary   string `json:"summary"`
+	ModelText string     `json:"model_text"`
+	Summary   string     `json:"summary"`
+	Artifacts []Artifact `json:"artifacts,omitempty"`
+}
+
+type Artifact struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	MIMEType  string `json:"mime_type"`
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+	Preview   bool   `json:"preview"`
+	ExpiresAt string `json:"expires_at"`
 }
 
 type Tool interface {

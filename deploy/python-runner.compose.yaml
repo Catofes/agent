@@ -1,0 +1,32 @@
+services:
+  python-runtime:
+    profiles: [image]
+    image: classroom-python:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.python
+    command: ["python", "-c", "print('runtime image ready')"]
+
+  runner:
+    image: classroom-python-runner:local
+    build:
+      context: ..
+      dockerfile: Dockerfile.runner
+    restart: unless-stopped
+    environment:
+      RUNNER_LISTEN_ADDR: ":8090"
+      RUNNER_TOKEN: "${RUNNER_TOKEN:?set RUNNER_TOKEN}"
+      RUNNER_STORAGE_PATH: /var/lib/classroom-runner
+      RUNNER_PYTHON_IMAGE: classroom-python:latest
+      RUNNER_EXECUTION_TIMEOUT: 5s
+      RUNNER_ARTIFACT_TTL: 24h
+      RUNNER_CONCURRENCY: 8
+      RUNNER_MEMORY: 256m
+      RUNNER_CPUS: "0.5"
+      RUNNER_PIDS: 64
+    ports:
+      - "8090:8090"
+    volumes:
+      # 这个绝对路径必须在宿主机和 Runner 容器内保持一致，供兄弟容器 bind mount。
+      - /var/lib/classroom-runner:/var/lib/classroom-runner
+      - /var/run/docker.sock:/var/run/docker.sock

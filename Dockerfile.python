@@ -1,0 +1,14 @@
+FROM python:3.13-slim-bookworm
+
+# 第一版固定提供常用的数据处理、绘图和表格包；课堂期间不允许 pip install。
+RUN pip install --no-cache-dir \
+    numpy==2.3.2 \
+    pandas==2.3.1 \
+    matplotlib==3.10.5 \
+    openpyxl==3.1.5 \
+    && rm -rf /root/.cache
+
+ENV PYTHONUNBUFFERED=1 \
+    MPLBACKEND=Agg
+
+WORKDIR /workspace

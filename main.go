@@ -16,6 +16,7 @@ import (
 
 	"classroom-agent/internal/agent"
 	"classroom-agent/internal/config"
+	"classroom-agent/internal/runnerapi"
 	"classroom-agent/internal/server"
 	"classroom-agent/internal/store"
 	"classroom-agent/internal/tools"
@@ -54,6 +55,11 @@ func main() {
 	}
 	searchProvider := strings.ToLower(strings.TrimSpace(cfg.WebSearchProvider))
 	toolItems := []tools.Tool{tools.Calculator{}, tools.NewWebFetch()}
+	var runnerClient *runnerapi.Client
+	if strings.TrimSpace(cfg.RunnerURL) != "" {
+		runnerClient = runnerapi.NewClient(cfg.RunnerURL, cfg.RunnerToken, &http.Client{Timeout: cfg.RunnerTimeout})
+		toolItems = append(toolItems, &tools.PythonExecute{Runner: runnerClient, Store: st, Timeout: cfg.RunnerTimeout, MaxCodeChars: cfg.MaxPythonCodeChars})
+	}
 	switch searchProvider {
 	case "zhipu":
 		toolItems = append(toolItems, tools.NewZhipuSearch(cfg.ZhipuSearchAPIKey, cfg.ZhipuSearchEngine))
@@ -66,7 +72,7 @@ func main() {
 	engine.HostedWebSearch = searchProvider == "deepseek"
 	engine.TokenBudget = cfg.StudentTokenBudget
 	engine.MaxToolCalls = cfg.MaxToolCalls
-	engine.MaxToolCallsByName = map[string]int{"web_search": 2, "web_fetch": 2, "recall_memory": 2}
+	engine.MaxToolCallsByName = map[string]int{"web_search": 2, "web_fetch": 2, "recall_memory": 2, "python_execute": 2}
 	engine.MaxOutputChars = cfg.MaxOutputChars
 	engine.MaxReasoningChars = cfg.MaxReasoningChars
 	engine.MemoryExtractor = agent.LLMMemoryExtractor{Client: client, Model: cfg.DeepSeekModel}
@@ -79,6 +85,7 @@ func main() {
 	webFS, _ := fs.Sub(assets, "web")
 	templateFS, _ := fs.Sub(assets, "data/templates")
 	app := server.New(cfg, st, engine, webFS, templateFS, logger)
+	app.Runner = runnerClient
 	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: app.Routes(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
 	stop := make(chan os.Signal, 2)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

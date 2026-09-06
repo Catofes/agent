@@ -1,4 +1,4 @@
-.PHONY: build release test test-js check smoke smoke-real run dev check-env
+.PHONY: build build-runner release test test-js check smoke smoke-real run dev check-env
 
 GOCACHE ?= /tmp/classroom-agent-gocache
 GOMODCACHE ?= $(shell go env GOMODCACHE)
@@ -11,6 +11,10 @@ VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 build:
 	mkdir -p build
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o build/classroom-agent .
+
+build-runner:
+	mkdir -p build
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go build -trimpath -ldflags "-s -w" -o build/python-runner ./cmd/python-runner
 
 release:
 	mkdir -p build

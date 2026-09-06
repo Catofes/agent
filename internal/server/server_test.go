@@ -21,9 +21,16 @@ import (
 
 	"classroom-agent/internal/agent"
 	"classroom-agent/internal/config"
+	"classroom-agent/internal/runnerapi"
 	"classroom-agent/internal/store"
 	"classroom-agent/internal/tools"
 )
+
+type serverRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn serverRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
 
 type directClient struct{}
 
@@ -216,6 +223,67 @@ func requestJSON(t *testing.T, c *testClient, method, target string, body any) (
 	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
 	return resp.StatusCode, out, string(raw)
+}
+
+func TestPythonManualRunArtifactProxyAndStudentIsolation(t *testing.T) {
+	app, st := testServerWithClient(t, directClient{})
+	app.Config.RunnerTimeout = time.Second
+	app.Config.MaxPythonCodeChars = 1000
+	app.Config.MaxArtifactBytes = 1 << 20
+	runnerHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/executions":
+			_ = json.NewEncoder(w).Encode(runnerapi.ExecuteResponse{
+				ExecutionID: "exec_1", Status: "completed", Stdout: "created\n", DurationMS: 7,
+				Artifacts: []runnerapi.Artifact{{ID: "runner_output", Name: "answer.txt", MIMEType: "text/plain", Size: 6, SHA256: "abc", ExpiresAt: time.Now().Add(time.Hour)}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/artifacts/runner_output":
+			w.Header().Set("Content-Length", "6")
+			_, _ = io.WriteString(w, "answer")
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	runnerHTTP := &http.Client{Transport: serverRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		runnerHandler.ServeHTTP(recorder, request)
+		return recorder.Result(), nil
+	})}
+	app.Runner = runnerapi.NewClient("http://runner.test", "token", runnerHTTP)
+	app.Agent.Tools = tools.NewRegistry(tools.Calculator{}, &tools.PythonExecute{Runner: app.Runner, Store: st, Timeout: time.Second, MaxCodeChars: 1000})
+	run, err := st.ActiveRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.SetRunPolicy(context.Background(), run.ID, store.RunPolicy{MemoryMode: store.MemoryModeReviewRequired, AllowedTools: []string{"calculator", "python_execute"}}); err != nil {
+		t.Fatal(err)
+	}
+	handler := app.Routes()
+	student := newClient(handler)
+	if status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"}); status != http.StatusOK {
+		t.Fatalf("login status=%d", status)
+	}
+	status, conversation, _ := requestJSON(t, student, http.MethodPost, "/api/conversations", map[string]string{})
+	if status != http.StatusCreated {
+		t.Fatalf("conversation status=%d", status)
+	}
+	status, result, raw := requestJSON(t, student, http.MethodPost, "/api/python/run", map[string]any{"conversation_id": conversation["id"], "code": "open('/workspace/output/answer.txt','w').write('answer')"})
+	artifacts, _ := result["artifacts"].([]any)
+	if status != http.StatusOK || result["stdout"] != "created\n" || len(artifacts) != 1 {
+		t.Fatalf("run status=%d result=%#v raw=%s", status, result, raw)
+	}
+	artifactID := artifacts[0].(map[string]any)["id"].(string)
+	status, _, raw = requestJSON(t, student, http.MethodGet, "/api/artifacts/"+artifactID, nil)
+	if status != http.StatusOK || raw != "answer" {
+		t.Fatalf("download status=%d body=%q", status, raw)
+	}
+	other := newClient(handler)
+	if status, _, _ = requestJSON(t, other, http.MethodPost, "/api/login", map[string]string{"id": "2102"}); status != http.StatusOK {
+		t.Fatalf("other login status=%d", status)
+	}
+	if status, _, _ = requestJSON(t, other, http.MethodGet, "/api/artifacts/"+artifactID, nil); status != http.StatusNotFound {
+		t.Fatalf("other student download status=%d", status)
+	}
 }
 
 func TestStudentLoginDesignChatAndReplacement(t *testing.T) {

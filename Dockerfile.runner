@@ -1,0 +1,15 @@
+FROM golang:1.24-bookworm AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/python-runner/ ./cmd/python-runner/
+COPY internal/runner/ ./internal/runner/
+COPY internal/runnerapi/ ./internal/runnerapi/
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /out/python-runner ./cmd/python-runner
+
+FROM alpine:3.22
+RUN apk add --no-cache ca-certificates docker-cli tzdata
+COPY --from=builder /out/python-runner /usr/local/bin/python-runner
+EXPOSE 8090
+ENTRYPOINT ["/usr/local/bin/python-runner"]

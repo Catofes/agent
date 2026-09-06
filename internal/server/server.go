@@ -24,6 +24,7 @@ import (
 
 	"classroom-agent/internal/agent"
 	"classroom-agent/internal/config"
+	"classroom-agent/internal/runnerapi"
 	"classroom-agent/internal/store"
 )
 
@@ -100,6 +101,7 @@ type Server struct {
 	Config              config.Config
 	Store               *store.Store
 	Agent               *agent.Engine
+	Runner              *runnerapi.Client
 	WebFS               fs.FS
 	Templates           fs.FS
 	Logger              *slog.Logger
@@ -167,6 +169,10 @@ func (s *Server) Routes() http.Handler {
 				r.Post("/conversations", s.createConversation)
 				r.Delete("/conversations/{id}", s.deleteConversation)
 				r.Get("/messages", s.messages)
+				r.Get("/artifacts", s.listArtifacts)
+				r.Post("/artifacts", s.uploadArtifact)
+				r.Get("/artifacts/{id}", s.downloadArtifact)
+				r.Post("/python/run", s.runPython)
 				r.Get("/memory", s.getMemory)
 				r.Put("/memory/settings", s.setMemorySettings)
 				r.Patch("/memory/{id}", s.updateMemory)
@@ -207,7 +213,11 @@ func (s *Server) page(name string) http.HandlerFunc {
 func (s *Server) limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+			limit := int64(64 << 10)
+			if r.URL.Path == "/api/artifacts" {
+				limit = s.Config.MaxArtifactBytes + (1 << 20)
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		next.ServeHTTP(w, r)
 	})

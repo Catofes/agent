@@ -463,6 +463,10 @@ func TestTechnicalToolDetailIsValidAndBounded(t *testing.T) {
 	if !strings.HasSuffix(summary, "…") || len([]rune(summary)) != 161 {
 		t.Fatalf("summary was not rune-safe: %q", summary)
 	}
+	pythonSummary := summarizeToolCall(ToolCall{Function: ToolFunction{Name: "python_execute", Arguments: `{"code":"print(1)","input_artifact_ids":["artifact_1"]}`}})
+	if pythonSummary != "运行 8 字 Python 代码，使用 1 个文件" {
+		t.Fatalf("python summary=%q", pythonSummary)
+	}
 }
 
 func TestBuildMessagesKeepsPromptLayersAndToolProtocol(t *testing.T) {

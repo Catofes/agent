@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -20,6 +21,11 @@ type Config struct {
 	WebSearchProvider    string
 	ZhipuSearchAPIKey    string
 	ZhipuSearchEngine    string
+	RunnerURL            string
+	RunnerToken          string
+	RunnerTimeout        time.Duration
+	MaxPythonCodeChars   int
+	MaxArtifactBytes     int64
 	AdminPassword        string
 	AnonymousHMACKey     string
 	CookieSecure         bool
@@ -58,6 +64,11 @@ func Load(version string) (Config, error) {
 	flag.StringVar(&c.WebSearchProvider, "web-search-provider", env("WEB_SEARCH_PROVIDER", "disabled"), "web search provider: disabled, zhipu, or deepseek")
 	flag.StringVar(&c.ZhipuSearchAPIKey, "zhipu-search-api-key", os.Getenv("ZHIPU_SEARCH_API_KEY"), "Zhipu Web Search API key")
 	flag.StringVar(&c.ZhipuSearchEngine, "zhipu-search-engine", env("ZHIPU_SEARCH_ENGINE", "search_std"), "Zhipu search engine: search_std, search_pro, search_pro_sogou, or search_pro_quark")
+	flag.StringVar(&c.RunnerURL, "runner-url", os.Getenv("RUNNER_URL"), "internal Python runner base URL")
+	flag.StringVar(&c.RunnerToken, "runner-token", os.Getenv("RUNNER_TOKEN"), "internal Python runner bearer token")
+	flag.DurationVar(&c.RunnerTimeout, "runner-timeout", envDuration("RUNNER_TIMEOUT", 10*time.Second), "timeout for one Python runner request")
+	flag.IntVar(&c.MaxPythonCodeChars, "max-python-code-chars", envInt("MAX_PYTHON_CODE_CHARS", 12000), "Python source character limit")
+	flag.Int64Var(&c.MaxArtifactBytes, "max-artifact-bytes", envInt64("MAX_ARTIFACT_BYTES", 10<<20), "maximum uploaded artifact size")
 	flag.StringVar(&c.AdminPassword, "admin-password", os.Getenv("ADMIN_PASSWORD"), "teacher password")
 	flag.StringVar(&c.AnonymousHMACKey, "anonymous-hmac-key", os.Getenv("ANONYMOUS_HMAC_KEY"), "HMAC key for anonymous provider IDs")
 	flag.BoolVar(&c.CookieSecure, "cookie-secure", envBool("COOKIE_SECURE", false), "mark cookies Secure")
@@ -114,6 +125,18 @@ func (c Config) Validate() error {
 	engines := map[string]bool{"search_std": true, "search_pro": true, "search_pro_sogou": true, "search_pro_quark": true}
 	if engine := strings.TrimSpace(c.ZhipuSearchEngine); engine != "" && !engines[engine] {
 		return errors.New("ZHIPU_SEARCH_ENGINE must be search_std, search_pro, search_pro_sogou, or search_pro_quark")
+	}
+	if (strings.TrimSpace(c.RunnerURL) == "") != (strings.TrimSpace(c.RunnerToken) == "") {
+		return errors.New("RUNNER_URL and RUNNER_TOKEN must be configured together")
+	}
+	if strings.TrimSpace(c.RunnerURL) != "" {
+		parsed, err := url.Parse(c.RunnerURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return errors.New("RUNNER_URL must be an absolute http or https URL")
+		}
+	}
+	if c.RunnerTimeout <= 0 || c.MaxPythonCodeChars < 1 || c.MaxArtifactBytes < 1 {
+		return errors.New("runner timeout and limits must be positive")
 	}
 	if c.LLMConcurrency < 1 || c.StudentTokenBudget < 1 || c.MaxToolCalls < 1 {
 		return errors.New("concurrency, token budget, and max tool calls must be positive")

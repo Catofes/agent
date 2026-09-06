@@ -41,11 +41,12 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"memory_mode":     policy.MemoryMode,
-		"allowed_tools":   policy.AllowedTools,
-		"available_tools": s.Agent.Tools.Names(),
-		"max_input_chars": s.Config.MaxInputChars,
-		"revision":        policy.Revision,
+		"memory_mode":           policy.MemoryMode,
+		"allowed_tools":         policy.AllowedTools,
+		"available_tools":       s.Agent.Tools.Names(),
+		"max_input_chars":       s.Config.MaxInputChars,
+		"max_python_code_chars": s.Config.MaxPythonCodeChars,
+		"revision":              policy.Revision,
 	})
 }
 

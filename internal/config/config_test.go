@@ -81,6 +81,24 @@ func TestValidateWebSearchProvider(t *testing.T) {
 	})
 }
 
+func TestValidateRunnerConfiguration(t *testing.T) {
+	cfg := validConfig()
+	cfg.RunnerURL = "http://10.16.100.20:8090"
+	cfg.RunnerToken = "runner-secret"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.RunnerURL = "runner.internal"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "RUNNER_URL") {
+		t.Fatalf("invalid URL error=%v", err)
+	}
+	cfg = validConfig()
+	cfg.RunnerToken = "runner-secret"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "configured together") {
+		t.Fatalf("mismatched runner config error=%v", err)
+	}
+}
+
 func validConfig() Config {
 	return Config{
 		AdminPassword:        "teacher-secret",
@@ -101,5 +119,8 @@ func validConfig() Config {
 		MaxMemoryChars:       400,
 		MaxMemoryTokens:      1_200,
 		MemoryExtractTimeout: 20 * time.Second,
+		RunnerTimeout:        10 * time.Second,
+		MaxPythonCodeChars:   12_000,
+		MaxArtifactBytes:     10 << 20,
 	}
 }

@@ -128,6 +128,22 @@ type MemoryState struct {
 	Items   []Memory `json:"items"`
 }
 
+type Artifact struct {
+	ID               string    `json:"id"`
+	RunnerArtifactID string    `json:"-"`
+	RunID            string    `json:"-"`
+	StudentID        string    `json:"-"`
+	ConversationID   string    `json:"conversation_id"`
+	TurnID           string    `json:"turn_id,omitempty"`
+	ExecutionID      string    `json:"execution_id,omitempty"`
+	Name             string    `json:"name"`
+	MIMEType         string    `json:"mime_type"`
+	Size             int64     `json:"size"`
+	SHA256           string    `json:"sha256"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 type Usage struct {
 	TokensIn      int64   `json:"tokens_in"`
 	TokensOut     int64   `json:"tokens_out"`
@@ -184,8 +200,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 10 {
-		return fmt.Errorf("database version %d is newer than supported version 10", version)
+	if version > 11 {
+		return fmt.Errorf("database version %d is newer than supported version 11", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -272,7 +288,37 @@ PRAGMA user_version = 1;`
 			return fmt.Errorf("migrate skill index metadata: %w", err)
 		}
 	}
+	if version < 11 {
+		if err := s.migrateArtifacts(ctx); err != nil {
+			return fmt.Errorf("migrate artifacts: %w", err)
+		}
+	}
 	return nil
+}
+
+func (s *Store) migrateArtifacts(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, query := range []string{
+		`CREATE TABLE IF NOT EXISTS artifacts(
+ id TEXT NOT NULL, runner_artifact_id TEXT NOT NULL, run_id TEXT NOT NULL, student_id TEXT NOT NULL,
+ conversation_id TEXT NOT NULL DEFAULT '', turn_id TEXT NOT NULL DEFAULT '', execution_id TEXT NOT NULL DEFAULT '',
+ name TEXT NOT NULL, mime_type TEXT NOT NULL, size INTEGER NOT NULL CHECK(size>=0), sha256 TEXT NOT NULL,
+ expires_at TEXT NOT NULL, created_at TEXT NOT NULL,
+ PRIMARY KEY(run_id,student_id,id), FOREIGN KEY(run_id,student_id) REFERENCES students(run_id,id)
+)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS artifacts_runner_id ON artifacts(runner_artifact_id)`,
+		`CREATE INDEX IF NOT EXISTS artifacts_student_conversation ON artifacts(run_id,student_id,conversation_id,created_at,id)`,
+		`PRAGMA user_version = 11`,
+	} {
+		if _, err = tx.ExecContext(ctx, query); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateSkillIndex(ctx context.Context) error {
@@ -1002,7 +1048,74 @@ func (s *Store) DeleteConversation(ctx context.Context, runID, studentID, conver
 	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE run_id=? AND student_id=? AND conversation_id=?`, runID, studentID, conversationID); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM artifacts WHERE run_id=? AND student_id=? AND conversation_id=?`, runID, studentID, conversationID); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func (s *Store) CreateArtifact(ctx context.Context, artifact Artifact) (Artifact, error) {
+	artifact.CreatedAt = time.Now().UTC()
+	res, err := s.db.ExecContext(ctx, `INSERT INTO artifacts(
+ id,runner_artifact_id,run_id,student_id,conversation_id,turn_id,execution_id,name,mime_type,size,sha256,expires_at,created_at)
+ SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`,
+		artifact.ID, artifact.RunnerArtifactID, artifact.RunID, artifact.StudentID, artifact.ConversationID,
+		artifact.TurnID, artifact.ExecutionID, artifact.Name, artifact.MIMEType, artifact.Size,
+		artifact.SHA256, formatTime(artifact.ExpiresAt), formatTime(artifact.CreatedAt), artifact.RunID, artifact.StudentID)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if count, _ := res.RowsAffected(); count == 0 {
+		return Artifact{}, ErrNotFound
+	}
+	return artifact, nil
+}
+
+func (s *Store) Artifact(ctx context.Context, runID, studentID, id string) (Artifact, error) {
+	return scanArtifact(s.db.QueryRowContext(ctx, `SELECT id,runner_artifact_id,run_id,student_id,conversation_id,turn_id,execution_id,name,mime_type,size,sha256,expires_at,created_at
+ FROM artifacts WHERE run_id=? AND student_id=? AND id=?`, runID, studentID, id))
+}
+
+func (s *Store) Artifacts(ctx context.Context, runID, studentID, conversationID string) ([]Artifact, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,runner_artifact_id,run_id,student_id,conversation_id,turn_id,execution_id,name,mime_type,size,sha256,expires_at,created_at
+ FROM artifacts WHERE run_id=? AND student_id=? AND (?='' OR conversation_id=?) ORDER BY created_at,id`, runID, studentID, conversationID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Artifact, 0)
+	for rows.Next() {
+		artifact, scanErr := scanArtifact(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, artifact)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) DeleteArtifact(ctx context.Context, runID, studentID, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM artifacts WHERE run_id=? AND student_id=? AND id=?`, runID, studentID, id)
+	if err != nil {
+		return err
+	}
+	if count, _ := res.RowsAffected(); count == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func scanArtifact(row rowScanner) (Artifact, error) {
+	var artifact Artifact
+	var expires, created string
+	if err := row.Scan(&artifact.ID, &artifact.RunnerArtifactID, &artifact.RunID, &artifact.StudentID,
+		&artifact.ConversationID, &artifact.TurnID, &artifact.ExecutionID, &artifact.Name, &artifact.MIMEType,
+		&artifact.Size, &artifact.SHA256, &expires, &created); err != nil {
+		return Artifact{}, err
+	}
+	artifact.ExpiresAt, _ = parseTime(expires)
+	artifact.CreatedAt, _ = parseTime(created)
+	return artifact, nil
 }
 
 func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {

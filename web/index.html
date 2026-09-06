@@ -400,12 +400,43 @@
               <label class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
               <label id="webSearchOption" class="tool-option hidden"><input id="webSearch" type="checkbox" /> <span>🔎 搜索网上信息</span></label>
               <label class="tool-option"><input id="webFetch" type="checkbox" /> <span>🌐 访问公开网页</span></label>
+              <label id="pythonOption" class="tool-option hidden"><input id="pythonExecute" type="checkbox" /> <span>🐍 使用 Python</span></label>
             </div>
             <div class="turn-option">
               <label for="maxTurns">最大步数 <strong id="turnValue">30</strong></label>
               <input id="maxTurns" type="range" min="1" max="60" value="30" />
             </div>
           </div>
+          <section id="pythonLab" class="python-lab hidden" aria-labelledby="pythonLabTitle">
+            <div class="python-lab-heading">
+              <div><strong id="pythonLabTitle">🐍 Python 实验台</strong><small>直接运行不会消耗一次 Agent 对话；代码在课堂 Runner 中执行。</small></div>
+              <span id="pythonStatus" class="status"></span>
+            </div>
+            <label for="pythonCode">代码</label>
+            <textarea id="pythonCode" class="python-code" spellcheck="false">print("Hello, classroom!")</textarea>
+            <small class="status">代码和运行文字结果当前只保留在本页；刷新会恢复示例代码。生成或上传的文件按 Runner 保留期保存。</small>
+            <details class="python-inputs">
+              <summary>标准输入与文件</summary>
+              <label for="pythonStdin">标准输入（stdin）</label>
+              <textarea id="pythonStdin" rows="2" placeholder="需要 input() 时填写，每行一个输入"></textarea>
+              <label for="pythonFiles">上传输入文件</label>
+              <input id="pythonFiles" type="file" multiple />
+              <div id="artifactInputs" class="artifact-list"></div>
+            </details>
+            <div class="row python-actions">
+              <button id="runPython" type="button">运行代码</button>
+              <button id="stopPython" class="secondary hidden" type="button">停止</button>
+              <button id="explainPython" class="secondary" type="button" disabled>让 Agent 解释结果</button>
+            </div>
+            <div id="pythonResult" class="python-result hidden">
+              <div class="python-result-heading"><strong>运行结果</strong><span id="pythonMeta" class="status"></span></div>
+              <pre id="pythonOutput"></pre>
+            </div>
+            <div class="python-artifacts">
+              <strong>本对话文件</strong>
+              <div id="artifactList" class="artifact-list"><span class="status">暂无文件</span></div>
+            </div>
+          </section>
         </section>
         <section class="card chat-card">
           <h2>💬 对话区</h2>
@@ -471,6 +502,9 @@
         locked = false,
         dirty = false,
         controller = null,
+        pythonController = null,
+        artifactItems = [],
+        lastPythonResult = null,
         deltaQueue = [],
         deltaFrame = 0,
         queuedDeltaChars = 0,
@@ -513,6 +547,7 @@
           calculator: "计算器",
           web_search: "网上搜索",
           web_fetch: "网页访问",
+          python_execute: "Python 执行",
           load_skill: "加载 Skill",
           recall_memory: "读取 Memory",
         }[name] || name;
@@ -522,7 +557,7 @@
         $("saveStatus").textContent = "设计尚未保存";
         $("saveStatus").className = "status unsaved";
       }
-      ["persona", "calculator", "webSearch", "webFetch", "maxTurns"].forEach((id) =>
+      ["persona", "calculator", "webSearch", "webFetch", "pythonExecute", "maxTurns"].forEach((id) =>
         $(id).addEventListener("input", () => {
           if (id === "maxTurns")
             $("turnValue").textContent = $("maxTurns").value;
@@ -588,6 +623,7 @@
           $("calculator").checked = d.tools.includes("calculator");
           $("webSearch").checked = d.tools.includes("web_search");
           $("webFetch").checked = d.tools.includes("web_fetch");
+          $("pythonExecute").checked = d.tools.includes("python_execute");
           $("maxTurns").value = d.max_turns;
           $("turnValue").textContent = d.max_turns;
           templates = t.templates;
@@ -600,6 +636,10 @@
             "hidden",
             !caps.available_tools.includes("web_search"),
           );
+          const pythonAvailable = caps.available_tools.includes("python_execute");
+          $("pythonOption").classList.toggle("hidden", !pythonAvailable);
+          $("pythonLab").classList.toggle("hidden", !pythonAvailable);
+          $("pythonCode").maxLength = caps.max_python_code_chars || 65536;
           skillItems = skills.skills || [];
           skillLimit = skills.limit || 12;
           activeSkillID = skillItems[0]?.id || null;
@@ -628,7 +668,7 @@
         }
       }
       async function switchConversation(id) {
-        if (controller || id === activeConversation) return;
+        if (controller || pythonController || id === activeConversation) return;
         activeConversation = id;
         $("designNotice").classList.add("hidden");
         renderConversationTabs();
@@ -655,7 +695,7 @@
               String(conversation.id === activeConversation),
             );
             tab.title = conversation.title;
-            tab.disabled = !!controller;
+            tab.disabled = !!controller || !!pythonController;
             tab.onclick = () => switchConversation(conversation.id);
             tab.append(title, count);
             close.type = "button";
@@ -663,7 +703,7 @@
             close.textContent = "×";
             close.title = `关闭并删除“${conversation.title}”`;
             close.setAttribute("aria-label", `关闭并删除对话 ${conversation.title}`);
-            close.disabled = locked || !!controller;
+            close.disabled = locked || !!controller || !!pythonController;
             close.onclick = () => removeConversation(conversation);
             wrapper.append(tab, close);
             return wrapper;
@@ -672,7 +712,7 @@
       }
 
       async function removeConversation(conversation) {
-        if (controller || locked) return;
+        if (controller || pythonController || locked) return;
         if (
           !confirm(
             `关闭并删除“${conversation.title}”吗？\n\n这个对话中的消息会被永久删除。`,
@@ -720,17 +760,132 @@
       }
       async function loadMessages() {
         $("messages").replaceChildren();
-        if (!activeConversation) return;
-        const m = await api(
-          "/api/messages?conversation_id=" +
-            encodeURIComponent(activeConversation),
-        );
+        if (!activeConversation) {
+          artifactItems = [];
+          renderArtifacts();
+          return;
+        }
+        const [m, files] = await Promise.all([
+          api("/api/messages?conversation_id=" + encodeURIComponent(activeConversation)),
+          api("/api/artifacts?conversation_id=" + encodeURIComponent(activeConversation)),
+        ]);
         m.messages.forEach(renderHistory);
+        artifactItems = files.artifacts || [];
+        renderArtifacts();
         $("messages").scrollTop = $("messages").scrollHeight;
       }
+      function readableBytes(size) {
+        if (size < 1024) return `${size} B`;
+        if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`;
+        return `${(size / 1024 / 1024).toFixed(1)} MiB`;
+      }
+      function mergeArtifacts(items) {
+        const byID = new Map(artifactItems.map((item) => [item.id, item]));
+        (items || []).forEach((item) => byID.set(item.id, item));
+        artifactItems = [...byID.values()];
+        renderArtifacts();
+      }
+      function artifactRow(item, selectable) {
+        const row = document.createElement("div"),
+          expired = item.expires_at && new Date(item.expires_at) <= new Date(),
+          name = document.createElement(expired ? "span" : "a"),
+          meta = text("small", expired ? "文件已清理" : `${readableBytes(item.size || 0)} · ${item.mime_type || "文件"}`);
+        row.className = "artifact-item";
+        if (!expired) name.href = "/api/artifacts/" + encodeURIComponent(item.id);
+        name.textContent = item.name;
+        name.title = expired ? "文件已超过保留期限" : "下载 " + item.name;
+        if (selectable && !expired) {
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.className = "artifact-input";
+          checkbox.value = item.id;
+          checkbox.disabled = locked || !!pythonController;
+          row.append(checkbox);
+        }
+        row.append(name, meta);
+        return row;
+      }
+      function renderArtifacts() {
+        const list = $("artifactList"), inputs = $("artifactInputs");
+        list.replaceChildren();
+        inputs.replaceChildren();
+        if (!artifactItems.length) {
+          list.append(text("span", "暂无文件", "status"));
+          inputs.append(text("span", "本对话还没有可作为输入的文件", "status"));
+          return;
+        }
+        artifactItems.forEach((item) => {
+          list.append(artifactRow(item, false));
+          if (!item.expires_at || new Date(item.expires_at) > new Date()) inputs.append(artifactRow(item, true));
+        });
+      }
+      async function uploadPythonFiles() {
+        const uploaded = [];
+        for (const file of $("pythonFiles").files) {
+          const body = new FormData();
+          body.append("conversation_id", activeConversation);
+          body.append("file", file, file.name);
+          const response = await fetch("/api/artifacts", { method: "POST", body, signal: pythonController?.signal });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error?.message || `上传 ${file.name} 失败`);
+          uploaded.push(data);
+          mergeArtifacts([data]);
+        }
+        $("pythonFiles").value = "";
+        return uploaded.map((item) => item.id);
+      }
+      $("runPython").onclick = async () => {
+        const code = $("pythonCode").value.trim();
+        if (!code || !activeConversation || pythonController || locked) return;
+        const selected = [...document.querySelectorAll(".artifact-input:checked")].map((input) => input.value);
+        pythonController = new AbortController();
+        lastPythonResult = null;
+        $("pythonStatus").textContent = "正在准备运行…";
+        $("pythonResult").classList.add("hidden");
+        applyLock();
+        try {
+          const uploaded = await uploadPythonFiles(),
+            response = await fetch("/api/python/run", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                conversation_id: activeConversation,
+                code,
+                stdin: $("pythonStdin").value,
+                input_artifact_ids: [...new Set([...selected, ...uploaded])],
+              }),
+              signal: pythonController.signal,
+            }),
+            data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error?.message || "Python 运行失败");
+          lastPythonResult = { code, ...data };
+          const sections = [];
+          if (data.stdout) sections.push("stdout:\n" + data.stdout);
+          if (data.stderr) sections.push("stderr:\n" + data.stderr);
+          $("pythonOutput").textContent = sections.join("\n\n") || "（没有标准输出）";
+          $("pythonMeta").textContent = `${data.status} · 退出码 ${data.exit_code} · ${data.duration_ms} ms${data.truncated ? " · 输出已截断" : ""}`;
+          $("pythonResult").classList.remove("hidden");
+          $("pythonStatus").textContent = data.status === "completed" ? "运行完成" : "运行结束";
+          mergeArtifacts(data.artifacts);
+        } catch (error) {
+          $("pythonStatus").textContent = error.name === "AbortError" ? "已停止运行" : error.message;
+        } finally {
+          pythonController = null;
+          applyLock();
+        }
+      };
+      $("stopPython").onclick = () => pythonController?.abort();
+      $("explainPython").onclick = () => {
+        if (!lastPythonResult) return;
+        const result = lastPythonResult,
+          files = (result.artifacts || []).map((item) => `${item.name}（文件 ID: ${item.id}）`).join("、");
+        $("chatInput").value = `请解释下面这段 Python 代码的运行结果，指出可能的问题，并给出改进建议。\n\n代码：\n${result.code}\n\nstdout：\n${result.stdout || "（空）"}\n\nstderr：\n${result.stderr || "（空）"}${files ? `\n\n生成文件：${files}` : ""}`;
+        updateChatInput();
+        $("chatInput").focus();
+      };
       $("newConversation").onclick = async () => {
         try {
-          if (controller) return;
+          if (controller || pythonController) return;
           if (dirty) await saveDesign();
           const c = await api("/api/conversations", {
             method: "POST",
@@ -740,6 +895,8 @@
           conversationItems.unshift(c);
           renderConversationTabs();
           $("messages").replaceChildren();
+          artifactItems = [];
+          renderArtifacts();
           $("designNotice").classList.add("hidden");
           $("chatStatus").textContent = "已新建独立对话，将使用最新保存的设计";
         } catch (e) {
@@ -888,6 +1045,10 @@
                 ? "web_search"
                 : "",
               $("webFetch").checked ? "web_fetch" : "",
+              capabilities?.available_tools.includes("python_execute") &&
+              $("pythonExecute").checked
+                ? "python_execute"
+                : "",
             ].filter(Boolean),
             max_turns: Number($("maxTurns").value),
           };
@@ -1113,6 +1274,17 @@
         $("messages").append(box);
         return box;
       }
+      function historyToolSummary(call) {
+        if (call.function?.name !== "python_execute") return call.function?.arguments || "";
+        try {
+          const input = JSON.parse(call.function.arguments || "{}"),
+            chars = Array.from(input.code || "").length,
+            files = input.input_artifact_ids?.length || 0;
+          return `运行 ${chars} 字 Python 代码${files ? `，使用 ${files} 个文件` : ""}`;
+        } catch {
+          return "准备运行 Python 代码";
+        }
+      }
       function contextReceipt(ev) {
         const parts = [];
         if (ev.soul_used) parts.push("Soul：已提供");
@@ -1142,7 +1314,7 @@
                 actionBox({
                   step: i + 1,
                   tool: c.function?.name || "工具",
-                  summary: c.function?.arguments || "",
+                  summary: historyToolSummary(c),
                   detail: c,
                 }),
               );
@@ -1154,7 +1326,7 @@
       $("chatForm").onsubmit = async (e) => {
         e.preventDefault();
         const value = $("chatInput").value.trim();
-        if (!value || !activeConversation || locked || controller) return;
+        if (!value || !activeConversation || locked || controller || pythonController) return;
         appendMessage(value, "user");
         $("chatInput").value = "";
         updateChatInput();
@@ -1202,8 +1374,10 @@
             answerSource += ev.delta;
             queueDelta(answer, ev.delta);
           } else if (ev.type === "tool_start") actionBox(ev);
-          else if (ev.type === "tool_result")
+          else if (ev.type === "tool_result") {
             appendMessage(`工具返回：${ev.summary}`, "action");
+            if (ev.artifacts?.length) mergeArtifacts(ev.artifacts);
+          }
           else if (ev.type === "turn_end") {
             renderAnswer();
             if (reasoning) reasoning.summary.textContent = "思考草稿";
@@ -1277,6 +1451,7 @@
         }
       }
       function applyLock() {
+        const busy = !!controller || !!pythonController;
         [
           "persona",
           "skillName",
@@ -1288,6 +1463,7 @@
           "calculator",
           "webSearch",
           "webFetch",
+          "pythonExecute",
           "maxTurns",
           "templates",
           "useTemplate",
@@ -1298,7 +1474,11 @@
           "chatInput",
           "send",
           "newConversation",
-        ].forEach((id) => ($(id).disabled = locked || !!controller));
+          "pythonCode",
+          "pythonStdin",
+          "pythonFiles",
+          "runPython",
+        ].forEach((id) => ($(id).disabled = locked || busy));
         const hasSkill = !!activeSkillID || creatingSkill;
         ["skillName", "skillSummary", "skillWhenToUse", "skillTriggerMode", "skillContent", "skillEnabled"].forEach((id) => {
           $(id).disabled = locked || !!controller || !hasSkill;
@@ -1311,15 +1491,25 @@
           !capabilities || capabilities.allowed_tools.includes("web_fetch");
         const webSearchAllowed =
           !capabilities || capabilities.allowed_tools.includes("web_search");
+        const pythonAllowed =
+          !!capabilities?.allowed_tools.includes("python_execute");
         $("calculator").disabled = locked || !!controller || !calculatorAllowed;
         $("webSearch").disabled = locked || !!controller || !webSearchAllowed;
         $("webFetch").disabled = locked || !!controller || !webFetchAllowed;
+        $("pythonExecute").disabled = locked || !!controller || !pythonAllowed;
+        ["pythonCode", "pythonStdin", "pythonFiles", "runPython"].forEach((id) => {
+          $(id).disabled = locked || !!controller || !!pythonController || !pythonAllowed;
+        });
+        $("stopPython").classList.toggle("hidden", !pythonController);
+        $("stopPython").disabled = !pythonController;
+        $("explainPython").disabled = locked || !!controller || !!pythonController || !lastPythonResult;
+        renderArtifacts();
         renderMemory();
         $("conversationTabs")
           .querySelectorAll("button")
           .forEach((tab) =>
             (tab.disabled =
-              !!controller || (locked && tab.classList.contains("conversation-close"))),
+              busy || (locked && tab.classList.contains("conversation-close"))),
           );
         $("locked").classList.toggle("hidden", !locked);
       }
