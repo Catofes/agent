@@ -538,12 +538,18 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 		t.Fatal(status)
 	}
 	status, capabilities, _ := requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
-	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || len(capabilities["allowed_tools"].([]any)) != 1 || capabilities["max_input_chars"].(float64) != 100 {
+	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || capabilities["skills_enabled"] != true || len(capabilities["allowed_tools"].([]any)) != 1 || capabilities["max_input_chars"].(float64) != 100 {
 		t.Fatalf("default capabilities status=%d body=%#v", status, capabilities)
 	}
 	status, _, _ = requestJSON(t, student, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})
 	if status != http.StatusOK {
 		t.Fatalf("enable memory status=%d", status)
+	}
+	status, createdSkill, _ := requestJSON(t, student, http.MethodPost, "/api/skills", map[string]any{
+		"name": "课堂 Skill", "summary": "测试课堂开关", "when_to_use": "测试时", "content": "按步骤测试", "enabled": true,
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create skill status=%d body=%v", status, createdSkill)
 	}
 
 	teacher := newClient(handler)
@@ -559,8 +565,8 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 	if initial := waitSSEJSON(t, stream, 1); initial["type"] != "classroom" {
 		t.Fatalf("initial classroom event=%v", initial)
 	}
-	status, policy, _ := requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeDisabled, "allowed_tools": []string{}})
-	if status != http.StatusOK || policy["memory_mode"] != store.MemoryModeDisabled || policy["revision"].(float64) != 2 {
+	status, policy, _ := requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeDisabled, "skills_enabled": false, "allowed_tools": []string{}})
+	if status != http.StatusOK || policy["memory_mode"] != store.MemoryModeDisabled || policy["skills_enabled"] != false || policy["revision"].(float64) != 2 {
 		t.Fatalf("policy update status=%d body=%#v", status, policy)
 	}
 	if update := waitSSEJSON(t, stream, 2); update["type"] != "classroom_policy" || update["revision"].(float64) != 2 {
@@ -571,12 +577,26 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 		t.Fatalf("policy save invalidated student session: status=%d body=%#v", status, body)
 	}
 	status, capabilities, _ = requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
-	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeDisabled || len(capabilities["allowed_tools"].([]any)) != 0 {
+	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeDisabled || capabilities["skills_enabled"] != false || len(capabilities["allowed_tools"].([]any)) != 0 {
 		t.Fatalf("updated capabilities status=%d body=%#v", status, capabilities)
 	}
 	status, body, _ = requestJSON(t, student, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})
 	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "MEMORY_DISABLED_BY_TEACHER" {
 		t.Fatalf("disabled memory setting status=%d body=%#v", status, body)
+	}
+	status, body, _ = requestJSON(t, student, http.MethodGet, "/api/skills", nil)
+	if status != http.StatusOK || len(body["skills"].([]any)) != 0 || body["enabled"] != false {
+		t.Fatalf("disabled Skill list status=%d body=%#v", status, body)
+	}
+	status, body, _ = requestJSON(t, student, http.MethodGet, "/api/templates", nil)
+	if status != http.StatusOK || len(body["templates"].([]any)) != 0 {
+		t.Fatalf("disabled Skill templates status=%d body=%#v", status, body)
+	}
+	status, body, _ = requestJSON(t, student, http.MethodPut, "/api/skills/"+createdSkill["id"].(string), map[string]any{
+		"name": "越权修改", "summary": "不应保存", "when_to_use": "不应使用", "content": "不应写入", "enabled": true,
+	})
+	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "SKILLS_DISABLED_BY_TEACHER" {
+		t.Fatalf("disabled Skill update status=%d body=%#v", status, body)
 	}
 	status, body, _ = requestJSON(t, student, http.MethodPatch, "/api/memory/not-present", map[string]string{"content": "不应写入", "status": "confirmed"})
 	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "MEMORY_DISABLED_BY_TEACHER" {

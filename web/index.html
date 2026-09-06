@@ -325,7 +325,7 @@
           <div class="design-heading">
             <div>
               <h2>设计你的 Agent</h2>
-              <p class="status">从身份、做事方法和长期记忆三个方面塑造它。</p>
+              <p class="status">按类别调整 Agent；老师未开放的能力不会出现在这里。</p>
             </div>
             <span id="saveStatus" class="status"></span>
           </div>
@@ -333,11 +333,14 @@
             <button class="design-tab active" type="button" role="tab" aria-selected="true" aria-controls="soulPanel" data-design-tab="soulPanel">
               <span class="design-tab-icon">✦</span><span><strong>Soul</strong><small>它是谁</small></span>
             </button>
-            <button class="design-tab" type="button" role="tab" aria-selected="false" aria-controls="skillPanel" data-design-tab="skillPanel">
+            <button id="skillTab" class="design-tab" type="button" role="tab" aria-selected="false" aria-controls="skillPanel" data-design-tab="skillPanel">
               <span class="design-tab-icon">⌁</span><span><strong>Skill</strong><small>怎样做事</small></span>
             </button>
             <button class="design-tab" type="button" role="tab" aria-selected="false" aria-controls="memoryPanel" data-design-tab="memoryPanel">
               <span class="design-tab-icon">◉</span><span><strong>Memory</strong><small>记住什么</small></span>
+            </button>
+            <button class="design-tab" type="button" role="tab" aria-selected="false" aria-controls="toolsPanel" data-design-tab="toolsPanel">
+              <span class="design-tab-icon">◇</span><span><strong>Tools</strong><small>能用什么</small></span>
             </button>
           </div>
           <div class="design-panels">
@@ -357,21 +360,27 @@
                 <span>写明什么时候使用和工作步骤；任务不匹配时可以不使用。</span>
               </div>
               <div class="skill-toolbar">
-                <select id="templates" aria-label="Skill 模板">
-                  <option value="">选择模板…</option></select
-                ><button id="useTemplate" class="secondary" type="button">
-                  使用模板
-                </button><button id="newSkill" class="secondary" type="button">＋ 新建 Skill</button>
+                <button id="newSkill" class="secondary" type="button">＋ 新建空白 Skill</button>
+                <label class="template-create">
+                  <span class="sr-only">从模板新建 Skill</span>
+                  <select id="templates" aria-label="从模板新建 Skill">
+                    <option value="">从模板新建…</option>
+                  </select>
+                </label>
               </div>
+              <p id="templateHint" class="status template-hint">模板只作为新 Skill 的起点，不会覆盖当前 Skill；创建后仍可修改再保存。</p>
               <div class="skill-workspace">
                 <div id="skillList" class="skill-list" aria-label="Skill 列表"></div>
                 <div class="skill-editor">
                   <div class="field"><label for="skillName">索引名称（可修改）</label><input id="skillName" maxlength="80" placeholder="例如：数学验算" /><small>内部 ID 保持稳定；改名不会丢失 Skill。</small></div>
-                  <div class="field"><label for="skillSummary">能力说明</label><input id="skillSummary" maxlength="200" placeholder="例如：独立重算并核验数值结果" /></div>
                   <div class="field"><label for="skillWhenToUse">何时使用</label><input id="skillWhenToUse" maxlength="300" placeholder="例如：任务包含列式计算或要求检查答案时" /></div>
-                  <div class="field"><label for="skillTriggerMode">触发模式</label><select id="skillTriggerMode"><option value="auto">自动判断</option><option value="explicit">仅明确调用（@名称）</option></select><small id="skillTriggerHelp">Agent 根据能力说明和使用条件判断是否加载。</small></div>
-                  <label class="tool-option"><input id="skillEnabled" type="checkbox" checked /> <span>向 Agent 提供这个 Skill</span></label>
                   <div class="field"><label for="skillContent">方法正文</label><textarea id="skillContent" class="skill" placeholder="# 工作步骤&#10;1. ……&#10;2. ……"></textarea></div>
+                  <details class="skill-advanced">
+                    <summary>高级设置</summary>
+                    <div class="field"><label for="skillSummary">能力说明（可选）</label><input id="skillSummary" maxlength="200" placeholder="默认使用 Skill 名称" /></div>
+                    <div class="field"><label for="skillTriggerMode">触发模式</label><select id="skillTriggerMode"><option value="auto">自动判断</option><option value="explicit">仅明确调用（@名称）</option></select><small id="skillTriggerHelp">Agent 根据能力说明和使用条件判断是否加载。</small></div>
+                    <label class="tool-option"><input id="skillEnabled" type="checkbox" checked /> <span>向 Agent 提供这个 Skill</span></label>
+                  </details>
                   <div class="row skill-actions"><span id="skillStatus" class="status"></span><div class="row"><button id="invokeSkill" class="secondary hidden" type="button">在对话中 @调用</button><button id="deleteSkill" class="danger" type="button">删除 Skill</button></div></div>
                 </div>
               </div>
@@ -394,50 +403,57 @@
                 <div id="memoryList" class="memory-list"></div>
               </div>
             </section>
+            <section id="toolsPanel" class="design-panel" role="tabpanel" hidden>
+              <div class="panel-intro">
+                <strong>Tools · 可用工具</strong>
+                <span>只选择完成任务需要的工具；老师未开放的项目会自动禁用。</span>
+              </div>
+              <div class="design-options">
+                <div class="tool-options" aria-label="Agent 工具">
+                  <label id="calculatorOption" class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
+                  <label id="webSearchOption" class="tool-option hidden"><input id="webSearch" type="checkbox" /> <span>🔎 搜索网上信息</span></label>
+                  <label id="webFetchOption" class="tool-option"><input id="webFetch" type="checkbox" /> <span>🌐 访问公开网页</span></label>
+                  <label id="pythonOption" class="tool-option hidden"><input id="pythonExecute" type="checkbox" /> <span>🐍 使用 Python</span></label>
+                  <small id="toolPolicyStatus" class="status"></small>
+                </div>
+                <div class="turn-option">
+                  <label for="maxTurns">最大步数 <strong id="turnValue">30</strong></label>
+                  <input id="maxTurns" type="range" min="1" max="60" value="30" />
+                  <small class="status">步数越多，Agent 可连续思考和调用工具的次数越多。</small>
+                </div>
+              </div>
+              <section id="pythonLab" class="python-lab hidden" aria-labelledby="pythonLabTitle">
+                <div class="python-lab-heading">
+                  <div><strong id="pythonLabTitle">🐍 Python 实验台</strong><small>直接运行不会消耗一次 Agent 对话；代码在课堂 Runner 中执行。</small></div>
+                  <span id="pythonStatus" class="status"></span>
+                </div>
+                <label for="pythonCode">代码</label>
+                <textarea id="pythonCode" class="python-code" spellcheck="false">print("Hello, classroom!")</textarea>
+                <small class="status">代码和运行文字结果当前只保留在本页；刷新会恢复示例代码。生成或上传的文件按 Runner 保留期保存。</small>
+                <details class="python-inputs">
+                  <summary>标准输入与文件</summary>
+                  <label for="pythonStdin">标准输入（stdin）</label>
+                  <textarea id="pythonStdin" rows="2" placeholder="需要 input() 时填写，每行一个输入"></textarea>
+                  <label for="pythonFiles">上传输入文件</label>
+                  <input id="pythonFiles" type="file" multiple />
+                  <div id="artifactInputs" class="artifact-list"></div>
+                </details>
+                <div class="row python-actions">
+                  <button id="runPython" type="button">运行代码</button>
+                  <button id="stopPython" class="secondary hidden" type="button">停止</button>
+                  <button id="explainPython" class="secondary" type="button" disabled>让 Agent 解释结果</button>
+                </div>
+                <div id="pythonResult" class="python-result hidden">
+                  <div class="python-result-heading"><strong>运行结果</strong><span id="pythonMeta" class="status"></span></div>
+                  <pre id="pythonOutput"></pre>
+                </div>
+                <div class="python-artifacts">
+                  <strong>本对话文件</strong>
+                  <div id="artifactList" class="artifact-list"><span class="status">暂无文件</span></div>
+                </div>
+              </section>
+            </section>
           </div>
-          <div class="design-options">
-            <div class="tool-options" aria-label="Agent 工具">
-              <label id="calculatorOption" class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
-              <label id="webSearchOption" class="tool-option hidden"><input id="webSearch" type="checkbox" /> <span>🔎 搜索网上信息</span></label>
-              <label id="webFetchOption" class="tool-option"><input id="webFetch" type="checkbox" /> <span>🌐 访问公开网页</span></label>
-              <label id="pythonOption" class="tool-option hidden"><input id="pythonExecute" type="checkbox" /> <span>🐍 使用 Python</span></label>
-              <small id="toolPolicyStatus" class="status"></small>
-            </div>
-            <div class="turn-option">
-              <label for="maxTurns">最大步数 <strong id="turnValue">30</strong></label>
-              <input id="maxTurns" type="range" min="1" max="60" value="30" />
-            </div>
-          </div>
-          <section id="pythonLab" class="python-lab hidden" aria-labelledby="pythonLabTitle">
-            <div class="python-lab-heading">
-              <div><strong id="pythonLabTitle">🐍 Python 实验台</strong><small>直接运行不会消耗一次 Agent 对话；代码在课堂 Runner 中执行。</small></div>
-              <span id="pythonStatus" class="status"></span>
-            </div>
-            <label for="pythonCode">代码</label>
-            <textarea id="pythonCode" class="python-code" spellcheck="false">print("Hello, classroom!")</textarea>
-            <small class="status">代码和运行文字结果当前只保留在本页；刷新会恢复示例代码。生成或上传的文件按 Runner 保留期保存。</small>
-            <details class="python-inputs">
-              <summary>标准输入与文件</summary>
-              <label for="pythonStdin">标准输入（stdin）</label>
-              <textarea id="pythonStdin" rows="2" placeholder="需要 input() 时填写，每行一个输入"></textarea>
-              <label for="pythonFiles">上传输入文件</label>
-              <input id="pythonFiles" type="file" multiple />
-              <div id="artifactInputs" class="artifact-list"></div>
-            </details>
-            <div class="row python-actions">
-              <button id="runPython" type="button">运行代码</button>
-              <button id="stopPython" class="secondary hidden" type="button">停止</button>
-              <button id="explainPython" class="secondary" type="button" disabled>让 Agent 解释结果</button>
-            </div>
-            <div id="pythonResult" class="python-result hidden">
-              <div class="python-result-heading"><strong>运行结果</strong><span id="pythonMeta" class="status"></span></div>
-              <pre id="pythonOutput"></pre>
-            </div>
-            <div class="python-artifacts">
-              <strong>本对话文件</strong>
-              <div id="artifactList" class="artifact-list"><span class="status">暂无文件</span></div>
-            </div>
-          </section>
         </section>
         <section class="card chat-card">
           <h2>💬 对话区</h2>
@@ -510,20 +526,23 @@
         deltaFrame = 0,
         queuedDeltaChars = 0,
         memoryNoticeTimer = 0;
+      function selectDesignPanel(panelID) {
+        if (!document.querySelector(`[data-design-tab="${panelID}"]:not(.hidden)`)) {
+          panelID = "soulPanel";
+        }
+        document.querySelectorAll("[data-design-tab]").forEach((item) => {
+          const selected = item.dataset.designTab === panelID;
+          item.classList.toggle("active", selected);
+          item.setAttribute("aria-selected", String(selected));
+        });
+        document.querySelectorAll(".design-panel").forEach((panel) => {
+          const selected = panel.id === panelID;
+          panel.hidden = !selected;
+          panel.classList.toggle("active", selected);
+        });
+      }
       document.querySelectorAll("[data-design-tab]").forEach((tab) => {
-        tab.onclick = () => {
-          const panelID = tab.dataset.designTab;
-          document.querySelectorAll("[data-design-tab]").forEach((item) => {
-            const selected = item === tab;
-            item.classList.toggle("active", selected);
-            item.setAttribute("aria-selected", String(selected));
-          });
-          document.querySelectorAll(".design-panel").forEach((panel) => {
-            const selected = panel.id === panelID;
-            panel.hidden = !selected;
-            panel.classList.toggle("active", selected);
-          });
-        };
+        tab.onclick = () => selectDesignPanel(tab.dataset.designTab);
       });
       async function api(url, opt = {}) {
         const r = await fetch(url, {
@@ -640,10 +659,7 @@
           activeSkillID = skillItems[0]?.id || null;
           renderSkillEditor();
           renderMemory();
-          $("templates").replaceChildren(
-            new Option("选择模板…", ""),
-            ...templates.map((x) => new Option(x.name, x.id)),
-          );
+          renderTemplateOptions();
           conversationItems = c.conversations;
           if (!conversationItems.length && !locked) {
             const created = await api("/api/conversations", {
@@ -898,19 +914,35 @@
           $("chatStatus").textContent = e.message;
         }
       };
-      $("useTemplate").onclick = () => {
-        const t = templates.find((x) => x.id === $("templates").value);
-        if (t) {
-          if (!activeSkillID) beginNewSkill();
-          $("skillName").value = t.name;
-          $("skillSummary").value = t.summary || "";
-          $("skillWhenToUse").value = t.when_to_use || "";
-          $("skillTriggerMode").value = "auto";
-          $("skillContent").value = t.content;
-          skillDirty = true;
-          markDirty();
-          renderSkillList();
-        }
+      function renderTemplateOptions() {
+        $("templates").replaceChildren(
+          new Option("从模板新建…", ""),
+          ...templates.map(
+            (item) =>
+              new Option(
+                `模板：${item.name} — ${item.summary || "预制方法"}`,
+                item.id,
+              ),
+          ),
+        );
+      }
+      $("templates").onchange = () => {
+        const template = templates.find(
+          (item) => item.id === $("templates").value,
+        );
+        if (!template) return;
+        $("templates").value = "";
+        if (!beginNewSkill()) return;
+        $("skillName").value = template.name;
+        $("skillSummary").value = template.summary || "";
+        $("skillWhenToUse").value = template.when_to_use || "";
+        $("skillTriggerMode").value = "auto";
+        $("skillContent").value = template.content;
+        skillDirty = true;
+        markDirty();
+        renderSkillTriggerHelp();
+        renderSkillList();
+        $("skillStatus").textContent = `已从“${template.name}”创建新草稿；修改后点击“保存设计”。`;
       };
       function currentSkillDraft() {
         return {
@@ -963,18 +995,24 @@
       function beginNewSkill() {
         if (skillItems.length >= skillLimit) {
           $("skillStatus").textContent = `最多创建 ${skillLimit} 个 Skill`;
-          return;
+          return false;
         }
-        if (skillDirty && !confirm("当前 Skill 还没有保存，放弃修改并新建吗？")) return;
+        if (
+          skillDirty &&
+          !confirm("当前 Skill 还没有保存，放弃修改并新建吗？")
+        )
+          return false;
         activeSkillID = null;
         creatingSkill = true;
         renderSkillEditor();
         $("skillName").focus();
+        return true;
       }
       async function saveActiveSkill() {
         if (!skillDirty) return;
         const draft = currentSkillDraft();
-        if (!draft.name || !draft.summary || !draft.when_to_use || !draft.content) throw new Error("Skill 的名称、能力说明、使用条件和正文都需要填写");
+        if (!draft.name || !draft.when_to_use || !draft.content)
+          throw new Error("Skill 的名称、使用条件和正文都需要填写");
         const saved = activeSkillID
           ? await api("/api/skills/" + encodeURIComponent(activeSkillID), { method: "PUT", body: JSON.stringify(draft) })
           : await api("/api/skills", { method: "POST", body: JSON.stringify(draft) });
@@ -1461,7 +1499,6 @@
           "pythonExecute",
           "maxTurns",
           "templates",
-          "useTemplate",
           "newSkill",
           "deleteSkill",
           "invokeSkill",
@@ -1530,23 +1567,58 @@
         const pythonAllowed =
           available.has("python_execute") && allowed.has("python_execute");
         $("pythonLab").classList.toggle("hidden", !pythonAllowed);
+        const skillsEnabled = capabilities.skills_enabled !== false;
+        $("skillTab").classList.toggle("hidden", !skillsEnabled);
+        if (!skillsEnabled) {
+          if ($("skillPanel").classList.contains("active"))
+            selectDesignPanel("soulPanel");
+          if (templates.length) {
+            templates = [];
+            renderTemplateOptions();
+          }
+          if (skillItems.length || activeSkillID || creatingSkill || skillDirty) {
+            skillItems = [];
+            activeSkillID = null;
+            creatingSkill = false;
+            skillDirty = false;
+            renderSkillEditor();
+          }
+        }
         $("toolPolicyStatus").textContent = changed
           ? "老师已更新课堂能力，本页状态已自动同步，无需重新登录。"
           : "未开放的能力会在老师保存设置后自动同步。";
       }
       function connectEvents() {
         const es = new EventSource("/api/events");
-        es.addEventListener("classroom", (e) => {
+        es.addEventListener("classroom", async (e) => {
           const d = JSON.parse(e.data);
           locked = d.locked;
           if (d.memory_mode) {
             capabilities = {
               ...(capabilities || { available_tools: ["calculator", "web_fetch"] }),
               memory_mode: d.memory_mode,
+              skills_enabled: d.skills_enabled,
               allowed_tools: d.allowed_tools || [],
               revision: d.revision,
             };
             if (memoryState) memoryState.mode = d.memory_mode;
+          }
+          if (d.skills_enabled && !skillItems.length) {
+            const skills = await api("/api/skills").catch(() => null);
+            if (skills) {
+              skillItems = skills.skills || [];
+              skillLimit = skills.limit || 12;
+              activeSkillID = skillItems[0]?.id || null;
+              creatingSkill = false;
+              renderSkillEditor();
+            }
+          }
+          if (d.skills_enabled && !templates.length) {
+            const result = await api("/api/templates").catch(() => null);
+            if (result) {
+              templates = result.templates || [];
+              renderTemplateOptions();
+            }
           }
           if (pythonController && !capabilities.allowed_tools.includes("python_execute"))
             pythonController.abort();

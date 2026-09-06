@@ -159,4 +159,4 @@ Nginx HTTPS 配置和流式检查步骤见 [HTTPS 反向代理部署](doc/HTTPS�
 
 ## 当前边界
 
-Memory 对每个学生仍默认关闭，老师可以按场次选择关闭、确认后记忆或自然记忆，并控制本场可用 Tool。Memory 只在同一课堂场次内跨对话生效；除回合开始时的相关筛选外，任务或已加载 Skill 还可以通过受限的 `recall_memory` 补充召回当前学生已确认的事实。MVP 边界见 [Memory MVP 设计](doc/MemoryMVP设计.md)，演进状态见 [Memory V2 设计与实施计划](doc/MemoryV2设计与实施计划.md)。v0.3 已提供受控联网链路：智谱模式执行本地 `web_search → web_fetch`，DeepSeek 模式由 Responses API 托管搜索；两者都需要教师按场次显式开放、学生自行装备。智谱搜索与本地网页读取每轮分别最多调用 2 次；DeepSeek 服务端内部的搜索和网页读取轮次无法由本地逐次限制。zip 导出、随机点名、优秀池、绘图和多智能体演示仍在 [todo.md](todo.md) 的后续版本清单中。
+Memory 对每个学生仍默认关闭，老师可以按场次选择关闭、确认后记忆或自然记忆，并分别控制本场 Skill 和 Tool。关闭 Skill 后，学生端隐藏 Skill 编辑入口，已有 Skill 保留但不可修改、不会进入模型上下文或投屏。Memory 只在同一课堂场次内跨对话生效；除回合开始时的相关筛选外，任务或已加载 Skill 还可以通过受限的 `recall_memory` 补充召回当前学生已确认的事实。MVP 边界见 [Memory MVP 设计](doc/MemoryMVP设计.md)，演进状态见 [Memory V2 设计与实施计划](doc/MemoryV2设计与实施计划.md)。v0.3 已提供受控联网链路：智谱模式执行本地 `web_search → web_fetch`，DeepSeek 模式由 Responses API 托管搜索；两者都需要教师按场次显式开放、学生自行装备。智谱搜索与本地网页读取每轮分别最多调用 2 次；DeepSeek 服务端内部的搜索和网页读取轮次无法由本地逐次限制。zip 导出、随机点名、优秀池、绘图和多智能体演示仍在 [todo.md](todo.md) 的后续版本清单中。

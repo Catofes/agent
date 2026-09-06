@@ -140,11 +140,11 @@ func TestRunPolicyDefaultsAndRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy, err := st.RunPolicy(ctx, run.ID)
-	if err != nil || policy.MemoryMode != MemoryModeReviewRequired || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "calculator" || policy.Revision != 1 {
+	if err != nil || policy.MemoryMode != MemoryModeReviewRequired || !policy.SkillsEnabled || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "calculator" || policy.Revision != 1 {
 		t.Fatalf("default policy=%#v err=%v", policy, err)
 	}
-	policy, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeAdaptive, AllowedTools: []string{"calculator", "calculator"}})
-	if err != nil || policy.MemoryMode != MemoryModeAdaptive || len(policy.AllowedTools) != 1 || policy.Revision != 2 {
+	policy, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeAdaptive, SkillsEnabled: false, AllowedTools: []string{"calculator", "calculator"}})
+	if err != nil || policy.MemoryMode != MemoryModeAdaptive || policy.SkillsEnabled || len(policy.AllowedTools) != 1 || policy.Revision != 2 {
 		t.Fatalf("updated policy=%#v err=%v", policy, err)
 	}
 }
@@ -317,5 +317,43 @@ func TestVersionEightDesignSkillMigratesToStructuredSkill(t *testing.T) {
 	items, err := migrated.Skills(ctx, run.ID, "2101")
 	if err != nil || len(items) != 1 || items[0].Name != "我的 Skill" || items[0].Summary != "我的 Skill" || items[0].WhenToUse == "" || items[0].TriggerMode != SkillTriggerAuto || items[0].Content != "先拆解，再核验" || !items[0].Enabled {
 		t.Fatalf("skills=%#v err=%v", items, err)
+	}
+}
+
+func TestVersionElevenPolicyEnablesSkillsByDefault(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "policy-v11.db")
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec(`ALTER TABLE run_policies DROP COLUMN skills_enabled`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec(`PRAGMA user_version = 11`); err != nil {
+		t.Fatal(err)
+	}
+	if err = raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+	policy, err := migrated.RunPolicy(ctx, run.ID)
+	if err != nil || !policy.SkillsEnabled {
+		t.Fatalf("policy=%#v err=%v", policy, err)
 	}
 }

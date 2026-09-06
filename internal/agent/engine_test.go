@@ -581,6 +581,34 @@ func TestEngineLoadsMatchedSkillBodyOnDemandAndUpdatesReceipt(t *testing.T) {
 	}
 }
 
+func TestEngineOmitsSkillsWhenClassroomPolicyDisablesThem(t *testing.T) {
+	st, run := newEngineTestStore(t)
+	fake := &fakeClient{answers: []Completion{{Content: "直接回答", Deltas: []string{"直接回答"}, TokensIn: 2, TokensOut: 2}}}
+	engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	skill := store.Skill{ID: "hidden", Name: "不应出现", Summary: "隐藏能力", WhenToUse: "任何任务", TriggerMode: store.SkillTriggerAuto, Content: "隐藏正文", Enabled: true}
+	err := engine.Run(context.Background(), Request{
+		RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "skill_disabled", Input: "完成任务",
+		Design: store.Design{SkillMD: "旧 Skill 正文", MaxTurns: 1}, Skills: []store.Skill{skill},
+		SkillsAllowedForCall: func(context.Context) (bool, error) { return false, nil },
+	}, func(Event) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("requests=%d", len(fake.requests))
+	}
+	request := fake.requests[0]
+	if strings.Contains(request.Messages[0].Content, skill.Name) || strings.Contains(request.Messages[0].Content, "旧 Skill 正文") {
+		t.Fatalf("disabled Skill leaked into prompt: %s", request.Messages[0].Content)
+	}
+	for _, definition := range request.Tools {
+		if definition.Function.Name == "load_skill" {
+			t.Fatal("load_skill was exposed while classroom Skill policy was disabled")
+		}
+	}
+}
+
 func TestLoadedSkillCanRecallScopedConfirmedMemoryAndUpdateReceipt(t *testing.T) {
 	ctx := context.Background()
 	st, run := newEngineTestStore(t)

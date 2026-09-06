@@ -45,8 +45,8 @@ test("conversations are exposed as browser-style tabs", () => {
   assert.doesNotMatch(html, /id=["']conversations["']/);
 });
 
-test("Soul, Skill and Memory share the design area as accessible tabs", () => {
-  for (const panel of ["soulPanel", "skillPanel", "memoryPanel"]) {
+test("Soul, Skill, Memory and Tools share the design area as accessible tabs", () => {
+  for (const panel of ["soulPanel", "skillPanel", "memoryPanel", "toolsPanel"]) {
     assert.match(html, new RegExp(`aria-controls=["']${panel}["']`));
     assert.match(html, new RegExp(`id=["']${panel}["']`));
   }

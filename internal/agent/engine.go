@@ -66,6 +66,7 @@ type Request struct {
 	PolicyRevision                                  int64
 	BeforeModelCall                                 func(context.Context) error
 	ToolsForCall                                    func(context.Context) ([]string, error)
+	SkillsAllowedForCall                            func(context.Context) (bool, error)
 	OnMemoryUpdate                                  func(MemoryUpdate)
 }
 
@@ -124,6 +125,16 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	for _, memory := range memories {
 		receipts = append(receipts, MemoryReceipt{ID: memory.ID, Content: memory.Content})
 	}
+	if req.SkillsAllowedForCall != nil {
+		allowed, checkErr := req.SkillsAllowedForCall(ctx)
+		if checkErr != nil {
+			return checkErr
+		}
+		if !allowed {
+			req.Skills = nil
+			req.Design.SkillMD = ""
+		}
+	}
 	req.Skills = availableSkills(req)
 	receiptEvent := Event{Type: "turn_start", TurnID: req.TurnID, SoulUsed: strings.TrimSpace(req.Design.Persona) != "", Memories: receipts}
 	receiptJSON, _ := json.Marshal(receiptEvent)
@@ -152,6 +163,13 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		}
 	}()
 	for iteration := 1; iteration <= req.Design.MaxTurns; iteration++ {
+		skillsAllowed := true
+		if req.SkillsAllowedForCall != nil {
+			skillsAllowed, err = req.SkillsAllowedForCall(ctx)
+			if err != nil {
+				return err
+			}
+		}
 		effectiveTools := req.Design.Tools
 		if req.ToolsForCall != nil {
 			effectiveTools, err = req.ToolsForCall(ctx)
@@ -169,7 +187,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			}
 			defs = filtered
 		}
-		if len(req.Skills) > 0 {
+		if skillsAllowed && len(req.Skills) > 0 {
 			defs = append(defs, loadSkillDefinition(req.Skills))
 		}
 		if e.memoryToolAvailable(ctx, req) {
@@ -331,7 +349,14 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			var toolErr error
 			if call.Function.Name == "load_skill" {
 				var loaded store.Skill
-				loaded, result, toolErr = loadSkill(req.Skills, loadedSkills, call.Function.Arguments)
+				if req.SkillsAllowedForCall != nil {
+					skillsAllowed, toolErr = req.SkillsAllowedForCall(ctx)
+				}
+				if toolErr == nil && !skillsAllowed {
+					toolErr = errors.New("Skill 当前已被老师禁用")
+				} else if toolErr == nil {
+					loaded, result, toolErr = loadSkill(req.Skills, loadedSkills, call.Function.Arguments)
+				}
 				if toolErr == nil && !loadedSkills[loaded.ID] {
 					loadedSkills[loaded.ID] = true
 					receiptEvent.Skills = append(receiptEvent.Skills, loaded.Name)

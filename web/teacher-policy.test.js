@@ -8,6 +8,7 @@ const html = fs.readFileSync(path.join(__dirname, "teacher.html"), "utf8");
 test("teacher can control classroom Memory mode and available tools", () => {
   for (const id of [
     "policyMemoryMode",
+    "policySkillsEnabled",
     "policyTools",
     "savePolicy",
     "policyStatus",
@@ -19,6 +20,7 @@ test("teacher can control classroom Memory mode and available tools", () => {
   }
   assert.match(html, /\/api\/teacher\/policy/);
   assert.match(html, /allowed_tools/);
+  assert.match(html, /skills_enabled/);
 });
 
 test("new classroom inherits the policy currently shown in the controls", () => {

@@ -55,15 +55,16 @@ const (
 )
 
 type classroomEvent struct {
-	Type         string            `json:"type"`
-	Locked       bool              `json:"locked"`
-	RunID        string            `json:"run_id,omitempty"`
-	MemoryMode   string            `json:"memory_mode,omitempty"`
-	AllowedTools []string          `json:"allowed_tools,omitempty"`
-	Revision     int64             `json:"revision,omitempty"`
-	MemoryStatus string            `json:"memory_status,omitempty"`
-	MemoryItems  []memoryEventItem `json:"memory_items,omitempty"`
-	Target       string            `json:"-"`
+	Type          string            `json:"type"`
+	Locked        bool              `json:"locked"`
+	RunID         string            `json:"run_id,omitempty"`
+	MemoryMode    string            `json:"memory_mode,omitempty"`
+	SkillsEnabled bool              `json:"skills_enabled"`
+	AllowedTools  []string          `json:"allowed_tools,omitempty"`
+	Revision      int64             `json:"revision,omitempty"`
+	MemoryStatus  string            `json:"memory_status,omitempty"`
+	MemoryItems   []memoryEventItem `json:"memory_items,omitempty"`
+	Target        string            `json:"-"`
 }
 
 type memoryEventItem struct {

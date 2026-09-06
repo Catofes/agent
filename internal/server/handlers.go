@@ -42,6 +42,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"memory_mode":           policy.MemoryMode,
+		"skills_enabled":        policy.SkillsEnabled,
 		"allowed_tools":         policy.AllowedTools,
 		"available_tools":       s.Agent.Tools.Names(),
 		"max_input_chars":       s.Config.MaxInputChars,
@@ -88,6 +89,19 @@ func (s *Server) saveDesign(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 423, "CLASS_LOCKED", "老师已暂停课堂操作")
 		return
 	}
+	policy, err := s.Store.RunPolicy(r.Context(), p.Session.RunID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
+		return
+	}
+	if !policy.SkillsEnabled {
+		current, currentErr := s.Store.Design(r.Context(), p.Session.RunID, p.Session.StudentID)
+		if currentErr == nil {
+			in.SkillMD = current.SkillMD
+		} else {
+			in.SkillMD = ""
+		}
+	}
 	d, err := s.Store.SaveDesign(r.Context(), store.Design{RunID: p.Session.RunID, StudentID: p.Session.StudentID, Persona: strings.TrimSpace(in.Persona), SkillMD: strings.TrimSpace(in.SkillMD), Tools: clean, MaxTurns: in.MaxTurns})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "保存设计失败")
@@ -106,6 +120,16 @@ type templateDTO struct {
 }
 
 func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	policy, err := s.Store.RunPolicy(r.Context(), p.Session.RunID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
+		return
+	}
+	if !policy.SkillsEnabled {
+		writeJSON(w, 200, map[string]any{"templates": []templateDTO{}})
+		return
+	}
 	entries, err := fs.ReadDir(s.Templates, ".")
 	if err != nil {
 		writeError(w, 500, "TEMPLATE_ERROR", "读取模板失败")
@@ -143,6 +167,15 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
+	policy, err := s.Store.RunPolicy(r.Context(), p.Session.RunID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
+		return
+	}
+	if !policy.SkillsEnabled {
+		writeJSON(w, 200, map[string]any{"skills": []store.Skill{}, "limit": maxSkillsPerStudent, "enabled": false})
+		return
+	}
 	items, err := s.Store.Skills(r.Context(), p.Session.RunID, p.Session.StudentID)
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "读取 Skill 列表失败")
@@ -153,11 +186,11 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSkill(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
-	var in skillInput
-	if !decodeJSON(w, r, &in) || !s.normalizeAndValidateSkillInput(w, &in) {
+	if !s.studentSkillsCanMutate(r.Context(), p, w) {
 		return
 	}
-	if !s.studentCanMutate(r.Context(), p, w) {
+	var in skillInput
+	if !decodeJSON(w, r, &in) || !s.normalizeAndValidateSkillInput(w, &in) {
 		return
 	}
 	items, err := s.Store.Skills(r.Context(), p.Session.RunID, p.Session.StudentID)
@@ -180,6 +213,9 @@ func (s *Server) createSkill(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) updateSkill(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
+	if !s.studentSkillsCanMutate(r.Context(), p, w) {
+		return
+	}
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	if id == "" || runeLen(id) > maxSkillIDChars {
 		writeError(w, 404, "SKILL_NOT_FOUND", "未找到该 Skill")
@@ -187,9 +223,6 @@ func (s *Server) updateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	var in skillInput
 	if !decodeJSON(w, r, &in) || !s.normalizeAndValidateSkillInput(w, &in) {
-		return
-	}
-	if !s.studentCanMutate(r.Context(), p, w) {
 		return
 	}
 	updated, err := s.Store.UpdateSkill(r.Context(), store.Skill{ID: id, RunID: p.Session.RunID, StudentID: p.Session.StudentID, Name: in.Name, Summary: in.Summary, WhenToUse: in.WhenToUse, TriggerMode: in.TriggerMode, Content: in.Content, Enabled: in.Enabled})
@@ -207,12 +240,12 @@ func (s *Server) updateSkill(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteSkill(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
+	if !s.studentSkillsCanMutate(r.Context(), p, w) {
+		return
+	}
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	if id == "" || runeLen(id) > maxSkillIDChars {
 		writeError(w, 404, "SKILL_NOT_FOUND", "未找到该 Skill")
-		return
-	}
-	if !s.studentCanMutate(r.Context(), p, w) {
 		return
 	}
 	err := s.Store.DeleteSkill(r.Context(), p.Session.RunID, p.Session.StudentID, id)
@@ -282,6 +315,26 @@ func (s *Server) studentCanMutate(ctx context.Context, p principal, w http.Respo
 	run, err := s.Store.Run(ctx, p.Session.RunID)
 	if err != nil || run.Status != "active" || run.Locked {
 		writeError(w, 423, "CLASS_LOCKED", "老师已暂停课堂操作")
+		return false
+	}
+	return true
+}
+
+func (s *Server) studentSkillsCanMutate(ctx context.Context, p principal, w http.ResponseWriter) bool {
+	s.controlMu.RLock()
+	defer s.controlMu.RUnlock()
+	run, err := s.Store.Run(ctx, p.Session.RunID)
+	if err != nil || run.Status != "active" || run.Locked {
+		writeError(w, 423, "CLASS_LOCKED", "老师已暂停课堂操作")
+		return false
+	}
+	policy, err := s.Store.RunPolicy(ctx, p.Session.RunID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
+		return false
+	}
+	if !policy.SkillsEnabled {
+		writeError(w, http.StatusForbidden, "SKILLS_DISABLED_BY_TEACHER", "老师当前未开放 Skill")
 		return false
 	}
 	return true
@@ -590,10 +643,15 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
 		return
 	}
-	skills, err := s.Store.Skills(r.Context(), p.Session.RunID, p.Session.StudentID)
-	if err != nil {
-		writeError(w, 500, "DATABASE_ERROR", "读取 Skill 列表失败")
-		return
+	var skills []store.Skill
+	if policy.SkillsEnabled {
+		skills, err = s.Store.Skills(r.Context(), p.Session.RunID, p.Session.StudentID)
+		if err != nil {
+			writeError(w, 500, "DATABASE_ERROR", "读取 Skill 列表失败")
+			return
+		}
+	} else {
+		d.SkillMD = ""
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store, no-transform")
@@ -636,6 +694,19 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		}
 		return intersectStrings(d.Tools, currentPolicy.AllowedTools), nil
 	}
+	skillsAllowedForCall := func(ctx context.Context) (bool, error) {
+		s.controlMu.RLock()
+		defer s.controlMu.RUnlock()
+		current, checkErr := s.Store.Run(ctx, p.Session.RunID)
+		if checkErr != nil || current.Status != "active" || current.Locked {
+			return false, agent.ErrClassLocked
+		}
+		currentPolicy, checkErr := s.Store.RunPolicy(ctx, p.Session.RunID)
+		if checkErr != nil {
+			return false, checkErr
+		}
+		return currentPolicy.SkillsEnabled, nil
+	}
 	onMemoryUpdate := func(update agent.MemoryUpdate) {
 		if update.Err != nil {
 			s.Logger.Warn("memory extraction update", "run_id", p.Session.RunID, "student_id", p.Session.StudentID, "status", update.Status, "error", update.Err)
@@ -647,7 +718,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		target := p.Session.RunID + "\x00" + p.Session.StudentID
 		s.studentMemoryHub.Publish(target, classroomEvent{Type: "memory_status", RunID: p.Session.RunID, MemoryStatus: update.Status, MemoryItems: items})
 	}
-	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, Skills: skills, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
+	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, Skills: skills, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, SkillsAllowedForCall: skillsAllowedForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
 	if err != nil {
 		code, msg := agentError(err)
 		if !emitted {
@@ -747,7 +818,7 @@ func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	sendSSE(w, "classroom", classroomEvent{Type: "classroom", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	sendSSE(w, "classroom", classroomEvent{Type: "classroom", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	flusher.Flush()
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
@@ -894,8 +965,9 @@ func (s *Server) getTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		MemoryMode   string   `json:"memory_mode"`
-		AllowedTools []string `json:"allowed_tools"`
+		MemoryMode    string   `json:"memory_mode"`
+		SkillsEnabled *bool    `json:"skills_enabled"`
+		AllowedTools  []string `json:"allowed_tools"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -911,14 +983,23 @@ func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
 		return
 	}
-	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, AllowedTools: clean})
+	currentPolicy, err := s.Store.RunPolicy(r.Context(), run.ID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
+		return
+	}
+	skillsEnabled := currentPolicy.SkillsEnabled
+	if in.SkillsEnabled != nil {
+		skillsEnabled = *in.SkillsEnabled
+	}
+	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: skillsEnabled, AllowedTools: clean})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "更新课堂能力失败")
 		return
 	}
-	s.studentHub.Publish(classroomEvent{Type: "classroom_policy", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	s.studentHub.Publish(classroomEvent{Type: "classroom_policy", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	s.wallHub.Publish(struct{}{})
-	s.Logger.Info("classroom policy changed", "run_id", run.ID, "memory_mode", policy.MemoryMode, "allowed_tools", policy.AllowedTools, "revision", policy.Revision)
+	s.Logger.Info("classroom policy changed", "run_id", run.ID, "memory_mode", policy.MemoryMode, "skills_enabled", policy.SkillsEnabled, "allowed_tools", policy.AllowedTools, "revision", policy.Revision)
 	writeJSON(w, 200, policy)
 }
 
@@ -961,7 +1042,7 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy, _ := s.Store.RunPolicy(r.Context(), run.ID)
-	s.studentHub.Publish(classroomEvent{Type: "classroom", Locked: in.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	s.studentHub.Publish(classroomEvent{Type: "classroom", Locked: in.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	s.wallHub.Publish(struct{}{})
 	s.Logger.Info("classroom lock changed", "run_id", run.ID, "locked", in.Locked)
 	writeJSON(w, 200, map[string]bool{"locked": in.Locked})
@@ -969,9 +1050,10 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name         string   `json:"name"`
-		MemoryMode   string   `json:"memory_mode"`
-		AllowedTools []string `json:"allowed_tools"`
+		Name          string   `json:"name"`
+		MemoryMode    string   `json:"memory_mode"`
+		SkillsEnabled *bool    `json:"skills_enabled"`
+		AllowedTools  []string `json:"allowed_tools"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -987,15 +1069,23 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	if in.MemoryMode == "" {
 		oldPolicy, _ := s.Store.RunPolicy(r.Context(), old.ID)
 		in.MemoryMode = oldPolicy.MemoryMode
+		if in.SkillsEnabled == nil {
+			in.SkillsEnabled = new(bool)
+			*in.SkillsEnabled = oldPolicy.SkillsEnabled
+		}
 		if in.AllowedTools == nil {
 			in.AllowedTools = oldPolicy.AllowedTools
 		}
+	}
+	if in.SkillsEnabled == nil {
+		value := true
+		in.SkillsEnabled = &value
 	}
 	clean, ok := s.validatePolicyInput(w, in.MemoryMode, in.AllowedTools)
 	if !ok {
 		return
 	}
-	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, AllowedTools: clean})
+	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: *in.SkillsEnabled, AllowedTools: clean})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "新建场次失败")
 		return
@@ -1044,10 +1134,18 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取设计失败")
 		return
 	}
-	skills, err := s.Store.Skills(r.Context(), run.ID, in.ID)
+	policy, err := s.Store.RunPolicy(r.Context(), run.ID)
 	if err != nil {
-		writeError(w, 500, "DATABASE_ERROR", "读取 Skill 列表失败")
+		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
 		return
+	}
+	var skills []store.Skill
+	if policy.SkillsEnabled {
+		skills, err = s.Store.Skills(r.Context(), run.ID, in.ID)
+		if err != nil {
+			writeError(w, 500, "DATABASE_ERROR", "读取 Skill 列表失败")
+			return
+		}
 	}
 	all, err := s.Store.StudentMessages(r.Context(), run.ID, in.ID, 0, 500)
 	if err != nil {

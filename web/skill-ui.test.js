@@ -10,6 +10,8 @@ test('student UI manages structured skills and reports only actual context', () 
   assert.match(html, /id="skillSummary"/);
   assert.match(html, /id="skillWhenToUse"/);
   assert.match(html, /id="skillTriggerMode"/);
+  assert.match(html, /id="skillTab"/);
+  assert.match(html, /id="toolsPanel"/);
   assert.match(html, /value="explicit"/);
   assert.match(html, /`@\$\{name\} `/);
   assert.match(html, /api\("\/api\/skills"/);
@@ -18,6 +20,9 @@ test('student UI manages structured skills and reports only actual context', () 
   assert.doesNotMatch(html, /state = text\("small", item\.enabled \? `\$\{mode\} ·/);
   assert.doesNotMatch(html, /Skill：本轮未提供/);
   assert.doesNotMatch(html, /Memory：本轮未读取/);
+  assert.match(html, /模板只作为新 Skill 的起点，不会覆盖当前 Skill/);
+  assert.match(html, /\$\("templates"\)\.onchange/);
+  assert.doesNotMatch(html, /id="useTemplate"/);
 });
 
 test('stream completion renders markdown from the original answer source', () => {

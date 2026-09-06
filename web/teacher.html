@@ -110,7 +110,7 @@
       }
       .policy-grid {
         display: grid;
-        grid-template-columns: minmax(220px, 1fr) minmax(260px, 2fr) auto;
+        grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr) minmax(260px, 2fr) auto;
         gap: 14px;
         align-items: end;
       }
@@ -123,6 +123,15 @@
         font-size: 0.88rem;
         font-weight: 650;
       }
+      .policy-switch > span:nth-child(2) {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 43px;
+        color: #302c49;
+      }
+      .policy-switch input { width: auto; }
+      .policy-switch small { color: #667085; line-height: 1.4; }
       .policy-tools {
         display: flex;
         min-height: 43px;
@@ -146,6 +155,14 @@
         min-height: 1.4em;
         margin: 8px 0 0;
         color: #667085;
+      }
+      @media (max-width: 1080px) {
+        .policy-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+        #savePolicy {
+          justify-self: start;
+        }
       }
       @media (max-width: 760px) {
         .detail {
@@ -195,7 +212,7 @@
           <div class="top">
             <div>
               <h2 id="policyTitle" style="margin-bottom: 4px">课堂能力</h2>
-              <div class="status">统一控制本场课堂的 Memory 行为与 Agent 可用工具。</div>
+              <div class="status">统一控制本场课堂的 Skill、Memory 与 Agent 可用工具。</div>
             </div>
           </div>
           <div class="policy-grid">
@@ -206,6 +223,11 @@
                 <option value="review_required">学生确认后记住</option>
                 <option value="adaptive">自然积累</option>
               </select>
+            </label>
+            <label class="policy-field policy-switch">
+              <span>Skill</span>
+              <span><input id="policySkillsEnabled" type="checkbox" /> 允许学生创建和使用 Skill</span>
+              <small>关闭后学生端不显示 Skill，已保存内容会保留但不会交给 Agent。</small>
             </label>
             <div class="policy-field">
               <span>允许使用的工具</span>
@@ -315,7 +337,7 @@
               t(`${s.id}　${s.name}`, "strong"),
               t(s.logged_in ? "已登录" : "未登录"),
               t(
-                `人设 ${s.has_persona ? "✓" : "…"}　手册 ${s.has_skill ? "✓" : "…"}`,
+                `人设 ${s.has_persona ? "✓" : "…"}　Skill ${wallState.policy.skills_enabled === false ? "关闭" : s.has_skill ? "✓" : "…"}`,
               ),
               t(`💬 ${s.chat_turns} 轮`),
               t(!s.logged_in ? "⚫ 离线" : idle ? "🟡 idle" : "🟢 活跃"),
@@ -337,6 +359,7 @@
       function selectedPolicy() {
         return {
           memory_mode: $("policyMemoryMode").value,
+          skills_enabled: $("policySkillsEnabled").checked,
           allowed_tools: [...$("policyTools").querySelectorAll("input:checked")].map(
             (input) => input.value,
           ),
@@ -362,12 +385,14 @@
         }
         if (!policyDirty) {
           $("policyMemoryMode").value = wallState.policy.memory_mode;
+          $("policySkillsEnabled").checked = wallState.policy.skills_enabled !== false;
           const enabled = new Set(wallState.policy.allowed_tools || []);
           $("policyTools")
             .querySelectorAll("input")
             .forEach((input) => (input.checked = enabled.has(input.value)));
         }
         $("policyMemoryMode").disabled = policyBusy;
+        $("policySkillsEnabled").disabled = policyBusy;
         $("policyTools")
           .querySelectorAll("input")
           .forEach((input) => (input.disabled = policyBusy));
@@ -380,6 +405,7 @@
         renderPolicy();
       }
       $("policyMemoryMode").onchange = markPolicyDirty;
+      $("policySkillsEnabled").onchange = markPolicyDirty;
       $("savePolicy").onclick = async () => {
         if (!wallState || policyBusy || !policyDirty) return;
         policyBusy = true;
@@ -467,11 +493,18 @@
         const d = await api("/api/teacher/student/" + encodeURIComponent(id));
         current = d;
         $("studentTitle").textContent = `${d.student.id}　${d.student.name}`;
-        const skills = (d.skills || []).map((skill) =>
-		  `${skill.enabled ? "✓" : "○"} ${skill.name}\n能力：${skill.summary || "（未填写）"}\n何时使用：${skill.when_to_use || "（未填写）"}\n触发：${skill.trigger_mode === "explicit" ? "仅明确调用" : "自动判断"}`,
-        ).join("\n\n");
+        const skills = (d.skills || [])
+          .map(
+            (skill) =>
+              `${skill.enabled ? "✓" : "○"} ${skill.name}\n能力：${skill.summary || "（未填写）"}\n何时使用：${skill.when_to_use || "（未填写）"}\n触发：${skill.trigger_mode === "explicit" ? "仅明确调用" : "自动判断"}`,
+          )
+          .join("\n\n");
+        const skillDisplay =
+          wallState.policy.skills_enabled === false
+            ? "本场课堂已关闭（原内容仍保留）"
+            : skills || "（未创建）";
         $("design").textContent =
-          `人设\n${d.design.persona || "（未填写）"}\n\nSkill 目录\n${skills || "（未创建）"}\n\n装备：${d.design.tools.map(toolLabel).join("、") || "无"}\n最大步数：${d.design.max_turns}`;
+          `人设\n${d.design.persona || "（未填写）"}\n\nSkill 目录\n${skillDisplay}\n\n装备：${d.design.tools.map(toolLabel).join("、") || "无"}\n最大步数：${d.design.max_turns}`;
         $("messages").replaceChildren(
           ...d.messages.map((m) => {
             const e = document.createElement("div"),
