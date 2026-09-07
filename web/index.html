@@ -287,6 +287,7 @@
         }
       }
     </style>
+    <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css" />
     <link rel="stylesheet" href="/assets/ui.css" />
   </head>
   <body class="student-page">
@@ -501,6 +502,7 @@
         </section>
       </section>
     </main>
+    <script src="/assets/vendor/katex/katex.min.js"></script>
     <script src="/assets/markdown.js"></script>
     <script src="/assets/ndjson-stream.js"></script>
     <script>
@@ -525,7 +527,9 @@
         deltaQueue = [],
         deltaFrame = 0,
         queuedDeltaChars = 0,
-        memoryNoticeTimer = 0;
+        memoryNoticeTimer = 0,
+        historyToolActions = new Map(),
+        historyToolStep = 0;
       function selectDesignPanel(panelID) {
         if (!document.querySelector(`[data-design-tab="${panelID}"]:not(.hidden)`)) {
           panelID = "soulPanel";
@@ -780,8 +784,10 @@
           api("/api/messages?conversation_id=" + encodeURIComponent(activeConversation)),
           api("/api/artifacts?conversation_id=" + encodeURIComponent(activeConversation)),
         ]);
-        m.messages.forEach(renderHistory);
         artifactItems = files.artifacts || [];
+        historyToolActions = new Map();
+        historyToolStep = 0;
+        m.messages.forEach(renderHistory);
         renderArtifacts();
         $("messages").scrollTop = $("messages").scrollHeight;
       }
@@ -1292,20 +1298,59 @@
         $("messages").scrollTop = $("messages").scrollHeight;
       }
       function actionBox(ev) {
-        const box = document.createElement("div");
+        const box = document.createElement("div"),
+          heading = document.createElement("div"),
+          details = document.createElement("details"),
+          detailsSummary = document.createElement("summary"),
+          technical = document.createElement("div"),
+          result = document.createElement("div"),
+          resultText = document.createElement("pre"),
+          previews = document.createElement("div");
         box.className = "action";
         const toolName = toolLabel(ev.tool);
-        box.textContent = `第 ${ev.step} 步：${toolName}｜${ev.summary || ""}`;
+        heading.textContent = `${ev.step === "" ? "" : `第 ${ev.step} 步：`}${toolName}｜${ev.summary || ""}`;
+        detailsSummary.textContent = "查看技术细节";
+        technical.className = "technical-detail";
+        result.className = "tool-result-detail hidden";
+        result.append(text("strong", "工具结果"), resultText);
+        previews.className = "artifact-previews";
         if (ev.detail) {
-          const d = document.createElement("details"),
-            s = document.createElement("summary"),
-            pre = text("pre", JSON.stringify(ev.detail, null, 2));
-          s.textContent = "查看技术细节";
-          d.append(s, pre);
-          box.append(d);
+          technical.append(
+            text("strong", "调用参数"),
+            text("pre", JSON.stringify(ev.detail, null, 2)),
+          );
         }
+        technical.append(result);
+        details.append(detailsSummary, technical);
+        box.append(heading, details, previews);
         $("messages").append(box);
-        return box;
+        return { box, heading, result, resultText, previews };
+      }
+      function imageArtifactPreview(item) {
+        const mime = String(item?.mime_type || "").toLowerCase(),
+          previewable = item?.preview || mime.startsWith("image/png") || mime.startsWith("image/jpeg");
+        if (!item?.id || !previewable)
+          return null;
+        const link = document.createElement("a"),
+          image = document.createElement("img"),
+          caption = text("span", item.name || "生成的图片");
+        link.className = "artifact-preview";
+        link.href = "/api/artifacts/" + encodeURIComponent(item.id);
+        link.target = "_blank";
+        link.rel = "noopener";
+        image.src = link.href;
+        image.alt = item.name || "Python 生成的图片";
+        image.loading = "lazy";
+        link.append(image, caption);
+        return link;
+      }
+      function finishAction(action, result, artifacts = []) {
+        if (!action) return;
+        action.resultText.textContent = result || "（无可显示结果）";
+        action.result.classList.remove("hidden");
+        action.previews.replaceChildren(
+          ...artifacts.map(imageArtifactPreview).filter(Boolean),
+        );
       }
       function historyToolSummary(call) {
         if (call.function?.name !== "python_execute") return call.function?.arguments || "";
@@ -1342,19 +1387,30 @@
           if (m.reasoning) appendReasoning(m.reasoning, false);
           if (!m.tool_calls) appendMessage(m.content, "assistant", true);
           else {
+            if (m.content?.trim()) appendMessage(m.content, "assistant", true);
             try {
-              JSON.parse(m.tool_calls).forEach((c, i) =>
-                actionBox({
-                  step: i + 1,
+              JSON.parse(m.tool_calls).forEach((c) => {
+                const action = actionBox({
+                  step: ++historyToolStep,
                   tool: c.function?.name || "工具",
                   summary: historyToolSummary(c),
                   detail: c,
-                }),
-              );
+                });
+                if (c.id) historyToolActions.set(c.id, action);
+              });
             } catch {}
           }
-        } else if (m.role === "tool")
-          appendMessage("工具结果：" + m.content, "action");
+        } else if (m.role === "tool") {
+          const relatedArtifacts = artifactItems.filter(
+              (item) => m.content?.includes(item.id),
+            ),
+            action = historyToolActions.get(m.tool_calls);
+          finishAction(
+            action || actionBox({ step: "", tool: "工具", summary: "历史调用" }),
+            m.content,
+            relatedArtifacts,
+          );
+        }
       }
       $("chatForm").onsubmit = async (e) => {
         e.preventDefault();
@@ -1371,12 +1427,27 @@
           answerRendered = false,
           reasoning = null,
           receiptBox = null,
-          receiptEvent = null;
+          receiptEvent = null,
+          liveToolActions = new Map();
         const renderAnswer = () => {
           if (!answer || answerRendered) return;
           flushDeltas(true);
           MarkdownRenderer.render(answer, answerSource);
           answerRendered = true;
+        };
+        const completeGenerationSegment = () => {
+          renderAnswer();
+          if (reasoning) {
+            reasoning.box.open = false;
+            reasoning.summary.textContent = "思考草稿";
+          }
+          // A tool call ends the current model generation. The model response
+          // after the tool result belongs to a new segment and must get fresh
+          // DOM nodes below the tool action instead of reusing nodes above it.
+          answer = null;
+          answerSource = "";
+          answerRendered = false;
+          reasoning = null;
         };
         const handleEvent = (ev) => {
           if (ev.type === "turn_start") {
@@ -1406,9 +1477,12 @@
             if (!answer) answer = appendMessage("", "assistant");
             answerSource += ev.delta;
             queueDelta(answer, ev.delta);
-          } else if (ev.type === "tool_start") actionBox(ev);
+          } else if (ev.type === "tool_start") {
+            completeGenerationSegment();
+            liveToolActions.set(ev.step, actionBox(ev));
+          }
           else if (ev.type === "tool_result") {
-            appendMessage(`工具返回：${ev.summary}`, "action");
+            finishAction(liveToolActions.get(ev.step), ev.summary, ev.artifacts);
             if (ev.artifacts?.length) mergeArtifacts(ev.artifacts);
           }
           else if (ev.type === "turn_end") {

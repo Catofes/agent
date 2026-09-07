@@ -178,7 +178,15 @@ func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (
 	cfg := config.Config{AdminPassword: "teacher-secret", AnonymousHMACKey: "hmac-secret", SessionTTL: time.Hour, LLMTimeout: time.Second, LLMConcurrency: 4, StudentTokenBudget: 1000, DefaultMaxTurns: 5, MinMaxTurns: 1, MaxMaxTurns: 8, MaxToolCalls: 4, MaxPersonaChars: 100, MaxSkillChars: 1000, MaxInputChars: 100, MaxOutputChars: 1000, MaxMemoryItems: 30, MaxMemoryChars: 400, MaxMemoryTokens: 1200}
 	engine := agent.NewEngine(st, client, tools.NewRegistry(tools.Calculator{}), "fake", "hmac-secret", time.Second, 4)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
-	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("student")}, "teacher.html": &fstest.MapFile{Data: []byte("teacher")}, "screen.html": &fstest.MapFile{Data: []byte("screen")}, "ndjson-stream.js": &fstest.MapFile{Data: []byte("stream parser")}}
+	web := fstest.MapFS{
+		"index.html":                 &fstest.MapFile{Data: []byte("student")},
+		"teacher.html":               &fstest.MapFile{Data: []byte("teacher")},
+		"screen.html":                &fstest.MapFile{Data: []byte("screen")},
+		"ndjson-stream.js":           &fstest.MapFile{Data: []byte("stream parser")},
+		"vendor/katex/katex.min.css": &fstest.MapFile{Data: []byte("katex css")},
+		"vendor/katex/katex.min.js":  &fstest.MapFile{Data: []byte("katex js")},
+		"vendor/katex/fonts/KaTeX_Main-Regular.woff2": &fstest.MapFile{Data: []byte("katex font")},
+	}
 	templates := fstest.MapFS{"quiz.md": &fstest.MapFile{Data: []byte("# template")}}
 	app := New(cfg, st, engine, web, templates, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(func() { st.Close() })
@@ -672,7 +680,11 @@ func TestTeacherLockAndRunSwitch(t *testing.T) {
 
 func TestPagesAreServed(t *testing.T) {
 	handler, _ := testServer(t)
-	for _, p := range []string{"/", "/teacher", "/screen", "/assets/ndjson-stream.js", "/healthz"} {
+	for _, p := range []string{
+		"/", "/teacher", "/screen", "/assets/ndjson-stream.js",
+		"/assets/vendor/katex/katex.min.css", "/assets/vendor/katex/katex.min.js",
+		"/assets/vendor/katex/fonts/KaTeX_Main-Regular.woff2", "/healthz",
+	} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
 		if rec.Code != 200 {

@@ -1,8 +1,8 @@
 (function (root, factory) {
-  const api = factory();
+  const api = factory(root);
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.MarkdownRenderer = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (root) {
   function matchListItem(line) {
     let match = String(line || "").match(/^(\s*)[-+*]\s+(.+)$/);
     if (match) return { type: "unordered-list", indent: match[1].length, text: match[2] };
@@ -18,11 +18,48 @@
   function startsBlock(line) {
     return (
       /^\s*```/.test(line) ||
+      /^\s*(?:\$\$|\\\[)/.test(line) ||
       /^(#{1,6})\s+/.test(line) ||
       /^\s*>\s?/.test(line) ||
       Boolean(matchListItem(line)) ||
       isRule(line)
     );
+  }
+
+  function parseMathBlock(lines, start) {
+    const trimmed = lines[start].trim();
+    let close, content;
+    if (trimmed.startsWith("$$")) {
+      close = "$$";
+      content = trimmed.slice(2);
+    } else if (trimmed.startsWith("\\[")) {
+      close = "\\]";
+      content = trimmed.slice(2);
+    } else {
+      return null;
+    }
+
+    const sameLineEnd = content.lastIndexOf(close);
+    if (sameLineEnd >= 0 && !content.slice(sameLineEnd + close.length).trim()) {
+      return {
+        block: { type: "math", text: content.slice(0, sameLineEnd).trim() },
+        next: start + 1,
+      };
+    }
+
+    const parts = [content];
+    for (let index = start + 1; index < lines.length; index++) {
+      const end = lines[index].lastIndexOf(close);
+      if (end >= 0 && !lines[index].slice(end + close.length).trim()) {
+        parts.push(lines[index].slice(0, end));
+        return {
+          block: { type: "math", text: parts.join("\n").trim() },
+          next: index + 1,
+        };
+      }
+      parts.push(lines[index]);
+    }
+    return null;
   }
 
   function parseBlocks(source) {
@@ -44,6 +81,12 @@
         }
         if (index < lines.length) index++;
         blocks.push({ type: "code", language: fence[1], text: content.join("\n") });
+        continue;
+      }
+      const math = parseMathBlock(lines, index);
+      if (math) {
+        blocks.push(math.block);
+        index = math.next;
         continue;
       }
       const heading = line.match(/^(#{1,6})\s+(.+)$/);
@@ -130,7 +173,7 @@
     return /^(?:https?:|mailto:)/i.test(href) ? href : "";
   }
 
-  function appendInline(parent, source, doc) {
+  function appendFormattedInline(parent, source, doc) {
     const text = String(source || "");
     const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_([^_\n]+)_|\[[^\]\n]+\]\([^\s)]+\))/g;
     let cursor = 0;
@@ -164,6 +207,76 @@
     if (cursor < text.length) appendTextWithBreaks(parent, text.slice(cursor), doc);
   }
 
+  function isEscaped(text, index) {
+    let slashes = 0;
+    for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor--) slashes++;
+    return slashes % 2 === 1;
+  }
+
+  function findInlineMath(text, start) {
+    for (let index = start; index < text.length; index++) {
+      if (text[index] === "`" && !isEscaped(text, index)) {
+        const end = text.indexOf("`", index + 1);
+        if (end < 0) return null;
+        index = end;
+        continue;
+      }
+      if (text.startsWith("\\(", index) && !isEscaped(text, index)) {
+        const end = text.indexOf("\\)", index + 2);
+        if (end >= 0) return { start: index, end: end + 2, text: text.slice(index + 2, end) };
+      }
+      if (
+        text[index] === "$" &&
+        text[index + 1] !== "$" &&
+        !isEscaped(text, index) &&
+        !/\s/.test(text[index + 1] || "")
+      ) {
+        for (let end = index + 1; end < text.length; end++) {
+          if (
+            text[end] === "$" &&
+            text[end + 1] !== "$" &&
+            !isEscaped(text, end) &&
+            !/\s/.test(text[end - 1] || "")
+          ) {
+            return { start: index, end: end + 1, text: text.slice(index + 1, end) };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function mathElement(source, displayMode, doc) {
+    const element = doc.createElement(displayMode ? "div" : "span");
+    element.className = displayMode ? "math-block" : "math-inline";
+    try {
+      if (!root.katex || typeof root.katex.render !== "function") throw new Error("KaTeX unavailable");
+      root.katex.render(source, element, {
+        displayMode,
+        throwOnError: false,
+        strict: "ignore",
+        trust: false,
+        output: "htmlAndMathml",
+        maxExpand: 1000,
+      });
+    } catch (_) {
+      element.textContent = displayMode ? `$$${source}$$` : `$${source}$`;
+      element.className += " math-fallback";
+    }
+    return element;
+  }
+
+  function appendInline(parent, source, doc) {
+    const text = String(source || "");
+    let cursor = 0, match;
+    while ((match = findInlineMath(text, cursor))) {
+      if (match.start > cursor) appendFormattedInline(parent, text.slice(cursor, match.start), doc);
+      parent.append(mathElement(match.text, false, doc));
+      cursor = match.end;
+    }
+    if (cursor < text.length) appendFormattedInline(parent, text.slice(cursor), doc);
+  }
+
   function appendTextWithBreaks(parent, value, doc) {
     String(value).split("\n").forEach((part, index) => {
       if (index) parent.append(doc.createElement("br"));
@@ -184,6 +297,7 @@
         pre.append(code);
         return pre;
       }
+      if (block.type === "math") return mathElement(block.text, true, doc);
       if (block.type === "rule") return doc.createElement("hr");
       if (block.type === "heading") {
         const heading = doc.createElement("h" + block.level);

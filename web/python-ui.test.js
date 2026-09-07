@@ -42,3 +42,28 @@ test("Python history uses a bounded readable action summary", () => {
   assert.match(html, /运行 \$\{chars\} 字 Python 代码/);
   assert.match(html, /summary: historyToolSummary\(c\)/);
 });
+
+test("tool results stay in technical details and generated images are previewed", () => {
+  assert.match(html, /className = "tool-result-detail hidden"/);
+  assert.match(html, /finishAction\(liveToolActions\.get\(ev\.step\), ev\.summary, ev\.artifacts\)/);
+  assert.match(html, /historyToolActions\.get\(m\.tool_calls\)/);
+  assert.match(html, /className = "artifact-preview"/);
+  assert.match(html, /image\.src = link\.href/);
+  assert.doesNotMatch(html, /appendMessage\(`工具返回：\$\{ev\.summary\}`/);
+});
+
+test("each post-tool generation gets fresh reasoning and answer nodes below the tool", () => {
+  assert.match(html, /const completeGenerationSegment = \(\) => \{/);
+  assert.match(html, /answer = null;\s*answerSource = "";\s*answerRendered = false;\s*reasoning = null;/);
+  const toolBranch = html.slice(
+    html.indexOf('} else if (ev.type === "tool_start")'),
+    html.indexOf('else if (ev.type === "tool_result")'),
+  );
+  assert.ok(toolBranch.indexOf("completeGenerationSegment();") < toolBranch.indexOf("actionBox(ev)"));
+});
+
+test("history preserves model preambles and globally increasing tool steps", () => {
+  assert.match(html, /historyToolStep = 0;/);
+  assert.match(html, /if \(m\.content\?\.trim\(\)\) appendMessage\(m\.content, "assistant", true\);/);
+  assert.match(html, /step: \+\+historyToolStep/);
+});

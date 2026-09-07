@@ -343,6 +343,14 @@ p { line-height: 1.65; }
 }
 .reasoning { border: 1px solid #e6e7ed; border-left: 4px solid #9c96c4; border-radius: 11px; background: #f9f9fc; }
 .action { border: 1px solid #f4dfb9; border-left: 4px solid #e2a23d; border-radius: 11px; background: var(--warning-soft); }
+.action details { margin-top: 8px; }
+.action summary { cursor: pointer; color: #795b25; font-weight: 700; }
+.technical-detail { display: grid; gap: 8px; margin-top: 9px; }
+.technical-detail pre { max-height: 240px; margin: 0; padding: 10px; overflow: auto; border-radius: 8px; background: rgba(255, 255, 255, .72); color: #51462f; white-space: pre-wrap; word-break: break-word; }
+.tool-result-detail { display: grid; gap: 6px; }
+.artifact-previews { display: grid; gap: 9px; margin-top: 10px; }
+.artifact-preview { display: grid; gap: 6px; color: #725315; font-size: .82rem; font-weight: 700; text-decoration: none; }
+.artifact-preview img { display: block; width: 100%; max-height: 360px; object-fit: contain; border: 1px solid #ead6af; border-radius: 10px; background: white; }
 .notice { border: 1px solid #f4dfb9; background: var(--warning-soft); color: #8d5d18; }
 .memory-notice {
   display: flex;
@@ -411,6 +419,17 @@ p { line-height: 1.65; }
 .markdown-body pre code { padding: 0; background: transparent; color: inherit; font-size: .84em; }
 .markdown-body a { color: var(--primary); text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .markdown-body hr { margin: .9em 0; border: 0; border-top: 1px solid var(--line); }
+.markdown-body .math-inline { overflow-wrap: normal; }
+.markdown-body .math-block {
+  max-width: 100%;
+  margin: .75em 0;
+  padding: .25em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  overflow-wrap: normal;
+}
+.markdown-body .math-fallback { color: var(--muted); font-family: "SFMono-Regular", Consolas, monospace; }
 .message-role { display: block; margin-bottom: .35em; color: inherit; font-size: .78em; letter-spacing: .05em; opacity: .68; }
 
 /* Teacher dashboard */
