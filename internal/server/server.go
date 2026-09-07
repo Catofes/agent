@@ -60,6 +60,7 @@ type classroomEvent struct {
 	RunID         string            `json:"run_id,omitempty"`
 	MemoryMode    string            `json:"memory_mode,omitempty"`
 	SkillsEnabled bool              `json:"skills_enabled"`
+	PresetSkills  []string          `json:"preset_skills"`
 	AllowedTools  []string          `json:"allowed_tools,omitempty"`
 	Revision      int64             `json:"revision,omitempty"`
 	MemoryStatus  string            `json:"memory_status,omitempty"`

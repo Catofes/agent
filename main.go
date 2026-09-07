@@ -54,7 +54,7 @@ func main() {
 		os.Exit(1)
 	}
 	searchProvider := strings.ToLower(strings.TrimSpace(cfg.WebSearchProvider))
-	toolItems := []tools.Tool{tools.Calculator{}, tools.NewWebFetch()}
+	toolItems := []tools.Tool{tools.NewWebFetch()}
 	var runnerClient *runnerapi.Client
 	if strings.TrimSpace(cfg.RunnerURL) != "" {
 		runnerClient = runnerapi.NewClient(cfg.RunnerURL, cfg.RunnerToken, &http.Client{Timeout: cfg.RunnerTimeout})

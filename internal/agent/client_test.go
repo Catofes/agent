@@ -144,7 +144,7 @@ func TestDeepSeekResponsesRequestUsesBuiltinAndFlatFunctionTools(t *testing.T) {
 		stream := `data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"答案"}]}],"usage":{"input_tokens":3,"output_tokens":1}}}` + "\n\n"
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil
 	})}}
-	definition := tools.Calculator{}.Definition()
+	definition := tools.Definition{Type: "function", Function: tools.FunctionSpec{Name: "calculator", Description: "test tool", Parameters: map[string]any{"type": "object"}}}
 	got, err := client.Complete(context.Background(), CompletionRequest{Model: "deepseek-v4-flash", UserID: "anonymous", Messages: []Message{{Role: "system", Content: "规则"}, {Role: "user", Content: "问题"}}, Tools: []tools.Definition{definition}, EnableWebSearch: true})
 	if err != nil {
 		t.Fatal(err)

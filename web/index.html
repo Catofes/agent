@@ -411,7 +411,6 @@
               </div>
               <div class="design-options">
                 <div class="tool-options" aria-label="Agent 工具">
-                  <label id="calculatorOption" class="tool-option"><input id="calculator" type="checkbox" /> <span>🧮 使用计算器</span></label>
                   <label id="webSearchOption" class="tool-option hidden"><input id="webSearch" type="checkbox" /> <span>🔎 搜索网上信息</span></label>
                   <label id="webFetchOption" class="tool-option"><input id="webFetch" type="checkbox" /> <span>🌐 访问公开网页</span></label>
                   <label id="pythonOption" class="tool-option hidden"><input id="pythonExecute" type="checkbox" /> <span>🐍 使用 Python</span></label>
@@ -568,7 +567,6 @@
       }
       function toolLabel(name) {
         return {
-          calculator: "计算器",
           web_search: "网上搜索",
           web_fetch: "网页访问",
           python_execute: "Python 执行",
@@ -581,7 +579,7 @@
         $("saveStatus").textContent = "设计尚未保存";
         $("saveStatus").className = "status unsaved";
       }
-      ["persona", "calculator", "webSearch", "webFetch", "pythonExecute", "maxTurns"].forEach((id) =>
+      ["persona", "webSearch", "webFetch", "pythonExecute", "maxTurns"].forEach((id) =>
         $(id).addEventListener("input", () => {
           if (id === "maxTurns")
             $("turnValue").textContent = $("maxTurns").value;
@@ -644,7 +642,6 @@
             api("/api/skills"),
           ]);
           $("persona").value = d.persona;
-          $("calculator").checked = d.tools.includes("calculator");
           $("webSearch").checked = d.tools.includes("web_search");
           $("webFetch").checked = d.tools.includes("web_fetch");
           $("pythonExecute").checked = d.tools.includes("python_execute");
@@ -921,16 +918,21 @@
         }
       };
       function renderTemplateOptions() {
-        $("templates").replaceChildren(
-          new Option("从模板新建…", ""),
-          ...templates.map(
-            (item) =>
-              new Option(
-                `模板：${item.name} — ${item.summary || "预制方法"}`,
-                item.id,
-              ),
-          ),
+        const select = $("templates"),
+          categoryLabels = { basic: "基础", physics: "物理", math: "数学" };
+        select.replaceChildren(
+          new Option(templates.length ? "从预设新建…" : "老师未开放预设 Skill", ""),
         );
+        Object.entries(categoryLabels).forEach(([category, title]) => {
+          const items = templates.filter((item) => item.category === category);
+          if (!items.length) return;
+          const group = document.createElement("optgroup");
+          group.label = title;
+          items.forEach((item) =>
+            group.append(new Option(`${item.name} — ${item.summary || "预制方法"}`, item.id)),
+          );
+          select.append(group);
+        });
       }
       $("templates").onchange = () => {
         const template = templates.find(
@@ -1078,7 +1080,6 @@
             persona: $("persona").value,
             skill_md: "",
             tools: [
-              $("calculator").checked ? "calculator" : "",
               capabilities?.available_tools.includes("web_search") &&
               $("webSearch").checked
                 ? "web_search"
@@ -1567,7 +1568,6 @@
           "skillTriggerMode",
           "skillContent",
           "skillEnabled",
-          "calculator",
           "webSearch",
           "webFetch",
           "pythonExecute",
@@ -1591,15 +1591,12 @@
         });
         $("deleteSkill").disabled = locked || !!controller || !activeSkillID;
         $("invokeSkill").disabled = locked || !!controller || !activeSkillID;
-        const calculatorAllowed =
-          !capabilities || capabilities.allowed_tools.includes("calculator");
         const webFetchAllowed =
           !capabilities || capabilities.allowed_tools.includes("web_fetch");
         const webSearchAllowed =
           !capabilities || capabilities.allowed_tools.includes("web_search");
         const pythonAllowed =
           !!capabilities?.allowed_tools.includes("python_execute");
-        $("calculator").disabled = locked || !!controller || !calculatorAllowed;
         $("webSearch").disabled = locked || !!controller || !webSearchAllowed;
         $("webFetch").disabled = locked || !!controller || !webFetchAllowed;
         $("pythonExecute").disabled = locked || !!controller || !pythonAllowed;
@@ -1624,7 +1621,6 @@
         const available = new Set(capabilities.available_tools || []),
           allowed = new Set(capabilities.allowed_tools || []),
           items = [
-            ["calculator", "calculatorOption", "calculator"],
             ["web_search", "webSearchOption", "webSearch"],
             ["web_fetch", "webFetchOption", "webFetch"],
             ["python_execute", "pythonOption", "pythonExecute"],
@@ -1667,11 +1663,15 @@
         es.addEventListener("classroom", async (e) => {
           const d = JSON.parse(e.data);
           locked = d.locked;
+          const presetChanged =
+            JSON.stringify(capabilities?.preset_skills || []) !==
+            JSON.stringify(d.preset_skills || []);
           if (d.memory_mode) {
             capabilities = {
-              ...(capabilities || { available_tools: ["calculator", "web_fetch"] }),
+              ...(capabilities || { available_tools: ["web_fetch"] }),
               memory_mode: d.memory_mode,
               skills_enabled: d.skills_enabled,
+              preset_skills: d.preset_skills || [],
               allowed_tools: d.allowed_tools || [],
               revision: d.revision,
             };
@@ -1687,7 +1687,7 @@
               renderSkillEditor();
             }
           }
-          if (d.skills_enabled && !templates.length) {
+          if (d.skills_enabled && (presetChanged || !templates.length)) {
             const result = await api("/api/templates").catch(() => null);
             if (result) {
               templates = result.templates || [];

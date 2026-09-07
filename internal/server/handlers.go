@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +42,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"memory_mode":           policy.MemoryMode,
 		"skills_enabled":        policy.SkillsEnabled,
+		"preset_skills":         policy.PresetSkills,
 		"allowed_tools":         policy.AllowedTools,
 		"available_tools":       s.Agent.Tools.Names(),
 		"max_input_chars":       s.Config.MaxInputChars,
@@ -113,6 +113,7 @@ func (s *Server) saveDesign(w http.ResponseWriter, r *http.Request) {
 
 type templateDTO struct {
 	ID        string `json:"id"`
+	Category  string `json:"category"`
 	Name      string `json:"name"`
 	Summary   string `json:"summary"`
 	WhenToUse string `json:"when_to_use"`
@@ -130,38 +131,22 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"templates": []templateDTO{}})
 		return
 	}
-	entries, err := fs.ReadDir(s.Templates, ".")
-	if err != nil {
-		writeError(w, 500, "TEMPLATE_ERROR", "读取模板失败")
-		return
-	}
-	names := map[string]string{"quiz-master.md": "出题官", "weekly-editor.md": "周报小编", "debate-coach.md": "辩论教练"}
-	summaries := map[string]string{
-		"quiz-master.md":   "根据学习主题设计题目、逐步提示并讲解答案。",
-		"weekly-editor.md": "把零散事项整理成结构清晰、重点明确的周报。",
-		"debate-coach.md":  "帮助构建立论、预判反驳并进行辩论训练。",
-	}
-	whenToUse := map[string]string{
-		"quiz-master.md":   "用户希望练习、测验或检查某个学科知识点时。",
-		"weekly-editor.md": "用户提供一周的事件、人物或感想，希望整理成周报时。",
-		"debate-coach.md":  "用户希望分析辩题、寻找论据或模拟攻辩时。",
+	enabled := make(map[string]bool, len(policy.PresetSkills))
+	for _, id := range policy.PresetSkills {
+		enabled[id] = true
 	}
 	var out []templateDTO
-	for _, e := range entries {
-		if e.IsDir() || !safeFileBase(e.Name()) {
+	for _, item := range presetSkillCatalog {
+		if !enabled[item.ID] {
 			continue
 		}
-		b, err := fs.ReadFile(s.Templates, e.Name())
+		b, err := fs.ReadFile(s.Templates, item.File)
 		if err != nil {
-			continue
+			writeError(w, 500, "TEMPLATE_ERROR", "读取预设 Skill 失败")
+			return
 		}
-		display := names[e.Name()]
-		if display == "" {
-			display = strings.TrimSuffix(e.Name(), ".md")
-		}
-		out = append(out, templateDTO{ID: strings.TrimSuffix(e.Name(), ".md"), Name: display, Summary: summaries[e.Name()], WhenToUse: whenToUse[e.Name()], Content: string(b)})
+		out = append(out, templateDTO{ID: item.ID, Category: item.Category, Name: item.Name, Summary: item.Summary, WhenToUse: item.WhenToUse, Content: string(b)})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	writeJSON(w, 200, map[string]any{"templates": out})
 }
 
@@ -818,7 +803,7 @@ func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	sendSSE(w, "classroom", classroomEvent{Type: "classroom", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	sendSSE(w, "classroom", classroomEvent{Type: "classroom", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	flusher.Flush()
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
@@ -887,7 +872,7 @@ func (s *Server) wallEvents(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return false
 		}
-		sendSSE(w, "wall", map[string]any{"run": current, "policy": policy, "available_tools": s.Agent.Tools.Names(), "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
+		sendSSE(w, "wall", map[string]any{"run": current, "policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
 		flusher.Flush()
 		return true
 	}
@@ -960,20 +945,17 @@ func (s *Server) getTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"policy": policy, "available_tools": s.Agent.Tools.Names()})
+	writeJSON(w, 200, map[string]any{"policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions()})
 }
 
 func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		MemoryMode    string   `json:"memory_mode"`
-		SkillsEnabled *bool    `json:"skills_enabled"`
-		AllowedTools  []string `json:"allowed_tools"`
+		MemoryMode    string    `json:"memory_mode"`
+		SkillsEnabled *bool     `json:"skills_enabled"`
+		PresetSkills  *[]string `json:"preset_skills"`
+		AllowedTools  []string  `json:"allowed_tools"`
 	}
 	if !decodeJSON(w, r, &in) {
-		return
-	}
-	clean, ok := s.validatePolicyInput(w, in.MemoryMode, in.AllowedTools)
-	if !ok {
 		return
 	}
 	s.controlMu.Lock()
@@ -992,35 +974,55 @@ func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 	if in.SkillsEnabled != nil {
 		skillsEnabled = *in.SkillsEnabled
 	}
-	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: skillsEnabled, AllowedTools: clean})
+	presetSkills := currentPolicy.PresetSkills
+	if in.PresetSkills != nil {
+		presetSkills = *in.PresetSkills
+	}
+	cleanTools, cleanPresets, ok := s.validatePolicyInput(w, in.MemoryMode, in.AllowedTools, presetSkills)
+	if !ok {
+		return
+	}
+	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: skillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "更新课堂能力失败")
 		return
 	}
-	s.studentHub.Publish(classroomEvent{Type: "classroom_policy", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	s.studentHub.Publish(classroomEvent{Type: "classroom_policy", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	s.wallHub.Publish(struct{}{})
-	s.Logger.Info("classroom policy changed", "run_id", run.ID, "memory_mode", policy.MemoryMode, "skills_enabled", policy.SkillsEnabled, "allowed_tools", policy.AllowedTools, "revision", policy.Revision)
+	s.Logger.Info("classroom policy changed", "run_id", run.ID, "memory_mode", policy.MemoryMode, "skills_enabled", policy.SkillsEnabled, "preset_skills", policy.PresetSkills, "allowed_tools", policy.AllowedTools, "revision", policy.Revision)
 	writeJSON(w, 200, policy)
 }
 
-func (s *Server) validatePolicyInput(w http.ResponseWriter, memoryMode string, allowedTools []string) ([]string, bool) {
+func (s *Server) validatePolicyInput(w http.ResponseWriter, memoryMode string, allowedTools, presetSkills []string) ([]string, []string, bool) {
 	if memoryMode != store.MemoryModeDisabled && memoryMode != store.MemoryModeReviewRequired && memoryMode != store.MemoryModeAdaptive {
 		writeError(w, 400, "INVALID_MEMORY_MODE", "Memory 模式不正确")
-		return nil, false
+		return nil, nil, false
 	}
 	seen := map[string]bool{}
 	clean := make([]string, 0, len(allowedTools))
 	for _, name := range allowedTools {
 		if _, exists := s.Agent.Tools.Get(name); !exists {
 			writeError(w, 400, "UNKNOWN_TOOL", "包含服务端未注册的 Tool")
-			return nil, false
+			return nil, nil, false
 		}
 		if !seen[name] {
 			seen[name] = true
 			clean = append(clean, name)
 		}
 	}
-	return clean, true
+	seen = map[string]bool{}
+	presets := make([]string, 0, len(presetSkills))
+	for _, id := range presetSkills {
+		if _, exists := presetSkillByID(id); !exists {
+			writeError(w, 400, "UNKNOWN_PRESET_SKILL", "包含服务端未注册的预设 Skill")
+			return nil, nil, false
+		}
+		if !seen[id] {
+			seen[id] = true
+			presets = append(presets, id)
+		}
+	}
+	return clean, presets, true
 }
 
 func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
@@ -1042,7 +1044,7 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy, _ := s.Store.RunPolicy(r.Context(), run.ID)
-	s.studentHub.Publish(classroomEvent{Type: "classroom", Locked: in.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	s.studentHub.Publish(classroomEvent{Type: "classroom", Locked: in.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	s.wallHub.Publish(struct{}{})
 	s.Logger.Info("classroom lock changed", "run_id", run.ID, "locked", in.Locked)
 	writeJSON(w, 200, map[string]bool{"locked": in.Locked})
@@ -1050,10 +1052,11 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name          string   `json:"name"`
-		MemoryMode    string   `json:"memory_mode"`
-		SkillsEnabled *bool    `json:"skills_enabled"`
-		AllowedTools  []string `json:"allowed_tools"`
+		Name          string    `json:"name"`
+		MemoryMode    string    `json:"memory_mode"`
+		SkillsEnabled *bool     `json:"skills_enabled"`
+		PresetSkills  *[]string `json:"preset_skills"`
+		AllowedTools  []string  `json:"allowed_tools"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -1076,16 +1079,23 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		if in.AllowedTools == nil {
 			in.AllowedTools = oldPolicy.AllowedTools
 		}
+		if in.PresetSkills == nil {
+			in.PresetSkills = &oldPolicy.PresetSkills
+		}
 	}
 	if in.SkillsEnabled == nil {
 		value := true
 		in.SkillsEnabled = &value
 	}
-	clean, ok := s.validatePolicyInput(w, in.MemoryMode, in.AllowedTools)
+	presetSkills := []string{}
+	if in.PresetSkills != nil {
+		presetSkills = *in.PresetSkills
+	}
+	cleanTools, cleanPresets, ok := s.validatePolicyInput(w, in.MemoryMode, in.AllowedTools, presetSkills)
 	if !ok {
 		return
 	}
-	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: *in.SkillsEnabled, AllowedTools: clean})
+	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: *in.SkillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "新建场次失败")
 		return

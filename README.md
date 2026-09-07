@@ -1,6 +1,6 @@
 # 课堂 Agent 平台
 
-一个面向公开课的极简 Agent 平台：Go 单二进制、SQLite 单文件、学生/教师/大屏三个内嵌页面。平台提供学号登录、Soul 设计、多 Skill 目录与按需加载、多 Tab 对话与删除、长期 Memory、计算器、受控网页访问与网上搜索、行动记录、教师状态墙、课堂能力控制、全班锁定、场次隔离和投屏。
+一个面向公开课的极简 Agent 平台：Go 单二进制、SQLite 单文件、学生/教师/大屏三个内嵌页面。平台提供学号登录、Soul 设计、多 Skill 目录与按需加载、教师控制的基础/物理/数学预设 Skill、多 Tab 对话与删除、长期 Memory、受控网页访问与网上搜索、Python 执行、行动记录、教师状态墙、课堂能力控制、全班锁定、场次隔离和投屏。
 
 ## 本地运行
 
@@ -61,7 +61,7 @@ DEEPSEEK_API_KEY='...' make smoke-real
 
 `make release` 默认生成 `build/classroom-agent-linux-amd64` 及对应 `.sha256` 校验文件。可通过 `TARGET_OS` 和 `TARGET_ARCH` 改变目标，例如 `make release TARGET_OS=linux TARGET_ARCH=arm64`。
 
-发布产物为 `build/classroom-agent`。前端和三套 SKILL.md 模板已嵌入二进制；运行时仍需提供名单路径和 SQLite 可写目录：
+发布产物为 `build/classroom-agent`。前端和分类预设 SKILL.md 已嵌入二进制；运行时仍需提供名单路径和 SQLite 可写目录：
 
 ```bash
 ./build/classroom-agent \

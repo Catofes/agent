@@ -22,7 +22,10 @@ test('student UI manages structured skills and reports only actual context', () 
   assert.doesNotMatch(html, /Memory：本轮未读取/);
   assert.match(html, /模板只作为新 Skill 的起点，不会覆盖当前 Skill/);
   assert.match(html, /\$\("templates"\)\.onchange/);
+  assert.match(html, /document\.createElement\("optgroup"\)/);
+  assert.match(html, /capabilities\?\.preset_skills/);
   assert.doesNotMatch(html, /id="useTemplate"/);
+  assert.doesNotMatch(html, /id="calculator"/);
 });
 
 test('stream completion renders markdown from the original answer source', () => {

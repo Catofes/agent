@@ -140,11 +140,11 @@ func TestRunPolicyDefaultsAndRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy, err := st.RunPolicy(ctx, run.ID)
-	if err != nil || policy.MemoryMode != MemoryModeReviewRequired || !policy.SkillsEnabled || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "calculator" || policy.Revision != 1 {
+	if err != nil || policy.MemoryMode != MemoryModeReviewRequired || !policy.SkillsEnabled || len(policy.PresetSkills) != 0 || len(policy.AllowedTools) != 0 || policy.Revision != 1 {
 		t.Fatalf("default policy=%#v err=%v", policy, err)
 	}
-	policy, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeAdaptive, SkillsEnabled: false, AllowedTools: []string{"calculator", "calculator"}})
-	if err != nil || policy.MemoryMode != MemoryModeAdaptive || policy.SkillsEnabled || len(policy.AllowedTools) != 1 || policy.Revision != 2 {
+	policy, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeAdaptive, SkillsEnabled: false, PresetSkills: []string{"python-beginner", "python-beginner"}, AllowedTools: []string{"web_fetch", "web_fetch"}})
+	if err != nil || policy.MemoryMode != MemoryModeAdaptive || policy.SkillsEnabled || len(policy.PresetSkills) != 1 || policy.PresetSkills[0] != "python-beginner" || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "web_fetch" || policy.Revision != 2 {
 		t.Fatalf("updated policy=%#v err=%v", policy, err)
 	}
 }
@@ -353,7 +353,68 @@ func TestVersionElevenPolicyEnablesSkillsByDefault(t *testing.T) {
 	}
 	defer migrated.Close()
 	policy, err := migrated.RunPolicy(ctx, run.ID)
-	if err != nil || !policy.SkillsEnabled {
+	if err != nil || !policy.SkillsEnabled || len(policy.PresetSkills) != 0 || len(policy.AllowedTools) != 0 {
 		t.Fatalf("policy=%#v err=%v", policy, err)
+	}
+}
+
+func TestVersionTwelveAddsPresetPolicyAndRemovesCalculator(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "policy-v12.db")
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvPath := filepath.Join(t.TempDir(), "students.csv")
+	if err = os.WriteFile(csvPath, []byte("id,name\n2101,张三\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.SaveDesign(ctx, Design{RunID: run.ID, StudentID: "2101", Tools: []string{"calculator", "python_execute"}, MaxTurns: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{
+		`ALTER TABLE run_policies DROP COLUMN preset_skills`,
+		`UPDATE run_policies SET allowed_tools='["calculator","web_fetch"]'`,
+		`UPDATE designs SET tools='["calculator","python_execute"]'`,
+		`PRAGMA user_version = 12`,
+	} {
+		if _, err = raw.Exec(query); err != nil {
+			raw.Close()
+			t.Fatal(err)
+		}
+	}
+	if err = raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+	policy, err := migrated.RunPolicy(ctx, run.ID)
+	if err != nil || len(policy.PresetSkills) != 0 || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "web_fetch" {
+		t.Fatalf("policy=%#v err=%v", policy, err)
+	}
+	design, err := migrated.Design(ctx, run.ID, "2101")
+	if err != nil || len(design.Tools) != 1 || design.Tools[0] != "python_execute" {
+		t.Fatalf("design=%#v err=%v", design, err)
+	}
+	var version int
+	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
+		t.Fatalf("version=%d err=%v", version, err)
 	}
 }

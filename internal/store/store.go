@@ -40,6 +40,7 @@ type RunPolicy struct {
 	RunID         string    `json:"-"`
 	MemoryMode    string    `json:"memory_mode"`
 	SkillsEnabled bool      `json:"skills_enabled"`
+	PresetSkills  []string  `json:"preset_skills"`
 	AllowedTools  []string  `json:"allowed_tools"`
 	Revision      int64     `json:"revision"`
 	UpdatedAt     time.Time `json:"updated_at"`
@@ -201,8 +202,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 12 {
-		return fmt.Errorf("database version %d is newer than supported version 12", version)
+	if version > 13 {
+		return fmt.Errorf("database version %d is newer than supported version 13", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -299,7 +300,81 @@ PRAGMA user_version = 1;`
 			return fmt.Errorf("migrate classroom Skill policy: %w", err)
 		}
 	}
+	if version < 13 {
+		if err := s.migratePresetSkillsPolicy(ctx); err != nil {
+			return fmt.Errorf("migrate preset Skill policy: %w", err)
+		}
+	}
 	return nil
+}
+
+func (s *Store) migratePresetSkillsPolicy(ctx context.Context) error {
+	has, err := s.tableHasColumn(ctx, "run_policies", "preset_skills")
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !has {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE run_policies ADD COLUMN preset_skills TEXT NOT NULL DEFAULT '[]'`); err != nil {
+			return err
+		}
+	}
+	for _, table := range []string{"run_policies", "designs"} {
+		column := "allowed_tools"
+		keys := "run_id"
+		if table == "designs" {
+			column = "tools"
+			keys = "run_id,student_id"
+		}
+		rows, queryErr := tx.QueryContext(ctx, `SELECT `+keys+`,`+column+` FROM `+table)
+		if queryErr != nil {
+			return queryErr
+		}
+		type update struct{ runID, studentID, value string }
+		updates := []update{}
+		for rows.Next() {
+			var item update
+			if table == "designs" {
+				queryErr = rows.Scan(&item.runID, &item.studentID, &item.value)
+			} else {
+				queryErr = rows.Scan(&item.runID, &item.value)
+			}
+			if queryErr != nil {
+				rows.Close()
+				return queryErr
+			}
+			items := decodeTools(item.value)
+			clean := make([]string, 0, len(items))
+			for _, name := range items {
+				if name != "calculator" {
+					clean = append(clean, name)
+				}
+			}
+			item.value = encodeTools(clean)
+			updates = append(updates, item)
+		}
+		if queryErr = rows.Close(); queryErr != nil {
+			return queryErr
+		}
+		for _, item := range updates {
+			if table == "designs" {
+				_, queryErr = tx.ExecContext(ctx, `UPDATE designs SET tools=? WHERE run_id=? AND student_id=?`, item.value, item.runID, item.studentID)
+			} else {
+				_, queryErr = tx.ExecContext(ctx, `UPDATE run_policies SET allowed_tools=? WHERE run_id=?`, item.value, item.runID)
+			}
+			if queryErr != nil {
+				return queryErr
+			}
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 13`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateSkillsPolicy(ctx context.Context) error {
@@ -668,7 +743,7 @@ func scanRun(row rowScanner) (Run, error) {
 }
 
 func (s *Store) CreateRun(ctx context.Context, id, name, sourceRunID string) (Run, error) {
-	return s.CreateRunWithPolicy(ctx, id, name, sourceRunID, RunPolicy{MemoryMode: MemoryModeReviewRequired, SkillsEnabled: true, AllowedTools: []string{"calculator"}})
+	return s.CreateRunWithPolicy(ctx, id, name, sourceRunID, RunPolicy{MemoryMode: MemoryModeReviewRequired, SkillsEnabled: true})
 }
 
 func (s *Store) CreateRunWithPolicy(ctx context.Context, id, name, sourceRunID string, policy RunPolicy) (Run, error) {
@@ -686,7 +761,7 @@ func (s *Store) CreateRunWithPolicy(ctx context.Context, id, name, sourceRunID s
 		return Run{}, err
 	}
 	policy = normalizeRunPolicy(policy)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO run_policies(run_id,memory_mode,skills_enabled,allowed_tools,revision,updated_at) VALUES(?,?,?,?,?,?)`, id, policy.MemoryMode, policy.SkillsEnabled, encodeTools(policy.AllowedTools), 1, ts); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO run_policies(run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,revision,updated_at) VALUES(?,?,?,?,?,?,?)`, id, policy.MemoryMode, policy.SkillsEnabled, encodeTools(policy.PresetSkills), encodeTools(policy.AllowedTools), 1, ts); err != nil {
 		return Run{}, err
 	}
 	if sourceRunID != "" {
@@ -715,30 +790,41 @@ func normalizeRunPolicy(policy RunPolicy) RunPolicy {
 		}
 	}
 	policy.AllowedTools = tools
+	seen = map[string]bool{}
+	presets := make([]string, 0, len(policy.PresetSkills))
+	for _, id := range policy.PresetSkills {
+		id = strings.TrimSpace(id)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			presets = append(presets, id)
+		}
+	}
+	policy.PresetSkills = presets
 	return policy
 }
 
 func (s *Store) ensureRunPolicy(ctx context.Context, runID string) error {
 	now := formatTime(time.Now().UTC())
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO run_policies(run_id,memory_mode,skills_enabled,allowed_tools,revision,updated_at)
-	 VALUES(?,'review_required',1,'["calculator"]',1,?)`, runID, now)
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO run_policies(run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,revision,updated_at)
+	 VALUES(?,'review_required',1,'[]','[]',1,?)`, runID, now)
 	return err
 }
 
 func (s *Store) RunPolicy(ctx context.Context, runID string) (RunPolicy, error) {
 	var policy RunPolicy
-	var allowed, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT run_id,memory_mode,skills_enabled,allowed_tools,revision,updated_at FROM run_policies WHERE run_id=?`, runID).Scan(&policy.RunID, &policy.MemoryMode, &policy.SkillsEnabled, &allowed, &policy.Revision, &updated)
+	var presets, allowed, updated string
+	err := s.db.QueryRowContext(ctx, `SELECT run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,revision,updated_at FROM run_policies WHERE run_id=?`, runID).Scan(&policy.RunID, &policy.MemoryMode, &policy.SkillsEnabled, &presets, &allowed, &policy.Revision, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err = s.ensureRunPolicy(ctx, runID); err != nil {
 			return RunPolicy{}, err
 		}
-		err = s.db.QueryRowContext(ctx, `SELECT run_id,memory_mode,skills_enabled,allowed_tools,revision,updated_at FROM run_policies WHERE run_id=?`, runID).Scan(&policy.RunID, &policy.MemoryMode, &policy.SkillsEnabled, &allowed, &policy.Revision, &updated)
+		err = s.db.QueryRowContext(ctx, `SELECT run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,revision,updated_at FROM run_policies WHERE run_id=?`, runID).Scan(&policy.RunID, &policy.MemoryMode, &policy.SkillsEnabled, &presets, &allowed, &policy.Revision, &updated)
 	}
 	if err != nil {
 		return RunPolicy{}, err
 	}
 	policy.AllowedTools = decodeTools(allowed)
+	policy.PresetSkills = decodeTools(presets)
 	policy.UpdatedAt, _ = parseTime(updated)
 	return policy, nil
 }
@@ -746,8 +832,8 @@ func (s *Store) RunPolicy(ctx context.Context, runID string) (RunPolicy, error) 
 func (s *Store) SetRunPolicy(ctx context.Context, runID string, policy RunPolicy) (RunPolicy, error) {
 	policy = normalizeRunPolicy(policy)
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE run_policies SET memory_mode=?,skills_enabled=?,allowed_tools=?,revision=revision+1,updated_at=?
-	 WHERE run_id=? AND EXISTS(SELECT 1 FROM runs WHERE id=? AND status='active')`, policy.MemoryMode, policy.SkillsEnabled, encodeTools(policy.AllowedTools), formatTime(now), runID, runID)
+	res, err := s.db.ExecContext(ctx, `UPDATE run_policies SET memory_mode=?,skills_enabled=?,preset_skills=?,allowed_tools=?,revision=revision+1,updated_at=?
+	 WHERE run_id=? AND EXISTS(SELECT 1 FROM runs WHERE id=? AND status='active')`, policy.MemoryMode, policy.SkillsEnabled, encodeTools(policy.PresetSkills), encodeTools(policy.AllowedTools), formatTime(now), runID, runID)
 	if err != nil {
 		return RunPolicy{}, err
 	}

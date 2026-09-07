@@ -237,7 +237,7 @@ p { line-height: 1.65; }
   background: linear-gradient(135deg, #f8f7ff, #fdfcff);
 }
 .memory-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.memory-workspace input[type="checkbox"], .student-page #calculator { accent-color: var(--primary); }
+.memory-workspace input[type="checkbox"] { accent-color: var(--primary); }
 .memory-workspace > p { margin: 12px 0 5px; }
 .memory-usage { padding: 6px 0 2px; color: #4f478a; font-weight: 650; }
 .memory-item { padding: 13px 14px; border: 1px solid transparent; border-radius: 12px; background: white; }

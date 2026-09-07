@@ -34,6 +34,16 @@ func (fn serverRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 
 type directClient struct{}
 
+type serverTestTool struct{}
+
+func (serverTestTool) Definition() tools.Definition {
+	return tools.Definition{Type: "function", Function: tools.FunctionSpec{Name: "test_tool", Description: "test tool", Parameters: map[string]any{"type": "object"}}}
+}
+
+func (serverTestTool) Execute(context.Context, json.RawMessage) (tools.Result, error) {
+	return tools.Result{ModelText: "ok", Summary: "ok"}, nil
+}
+
 func (directClient) Complete(_ context.Context, req agent.CompletionRequest) (agent.Completion, error) {
 	out := agent.Completion{Content: "测试回答", Deltas: []string{"测试", "回答"}, TokensIn: 3, TokensOut: 2}
 	if req.OnDelta != nil {
@@ -176,7 +186,7 @@ func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (
 		t.Fatal(err)
 	}
 	cfg := config.Config{AdminPassword: "teacher-secret", AnonymousHMACKey: "hmac-secret", SessionTTL: time.Hour, LLMTimeout: time.Second, LLMConcurrency: 4, StudentTokenBudget: 1000, DefaultMaxTurns: 5, MinMaxTurns: 1, MaxMaxTurns: 8, MaxToolCalls: 4, MaxPersonaChars: 100, MaxSkillChars: 1000, MaxInputChars: 100, MaxOutputChars: 1000, MaxMemoryItems: 30, MaxMemoryChars: 400, MaxMemoryTokens: 1200}
-	engine := agent.NewEngine(st, client, tools.NewRegistry(tools.Calculator{}), "fake", "hmac-secret", time.Second, 4)
+	engine := agent.NewEngine(st, client, tools.NewRegistry(serverTestTool{}), "fake", "hmac-secret", time.Second, 4)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	web := fstest.MapFS{
 		"index.html":                 &fstest.MapFile{Data: []byte("student")},
@@ -187,7 +197,10 @@ func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (
 		"vendor/katex/katex.min.js":  &fstest.MapFile{Data: []byte("katex js")},
 		"vendor/katex/fonts/KaTeX_Main-Regular.woff2": &fstest.MapFile{Data: []byte("katex font")},
 	}
-	templates := fstest.MapFS{"quiz.md": &fstest.MapFile{Data: []byte("# template")}}
+	templates := fstest.MapFS{
+		"python-beginner.md": &fstest.MapFile{Data: []byte("# Python 入门教练")},
+		"physics-problem.md": &fstest.MapFile{Data: []byte("# 物理解题教练")},
+	}
 	app := New(cfg, st, engine, web, templates, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(func() { st.Close() })
 	return app, st
@@ -265,12 +278,12 @@ func TestPythonManualRunArtifactProxyAndStudentIsolation(t *testing.T) {
 		return recorder.Result(), nil
 	})}
 	app.Runner = runnerapi.NewClient("http://runner.test", "token", runnerHTTP)
-	app.Agent.Tools = tools.NewRegistry(tools.Calculator{}, &tools.PythonExecute{Runner: app.Runner, Store: st, Timeout: time.Second, MaxCodeChars: 1000})
+	app.Agent.Tools = tools.NewRegistry(&tools.PythonExecute{Runner: app.Runner, Store: st, Timeout: time.Second, MaxCodeChars: 1000})
 	run, err := st.ActiveRun(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = st.SetRunPolicy(context.Background(), run.ID, store.RunPolicy{MemoryMode: store.MemoryModeReviewRequired, AllowedTools: []string{"calculator", "python_execute"}}); err != nil {
+	if _, err = st.SetRunPolicy(context.Background(), run.ID, store.RunPolicy{MemoryMode: store.MemoryModeReviewRequired, AllowedTools: []string{"python_execute"}}); err != nil {
 		t.Fatal(err)
 	}
 	handler := app.Routes()
@@ -312,7 +325,7 @@ func TestStudentLoginDesignChatAndReplacement(t *testing.T) {
 	if status != 200 || me["role"] != "student" {
 		t.Fatalf("me status=%d body=%v", status, me)
 	}
-	design := map[string]any{"persona": "<img onerror=alert(1)>", "skill_md": "准确计算", "tools": []string{"calculator"}, "max_turns": 3}
+	design := map[string]any{"persona": "<img onerror=alert(1)>", "skill_md": "准确计算", "tools": []string{}, "max_turns": 3}
 	status, _, raw := requestJSON(t, c1, "PUT", "/api/design", design)
 	if status != 200 || !strings.Contains(raw, `\u003cimg onerror`) {
 		t.Fatalf("save status=%d body=%s", status, raw)
@@ -546,7 +559,7 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 		t.Fatal(status)
 	}
 	status, capabilities, _ := requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
-	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || capabilities["skills_enabled"] != true || len(capabilities["allowed_tools"].([]any)) != 1 || capabilities["max_input_chars"].(float64) != 100 {
+	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || capabilities["skills_enabled"] != true || len(capabilities["preset_skills"].([]any)) != 0 || len(capabilities["allowed_tools"].([]any)) != 0 || capabilities["max_input_chars"].(float64) != 100 {
 		t.Fatalf("default capabilities status=%d body=%#v", status, capabilities)
 	}
 	status, _, _ = requestJSON(t, student, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})
@@ -573,7 +586,7 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 	if initial := waitSSEJSON(t, stream, 1); initial["type"] != "classroom" {
 		t.Fatalf("initial classroom event=%v", initial)
 	}
-	status, policy, _ := requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeDisabled, "skills_enabled": false, "allowed_tools": []string{}})
+	status, policy, _ := requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeDisabled, "skills_enabled": false, "preset_skills": []string{"python-beginner"}, "allowed_tools": []string{}})
 	if status != http.StatusOK || policy["memory_mode"] != store.MemoryModeDisabled || policy["skills_enabled"] != false || policy["revision"].(float64) != 2 {
 		t.Fatalf("policy update status=%d body=%#v", status, policy)
 	}
@@ -605,6 +618,24 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 	})
 	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "SKILLS_DISABLED_BY_TEACHER" {
 		t.Fatalf("disabled Skill update status=%d body=%#v", status, body)
+	}
+	status, policy, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeDisabled, "skills_enabled": true, "preset_skills": []string{"python-beginner", "physics-problem"}, "allowed_tools": []string{}})
+	if status != http.StatusOK || policy["skills_enabled"] != true || len(policy["preset_skills"].([]any)) != 2 || policy["revision"].(float64) != 3 {
+		t.Fatalf("preset policy update status=%d body=%#v", status, policy)
+	}
+	if update := waitSSEJSON(t, stream, 3); update["type"] != "classroom_policy" || len(update["preset_skills"].([]any)) != 2 {
+		t.Fatalf("preset policy SSE=%v", update)
+	}
+	status, body, _ = requestJSON(t, student, http.MethodGet, "/api/templates", nil)
+	templates, _ := body["templates"].([]any)
+	if status != http.StatusOK || len(templates) != 2 {
+		t.Fatalf("enabled preset templates status=%d body=%#v", status, body)
+	}
+	for _, rawTemplate := range templates {
+		item := rawTemplate.(map[string]any)
+		if item["category"] != "basic" && item["category"] != "physics" {
+			t.Fatalf("unexpected preset category: %#v", item)
+		}
 	}
 	status, body, _ = requestJSON(t, student, http.MethodPatch, "/api/memory/not-present", map[string]string{"content": "不应写入", "status": "confirmed"})
 	if status != http.StatusForbidden || body["error"].(map[string]any)["code"] != "MEMORY_DISABLED_BY_TEACHER" {

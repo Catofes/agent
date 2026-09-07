@@ -83,6 +83,22 @@ func (m *metrics) addDuration(d time.Duration) {
 
 type fakeLLM struct{}
 
+type smokeTool struct{}
+
+func (smokeTool) Definition() tools.Definition {
+	return tools.Definition{Type: "function", Function: tools.FunctionSpec{Name: "smoke_echo", Description: "冒烟测试专用工具", Parameters: map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"}}}}
+}
+
+func (smokeTool) Execute(_ context.Context, raw json.RawMessage) (tools.Result, error) {
+	var in struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return tools.Result{}, err
+	}
+	return tools.Result{ModelText: in.Text, Summary: "echo: " + in.Text}, nil
+}
+
 func (fakeLLM) Complete(ctx context.Context, req agent.CompletionRequest) (agent.Completion, error) {
 	select {
 	case <-time.After(15 * time.Millisecond):
@@ -102,7 +118,7 @@ func (fakeLLM) Complete(ctx context.Context, req agent.CompletionRequest) (agent
 		}
 	}
 	return agent.Completion{
-		ToolCalls: []agent.ToolCall{{ID: "smoke_calculator", Type: "function", Function: agent.ToolFunction{Name: "calculator", Arguments: `{"expression":"23*17"}`}}},
+		ToolCalls: []agent.ToolCall{{ID: "smoke_echo", Type: "function", Function: agent.ToolFunction{Name: "smoke_echo", Arguments: `{"text":"391"}`}}},
 		TokensIn:  12,
 		TokensOut: 3,
 	}, nil
@@ -179,6 +195,9 @@ func run(opt options) error {
 	if _, err = st.ImportStudentsCSV(context.Background(), run.ID, rosterPath); err != nil {
 		return err
 	}
+	if _, err = st.SetRunPolicy(context.Background(), run.ID, store.RunPolicy{MemoryMode: store.MemoryModeReviewRequired, SkillsEnabled: true, AllowedTools: []string{"smoke_echo"}}); err != nil {
+		return err
+	}
 
 	var llm agent.Client = fakeLLM{}
 	mode := "fake"
@@ -196,7 +215,7 @@ func run(opt options) error {
 	}
 	counted := &countingClient{inner: llm}
 	cfg := smokeConfig(opt)
-	engine := agent.NewEngine(st, counted, tools.NewRegistry(tools.Calculator{}), opt.model, cfg.AnonymousHMACKey, opt.timeout, opt.concurrency)
+	engine := agent.NewEngine(st, counted, tools.NewRegistry(smokeTool{}), opt.model, cfg.AnonymousHMACKey, opt.timeout, opt.concurrency)
 	engine.TokenBudget = cfg.StudentTokenBudget
 	engine.MaxToolCalls = cfg.MaxToolCalls
 	engine.MaxOutputChars = cfg.MaxOutputChars
@@ -361,8 +380,8 @@ func prepareStudent(baseURL string, student *studentClient, result *metrics) err
 	}
 	design := map[string]any{
 		"persona":   "你是一位准确、简洁的数学助手",
-		"skill_md":  "# 计算技能\n当任务需要精确算术时，使用计算器并核对结果。",
-		"tools":     []string{"calculator"},
+		"skill_md":  "# 冒烟测试\n调用已选工具并核对返回结果。",
+		"tools":     []string{"smoke_echo"},
 		"max_turns": 3,
 	}
 	if err := requestExpect(student.http, http.MethodPut, baseURL+"/api/design", design, http.StatusOK, result); err != nil {
@@ -430,7 +449,7 @@ func chat(baseURL string, student *studentClient, result *metrics) error {
 		return errors.New("turn_end missing")
 	}
 	if !sawTool && !strings.Contains(string(raw), "391") {
-		return errors.New("calculator action/result missing")
+		return errors.New("tool action/result missing")
 	}
 	return nil
 }

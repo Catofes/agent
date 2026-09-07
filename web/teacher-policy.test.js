@@ -9,6 +9,7 @@ test("teacher can control classroom Memory mode and available tools", () => {
   for (const id of [
     "policyMemoryMode",
     "policySkillsEnabled",
+    "policyPresets",
     "policyTools",
     "savePolicy",
     "policyStatus",
@@ -21,6 +22,11 @@ test("teacher can control classroom Memory mode and available tools", () => {
   assert.match(html, /\/api\/teacher\/policy/);
   assert.match(html, /allowed_tools/);
   assert.match(html, /skills_enabled/);
+  assert.match(html, /preset_skills/);
+  assert.match(html, /available_preset_skills/);
+  assert.match(html, /basic: "基础"/);
+  assert.match(html, /physics: "物理"/);
+  assert.match(html, /math: "数学"/);
 });
 
 test("new classroom inherits the policy currently shown in the controls", () => {

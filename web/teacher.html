@@ -151,6 +151,14 @@
         min-height: auto;
         accent-color: #5b4ee8;
       }
+      .policy-presets { grid-column: 1 / -1; }
+      .preset-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+      .preset-group { min-width: 0; margin: 0; padding: 11px; border: 1px solid #e1e5ee; border-radius: 10px; }
+      .preset-group legend { padding: 0 5px; color: #475467; font-size: .84rem; font-weight: 700; }
+      .preset-group label { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 7px; padding: 6px 2px; }
+      .preset-group label span { display: grid; gap: 2px; }
+      .preset-group label small { color: #667085; font-weight: 400; line-height: 1.35; }
+      .preset-group input { width: auto; margin-top: 3px; }
       #policyStatus {
         min-height: 1.4em;
         margin: 8px 0 0;
@@ -171,6 +179,7 @@
         .policy-grid {
           grid-template-columns: 1fr;
         }
+        .preset-groups { grid-template-columns: 1fr; }
       }
     </style>
     <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css" />
@@ -230,6 +239,11 @@
               <span><input id="policySkillsEnabled" type="checkbox" /> 允许学生创建和使用 Skill</span>
               <small>关闭后学生端不显示 Skill，已保存内容会保留但不会交给 Agent。</small>
             </label>
+            <div class="policy-field policy-presets">
+              <span>允许导入的预设 Skill</span>
+              <small>按本场课程选择。学生只能看到已勾选的预设，并从中创建自己的可编辑副本。</small>
+              <div id="policyPresets" class="preset-groups"></div>
+            </div>
             <div class="policy-field">
               <span>允许使用的工具</span>
               <div id="policyTools" class="policy-tools"></div>
@@ -351,7 +365,6 @@
       }
       function toolLabel(name) {
         return {
-          calculator: "计算器",
           web_search: "网上搜索",
           web_fetch: "网页访问",
           python_execute: "Python 执行",
@@ -362,6 +375,9 @@
         return {
           memory_mode: $("policyMemoryMode").value,
           skills_enabled: $("policySkillsEnabled").checked,
+          preset_skills: [...$("policyPresets").querySelectorAll("input:checked")].map(
+            (input) => input.value,
+          ),
           allowed_tools: [...$("policyTools").querySelectorAll("input:checked")].map(
             (input) => input.value,
           ),
@@ -385,6 +401,33 @@
             }),
           );
         }
+        const presets = wallState.available_preset_skills || [],
+          presetKey = presets.map((item) => `${item.id}:${item.name}`).join("\u0000");
+        if ($("policyPresets").dataset.key !== presetKey) {
+          $("policyPresets").dataset.key = presetKey;
+          const categoryLabels = { basic: "基础", physics: "物理", math: "数学" };
+          $("policyPresets").replaceChildren(
+            ...Object.entries(categoryLabels).map(([category, title]) => {
+              const group = document.createElement("fieldset"),
+                legend = document.createElement("legend");
+              group.className = "preset-group";
+              legend.textContent = title;
+              group.append(legend);
+              presets.filter((item) => item.category === category).forEach((item) => {
+                const label = document.createElement("label"),
+                  input = document.createElement("input"),
+                  copy = document.createElement("span");
+                input.type = "checkbox";
+                input.value = item.id;
+                input.onchange = markPolicyDirty;
+                copy.append(t(item.name, "strong"), t(item.summary, "small"));
+                label.append(input, copy);
+                group.append(label);
+              });
+              return group;
+            }),
+          );
+        }
         if (!policyDirty) {
           $("policyMemoryMode").value = wallState.policy.memory_mode;
           $("policySkillsEnabled").checked = wallState.policy.skills_enabled !== false;
@@ -392,12 +435,19 @@
           $("policyTools")
             .querySelectorAll("input")
             .forEach((input) => (input.checked = enabled.has(input.value)));
+          const enabledPresets = new Set(wallState.policy.preset_skills || []);
+          $("policyPresets")
+            .querySelectorAll("input")
+            .forEach((input) => (input.checked = enabledPresets.has(input.value)));
         }
         $("policyMemoryMode").disabled = policyBusy;
         $("policySkillsEnabled").disabled = policyBusy;
         $("policyTools")
           .querySelectorAll("input")
           .forEach((input) => (input.disabled = policyBusy));
+        $("policyPresets")
+          .querySelectorAll("input")
+          .forEach((input) => (input.disabled = policyBusy || !$("policySkillsEnabled").checked));
         $("savePolicy").disabled = policyBusy || !policyDirty;
         $("savePolicy").textContent = policyBusy ? "正在保存…" : "保存课堂设置";
       }

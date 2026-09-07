@@ -30,6 +30,27 @@ type extractorFunc func(context.Context, string, string) ([]string, error)
 
 type completionClientFunc func(context.Context, CompletionRequest) (Completion, error)
 
+// testCalculator keeps the engine's generic function-tool loop covered without
+// shipping the removed classroom calculator in the production registry.
+type testCalculator struct{}
+
+func (testCalculator) Definition() tools.Definition {
+	return tools.Definition{Type: "function", Function: tools.FunctionSpec{
+		Name: "calculator", Description: "test tool",
+		Parameters: map[string]any{"type": "object"},
+	}}
+}
+
+func (testCalculator) Execute(_ context.Context, raw json.RawMessage) (tools.Result, error) {
+	var in struct {
+		Expression string `json:"expression"`
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return tools.Result{}, err
+	}
+	return tools.Result{ModelText: in.Expression, Summary: in.Expression}, nil
+}
+
 func (f completionClientFunc) Complete(ctx context.Context, req CompletionRequest) (Completion, error) {
 	return f(ctx, req)
 }
@@ -96,7 +117,7 @@ func TestEngineToolLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeClient{answers: []Completion{{Reasoning: "需要精确计算", ReasoningDeltas: []string{"需要", "精确计算"}, ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: ToolFunction{Name: "calculator", Arguments: `{"expression":"23*17"}`}}}, TokensIn: 10, TokensOut: 2}, {Reasoning: "工具结果可用", ReasoningDeltas: []string{"工具结果可用"}, Content: "结果是 391", Deltas: []string{"结果是 ", "391"}, TokensIn: 15, TokensOut: 4}}}
-	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 2)
+	engine := NewEngine(st, fake, tools.NewRegistry(testCalculator{}), "model", "secret", time.Second, 2)
 	engine.TokenBudget = 1000
 	engine.MaxToolCalls = 4
 	engine.MaxOutputChars = 1000
@@ -181,7 +202,7 @@ func TestEngineHostedSearchUsesProviderAndPersistsVisibleTrace(t *testing.T) {
 		}
 		return Completion{Content: "杭州晴", Deltas: []string{"杭州晴"}, TokensIn: 10, TokensOut: 2}, nil
 	})
-	engine := NewEngine(st, client, tools.NewRegistry(tools.Calculator{}, tools.HostedWebSearch{}), "model", "secret", time.Second, 1)
+	engine := NewEngine(st, client, tools.NewRegistry(testCalculator{}, tools.HostedWebSearch{}), "model", "secret", time.Second, 1)
 	engine.HostedWebSearch = true
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	var events []Event
@@ -226,7 +247,7 @@ func TestEngineDirectAnswerUsesAnonymousIdentityAndNoUnselectedTools(t *testing.
 	ctx := context.Background()
 	st, run := newEngineTestStore(t)
 	fake := &fakeClient{answers: []Completion{{Content: "直接回答", Deltas: []string{"直接", "回答"}, TokensIn: 3, TokensOut: 2}}}
-	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine := NewEngine(st, fake, tools.NewRegistry(testCalculator{}), "model", "secret", time.Second, 1)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	var events []Event
 	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "普通闲聊", Design: store.Design{Persona: "友好助手", MaxTurns: 2}}, func(event Event) error {
@@ -266,7 +287,7 @@ func TestEngineSupportsConsecutiveToolIterations(t *testing.T) {
 		{ToolCalls: []ToolCall{call("c2", "5*4")}, TokensIn: 3, TokensOut: 1},
 		{Content: "最终是 20", Deltas: []string{"最终是 ", "20"}, TokensIn: 4, TokensOut: 2},
 	}}
-	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine := NewEngine(st, fake, tools.NewRegistry(testCalculator{}), "model", "secret", time.Second, 1)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	var events []Event
 	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "分两步算", Design: store.Design{Tools: []string{"calculator"}, MaxTurns: 3}}, func(event Event) error {
@@ -305,7 +326,7 @@ func TestEngineRejectsForgedUnselectedToolCall(t *testing.T) {
 		{ToolCalls: []ToolCall{forged}, TokensIn: 2, TokensOut: 1},
 		{Content: "工具不可用", Deltas: []string{"工具不可用"}, TokensIn: 2, TokensOut: 1},
 	}}
-	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine := NewEngine(st, fake, tools.NewRegistry(testCalculator{}), "model", "secret", time.Second, 1)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	var toolResult Event
 	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "不要工具", Design: store.Design{Tools: []string{}, MaxTurns: 2}}, func(event Event) error {
@@ -333,7 +354,7 @@ func TestEngineRetriesTimeoutOnce(t *testing.T) {
 	ctx := context.Background()
 	st, run := newEngineTestStore(t)
 	fake := &timeoutClient{}
-	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", 10*time.Millisecond, 1)
+	engine := NewEngine(st, fake, tools.NewRegistry(testCalculator{}), "model", "secret", 10*time.Millisecond, 1)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "超时任务", Design: store.Design{MaxTurns: 2}}, func(Event) error { return nil })
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -352,7 +373,7 @@ func TestEngineClientInterruptStopsStreamingWithoutRetry(t *testing.T) {
 	ctx := context.Background()
 	st, run := newEngineTestStore(t)
 	fake := &fakeClient{answers: []Completion{{Content: "不会完成", Deltas: []string{"第一段", "第二段"}}}}
-	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine := NewEngine(st, fake, tools.NewRegistry(testCalculator{}), "model", "secret", time.Second, 1)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	disconnected := errors.New("client disconnected")
 	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "生成任务", Design: store.Design{MaxTurns: 2}}, func(event Event) error {
@@ -403,7 +424,7 @@ func TestEnginePersistsLimitReasons(t *testing.T) {
 			ctx := context.Background()
 			st, run := newEngineTestStore(t)
 			fake := &fakeClient{answers: tt.answers}
-			engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+			engine := NewEngine(st, fake, tools.NewRegistry(testCalculator{}), "model", "secret", time.Second, 1)
 			engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = tt.budget, tt.maxTools, 1000
 			err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "任务", Design: store.Design{Tools: []string{"calculator"}, MaxTurns: tt.maxTurns}}, func(Event) error { return nil })
 			if !errors.Is(err, tt.wantErr) {
@@ -944,7 +965,7 @@ func TestEngineUsesLatestDesignAndOnlySelectedConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &fakeClient{answers: []Completion{{Reasoning: "思考草稿", ReasoningDeltas: []string{"思考", "草稿"}, Content: "新回答", Deltas: []string{"新回答"}, TokensIn: 5, TokensOut: 2}}}
-	engine := NewEngine(st, fake, tools.NewRegistry(tools.Calculator{}), "model", "secret", time.Second, 1)
+	engine := NewEngine(st, fake, tools.NewRegistry(testCalculator{}), "model", "secret", time.Second, 1)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	engine.MaxReasoningChars = 3
 	design := store.Design{Persona: "全新人设", SkillMD: "全新技能规则", Tools: []string{}, MaxTurns: 2}
