@@ -559,6 +559,9 @@
         if (!r.ok) throw new Error(data.error?.message || "请求失败");
         return data;
       }
+      function arrayOrEmpty(value) {
+        return Array.isArray(value) ? value : [];
+      }
       function text(tag, value, cls = "") {
         const el = document.createElement(tag);
         el.className = cls;
@@ -647,21 +650,26 @@
           $("pythonExecute").checked = d.tools.includes("python_execute");
           $("maxTurns").value = d.max_turns;
           $("turnValue").textContent = d.max_turns;
-          templates = t.templates;
-          memoryState = memory;
-          capabilities = caps;
+          templates = arrayOrEmpty(t.templates);
+          memoryState = { ...memory, items: arrayOrEmpty(memory.items) };
+          capabilities = {
+            ...caps,
+            available_tools: arrayOrEmpty(caps.available_tools),
+            allowed_tools: arrayOrEmpty(caps.allowed_tools),
+            preset_skills: arrayOrEmpty(caps.preset_skills),
+          };
           const maxInputChars = caps.max_input_chars || 12000;
           $("chatInput").maxLength = maxInputChars;
           updateChatInput();
           $("pythonCode").maxLength = caps.max_python_code_chars || 65536;
           renderCapabilities();
-          skillItems = skills.skills || [];
+          skillItems = arrayOrEmpty(skills.skills);
           skillLimit = skills.limit || 12;
           activeSkillID = skillItems[0]?.id || null;
           renderSkillEditor();
           renderMemory();
           renderTemplateOptions();
-          conversationItems = c.conversations;
+          conversationItems = arrayOrEmpty(c.conversations);
           if (!conversationItems.length && !locked) {
             const created = await api("/api/conversations", {
               method: "POST",
@@ -767,7 +775,7 @@
       }
       async function refreshConversations() {
         const d = await api("/api/conversations");
-        conversationItems = d.conversations;
+        conversationItems = arrayOrEmpty(d.conversations);
         renderConversationTabs();
       }
       async function loadMessages() {
@@ -1178,7 +1186,8 @@
         });
       }
       async function loadMemory() {
-        memoryState = await api("/api/memory");
+        const memory = await api("/api/memory");
+        memoryState = { ...memory, items: arrayOrEmpty(memory.items) };
         renderMemory();
       }
       async function updateMemory(item, content, status) {
@@ -1585,6 +1594,7 @@
           "pythonFiles",
           "runPython",
         ].forEach((id) => ($(id).disabled = locked || busy));
+        $("send").disabled = locked || busy || !activeConversation;
         const hasSkill = !!activeSkillID || creatingSkill;
         ["skillName", "skillSummary", "skillWhenToUse", "skillTriggerMode", "skillContent", "skillEnabled"].forEach((id) => {
           $(id).disabled = locked || !!controller || !hasSkill;
@@ -1680,7 +1690,7 @@
           if (d.skills_enabled && !skillItems.length) {
             const skills = await api("/api/skills").catch(() => null);
             if (skills) {
-              skillItems = skills.skills || [];
+              skillItems = arrayOrEmpty(skills.skills);
               skillLimit = skills.limit || 12;
               activeSkillID = skillItems[0]?.id || null;
               creatingSkill = false;
@@ -1690,7 +1700,7 @@
           if (d.skills_enabled && (presetChanged || !templates.length)) {
             const result = await api("/api/templates").catch(() => null);
             if (result) {
-              templates = result.templates || [];
+              templates = arrayOrEmpty(result.templates);
               renderTemplateOptions();
             }
           }

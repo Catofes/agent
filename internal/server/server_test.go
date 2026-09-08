@@ -562,6 +562,11 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || capabilities["skills_enabled"] != true || len(capabilities["preset_skills"].([]any)) != 0 || len(capabilities["allowed_tools"].([]any)) != 0 || capabilities["max_input_chars"].(float64) != 100 {
 		t.Fatalf("default capabilities status=%d body=%#v", status, capabilities)
 	}
+	status, body, _ := requestJSON(t, student, http.MethodGet, "/api/templates", nil)
+	templates, ok := body["templates"].([]any)
+	if status != http.StatusOK || !ok || len(templates) != 0 {
+		t.Fatalf("zero preset templates must be an empty array: status=%d body=%#v", status, body)
+	}
 	status, _, _ = requestJSON(t, student, http.MethodPut, "/api/memory/settings", map[string]bool{"enabled": true})
 	if status != http.StatusOK {
 		t.Fatalf("enable memory status=%d", status)
@@ -593,7 +598,7 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 	if update := waitSSEJSON(t, stream, 2); update["type"] != "classroom_policy" || update["revision"].(float64) != 2 {
 		t.Fatalf("policy SSE=%v", update)
 	}
-	status, body, _ := requestJSON(t, student, http.MethodGet, "/api/me", nil)
+	status, body, _ = requestJSON(t, student, http.MethodGet, "/api/me", nil)
 	if status != http.StatusOK || body["role"] != "student" {
 		t.Fatalf("policy save invalidated student session: status=%d body=%#v", status, body)
 	}
@@ -627,7 +632,7 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 		t.Fatalf("preset policy SSE=%v", update)
 	}
 	status, body, _ = requestJSON(t, student, http.MethodGet, "/api/templates", nil)
-	templates, _ := body["templates"].([]any)
+	templates, _ = body["templates"].([]any)
 	if status != http.StatusOK || len(templates) != 2 {
 		t.Fatalf("enabled preset templates status=%d body=%#v", status, body)
 	}

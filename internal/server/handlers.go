@@ -135,7 +135,7 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 	for _, id := range policy.PresetSkills {
 		enabled[id] = true
 	}
-	var out []templateDTO
+	out := make([]templateDTO, 0)
 	for _, item := range presetSkillCatalog {
 		if !enabled[item.ID] {
 			continue

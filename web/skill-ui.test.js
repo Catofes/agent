@@ -24,6 +24,11 @@ test('student UI manages structured skills and reports only actual context', () 
   assert.match(html, /\$\("templates"\)\.onchange/);
   assert.match(html, /document\.createElement\("optgroup"\)/);
   assert.match(html, /capabilities\?\.preset_skills/);
+  assert.match(html, /function arrayOrEmpty\(value\)/);
+  assert.match(html, /templates = arrayOrEmpty\(t\.templates\)/);
+  assert.match(html, /conversationItems = arrayOrEmpty\(c\.conversations\)/);
+  assert.match(html, /items: arrayOrEmpty\(memory\.items\)/);
+  assert.match(html, /\$\("send"\)\.disabled = locked \|\| busy \|\| !activeConversation/);
   assert.doesNotMatch(html, /id="useTemplate"/);
   assert.doesNotMatch(html, /id="calculator"/);
 });
