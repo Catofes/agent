@@ -11,7 +11,12 @@ qwen_api_key: "${QWEN_API_KEY}" # 可选；配置后教师可在课堂中切换
 qwen_reasoning_effort: "low"
 qwen_input_price_per_million: 0 # 按实际购买地域和模型填写
 qwen_output_price_per_million: 0
-web_search_provider: "disabled" # 首次启动初始值；运行中可由教师页选择 disabled、zhipu 或 deepseek
+bailian_deepseek_base_url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+bailian_deepseek_model: "deepseek-v4-flash-0731"
+bailian_deepseek_api_key: "${BAILIAN_DEEPSEEK_API_KEY}" # 可选；需与 base_url 同时配置
+bailian_deepseek_input_price_per_million: 0 # 按实际购买地域和模型填写
+bailian_deepseek_output_price_per_million: 0
+web_search_provider: "disabled" # 首次启动初始值；运行中可由教师页选择 disabled、zhipu、deepseek、qwen 或 bailian-deepseek
 deepseek_search_channel: "anthropic" # 首次启动初始值；教师页可按场次切换 anthropic 或 responses
 zhipu_search_api_key: "${ZHIPU_SEARCH_API_KEY}" # provider=zhipu 时必填
 zhipu_search_engine: "search_std" # search_std、search_pro、search_pro_sogou 或 search_pro_quark

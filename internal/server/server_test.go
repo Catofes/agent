@@ -186,8 +186,9 @@ func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (
 		t.Fatal(err)
 	}
 	cfg := config.Config{AdminPassword: "teacher-secret", AnonymousHMACKey: "hmac-secret", SessionTTL: time.Hour, LLMTimeout: time.Second, LLMConcurrency: 4, StudentTokenBudget: 1000, DefaultMaxTurns: 5, MinMaxTurns: 1, MaxMaxTurns: 8, MaxToolCalls: 4, MaxPersonaChars: 100, MaxSkillChars: 1000, MaxInputChars: 100, MaxOutputChars: 1000, MaxMemoryItems: 30, MaxMemoryChars: 400, MaxMemoryTokens: 1200}
-	engine := agent.NewEngine(st, client, tools.NewRegistry(serverTestTool{}), "fake", "hmac-secret", time.Second, 4)
+	engine := agent.NewEngine(st, client, tools.NewRegistry(serverTestTool{}, tools.HostedWebSearch{}), "fake", "hmac-secret", time.Second, 4)
 	engine.RegisterProvider("qwen", agent.ModelProvider{Client: client, Model: "qwen3.8-flash"})
+	engine.RegisterProvider("bailian-deepseek", agent.ModelProvider{Client: client, Model: "deepseek-v4-flash-0731", HostedWebSearch: true})
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
 	web := fstest.MapFS{
 		"index.html":                 &fstest.MapFile{Data: []byte("student")},
@@ -203,7 +204,7 @@ func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (
 		"physics-problem.md": &fstest.MapFile{Data: []byte("# 物理解题教练")},
 	}
 	app := New(cfg, st, engine, web, templates, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	app.AvailableSearchProviders = []string{"disabled", "deepseek", "zhipu"}
+	app.AvailableSearchProviders = []string{"disabled", "deepseek", "zhipu", "qwen", "bailian-deepseek"}
 	t.Cleanup(func() { st.Close() })
 	return app, st
 }
@@ -662,16 +663,32 @@ func TestTeacherCanSwitchConfiguredModelAndSearchProviders(t *testing.T) {
 		t.Fatal(status)
 	}
 	status, body, _ := requestJSON(t, teacher, http.MethodGet, "/api/teacher/policy", nil)
-	if status != http.StatusOK || len(body["available_model_providers"].([]any)) != 2 || len(body["available_search_providers"].([]any)) != 3 || len(body["available_deepseek_search_channels"].([]any)) != 2 {
+	if status != http.StatusOK || len(body["available_model_providers"].([]any)) != 3 || len(body["available_search_providers"].([]any)) != 5 || len(body["available_deepseek_search_channels"].([]any)) != 2 {
 		t.Fatalf("provider options status=%d body=%#v", status, body)
 	}
 	status, policy, _ := requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "qwen", "search_provider": "zhipu", "deepseek_search_channel": "responses"})
 	if status != http.StatusOK || policy["model_provider"] != "qwen" || policy["search_provider"] != "zhipu" || policy["deepseek_search_channel"] != "responses" || policy["revision"].(float64) != 2 {
 		t.Fatalf("switch status=%d policy=%#v", status, policy)
 	}
+	status, policy, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "qwen", "search_provider": "qwen"})
+	if status != http.StatusOK || policy["model_provider"] != "qwen" || policy["search_provider"] != "qwen" || policy["revision"].(float64) != 3 {
+		t.Fatalf("qwen search switch status=%d policy=%#v", status, policy)
+	}
 	status, body, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "qwen", "search_provider": "deepseek"})
 	if status != http.StatusBadRequest || body["error"].(map[string]any)["code"] != "INCOMPATIBLE_PROVIDERS" {
 		t.Fatalf("incompatible switch status=%d body=%#v", status, body)
+	}
+	status, body, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "deepseek", "search_provider": "qwen"})
+	if status != http.StatusBadRequest || body["error"].(map[string]any)["code"] != "INCOMPATIBLE_PROVIDERS" {
+		t.Fatalf("incompatible qwen search status=%d body=%#v", status, body)
+	}
+	status, policy, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{"web_search"}, "model_provider": "bailian-deepseek", "search_provider": "bailian-deepseek", "deepseek_search_channel": "responses"})
+	if status != http.StatusOK || policy["model_provider"] != "bailian-deepseek" || policy["search_provider"] != "bailian-deepseek" {
+		t.Fatalf("Bailian DeepSeek switch status=%d policy=%#v", status, policy)
+	}
+	status, body, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "deepseek", "search_provider": "bailian-deepseek", "deepseek_search_channel": "responses"})
+	if status != http.StatusBadRequest || body["error"].(map[string]any)["code"] != "INCOMPATIBLE_PROVIDERS" {
+		t.Fatalf("incompatible Bailian search status=%d body=%#v", status, body)
 	}
 	status, body, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "deepseek", "search_provider": "deepseek", "deepseek_search_channel": "unknown"})
 	if status != http.StatusBadRequest || body["error"].(map[string]any)["code"] != "DEEPSEEK_SEARCH_CHANNEL_UNAVAILABLE" {

@@ -159,7 +159,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	if err != nil {
 		return err
 	}
-	hostedWebSearch := req.SearchProvider == "deepseek" && provider.HostedWebSearch
+	hostedWebSearch := req.SearchProvider == req.ModelProvider && provider.HostedWebSearch
 	if req.SearchProvider == "" {
 		hostedWebSearch = provider.HostedWebSearch
 	}
@@ -216,6 +216,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	var unknownUsage int64
 	toolCount := 0
 	toolCounts := map[string]int{}
+	hostedToolCounts := map[string]int{}
 	loadedSkills := map[string]bool{}
 	hostedSteps := map[string]int{}
 	webSearchUnavailable := false
@@ -276,26 +277,53 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 				if hostedSteps[id] != 0 {
 					return nil
 				}
+				name := strings.TrimSpace(event.Name)
+				if name == "" {
+					name = "web_search"
+				}
+				if toolCount+1 > e.MaxToolCalls {
+					return ErrToolLimit
+				}
+				if limit := e.MaxToolCallsByName[name]; limit > 0 && hostedToolCounts[name]+1 > limit {
+					return ErrToolLimit
+				}
 				toolCount++
+				hostedToolCounts[name]++
 				hostedSteps[id] = toolCount
-				call := ToolCall{ID: id, Type: "hosted", Function: ToolFunction{Name: "web_search", Arguments: `{}`}}
+				call := ToolCall{ID: id, Type: "hosted", Function: ToolFunction{Name: name, Arguments: `{}`}}
 				callJSON, _ := json.Marshal([]ToolCall{call})
 				if _, err := e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "assistant", ToolCalls: string(callJSON)}); err != nil {
 					return err
 				}
-				return emit(Event{Type: "tool_start", Step: toolCount, Tool: "web_search", Summary: event.Summary, Detail: event.Detail})
+				return emit(Event{Type: "tool_start", Step: toolCount, Tool: name, Summary: event.Summary, Detail: event.Detail})
 			case "result":
 				step := hostedSteps[id]
 				if step == 0 {
+					name := strings.TrimSpace(event.Name)
+					if name == "" {
+						name = "web_search"
+					}
+					if toolCount+1 > e.MaxToolCalls {
+						return ErrToolLimit
+					}
+					if limit := e.MaxToolCallsByName[name]; limit > 0 && hostedToolCounts[name]+1 > limit {
+						return ErrToolLimit
+					}
 					toolCount++
+					hostedToolCounts[name]++
 					step = toolCount
 					hostedSteps[id] = step
 				}
-				if _, err := e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "tool", Content: event.Summary, ToolCalls: id}); err != nil {
+				visibleResult := hostedToolResultText(event)
+				if _, err := e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "tool", Content: visibleResult, ToolCalls: id}); err != nil {
 					return err
 				}
 				success := true
-				return emit(Event{Type: "tool_result", Step: step, Tool: "web_search", Summary: event.Summary, Success: &success})
+				name := strings.TrimSpace(event.Name)
+				if name == "" {
+					name = "web_search"
+				}
+				return emit(Event{Type: "tool_result", Step: step, Tool: name, Summary: event.Summary, Result: visibleResult, Detail: event.Detail, Success: &success})
 			}
 			return nil
 		}, OnReasoningDelta: func(delta string) error {
@@ -486,6 +514,56 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		return err
 	}
 	return ErrTurnLimit
+}
+
+func hostedToolResultText(event HostedToolEvent) string {
+	lines := []string{event.Summary}
+	if len(event.Detail) == 0 {
+		return event.Summary
+	}
+	var detail struct {
+		Action struct {
+			Query   string `json:"query"`
+			Sources []struct {
+				URL string `json:"url"`
+			} `json:"sources"`
+		} `json:"action"`
+		Goal string   `json:"goal"`
+		URLs []string `json:"urls"`
+	}
+	if json.Unmarshal(event.Detail, &detail) != nil {
+		return event.Summary
+	}
+	if query := strings.TrimSpace(detail.Action.Query); query != "" {
+		lines = append(lines, "搜索词："+truncateRunes(query, 300))
+	}
+	seen := map[string]bool{}
+	sources := make([]string, 0, len(detail.Action.Sources)+len(detail.URLs))
+	for _, source := range detail.Action.Sources {
+		if value := strings.TrimSpace(source.URL); value != "" && !seen[value] {
+			seen[value] = true
+			sources = append(sources, value)
+		}
+	}
+	for _, rawURL := range detail.URLs {
+		if value := strings.TrimSpace(rawURL); value != "" && !seen[value] {
+			seen[value] = true
+			sources = append(sources, value)
+		}
+	}
+	if len(sources) > 50 {
+		sources = sources[:50]
+	}
+	if len(sources) > 0 {
+		lines = append(lines, "来源：")
+		for _, source := range sources {
+			lines = append(lines, "- "+truncateRunes(source, 1000))
+		}
+	}
+	if goal := strings.TrimSpace(detail.Goal); goal != "" {
+		lines = append(lines, "抓取目标："+truncateRunes(goal, 500))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (e *Engine) saveTermination(ctx context.Context, req Request, reason, message string) error {

@@ -1102,7 +1102,15 @@ func (s *Server) validateProviderSelection(w http.ResponseWriter, modelProvider,
 		return false
 	}
 	if searchProvider == "deepseek" && modelProvider != "deepseek" {
-		writeError(w, 400, "INCOMPATIBLE_PROVIDERS", "DeepSeek 搜索只能与 DeepSeek 模型一起使用")
+		writeError(w, 400, "INCOMPATIBLE_PROVIDERS", "DeepSeek 官方搜索只能与 DeepSeek 官方模型一起使用")
+		return false
+	}
+	if searchProvider == "qwen" && modelProvider != "qwen" {
+		writeError(w, 400, "INCOMPATIBLE_PROVIDERS", "千问搜索只能与千问模型一起使用")
+		return false
+	}
+	if searchProvider == "bailian-deepseek" && modelProvider != "bailian-deepseek" {
+		writeError(w, 400, "INCOMPATIBLE_PROVIDERS", "百炼内置搜索只能与百炼 DeepSeek 模型一起使用")
 		return false
 	}
 	deepSeekSearchChannel = strings.ToLower(strings.TrimSpace(deepSeekSearchChannel))

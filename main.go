@@ -72,8 +72,12 @@ func main() {
 	engine := agent.NewEngine(st, client, registry, cfg.DeepSeekModel, cfg.AnonymousHMACKey, cfg.LLMTimeout, cfg.LLMConcurrency)
 	engine.RegisterProvider("deepseek", agent.ModelProvider{Client: client, Model: cfg.DeepSeekModel, MemoryExtractor: agent.LLMMemoryExtractor{Client: client, Model: cfg.DeepSeekModel}, InputPricePerM: cfg.InputPricePerM, OutputPricePerM: cfg.OutputPricePerM})
 	if strings.TrimSpace(cfg.QwenAPIKey) != "" {
-		qwen := &agent.QwenClient{BaseURL: cfg.QwenBaseURL, APIKey: cfg.QwenAPIKey, ReasoningEffort: cfg.QwenReasoningEffort, HTTP: httpClient}
-		engine.RegisterProvider("qwen", agent.ModelProvider{Client: qwen, Model: cfg.QwenModel, MemoryExtractor: agent.LLMMemoryExtractor{Client: qwen, Model: cfg.QwenModel}, InputPricePerM: cfg.QwenInputPricePerM, OutputPricePerM: cfg.QwenOutputPricePerM})
+		qwen := &agent.QwenClient{BaseURL: cfg.QwenBaseURL, APIKey: cfg.QwenAPIKey, ReasoningEffort: cfg.QwenReasoningEffort, UseResponses: true, HTTP: httpClient}
+		engine.RegisterProvider("qwen", agent.ModelProvider{Client: qwen, Model: cfg.QwenModel, MemoryExtractor: agent.LLMMemoryExtractor{Client: qwen, Model: cfg.QwenModel}, HostedWebSearch: true, InputPricePerM: cfg.QwenInputPricePerM, OutputPricePerM: cfg.QwenOutputPricePerM})
+	}
+	if strings.TrimSpace(cfg.BailianDeepSeekAPIKey) != "" {
+		bailianDeepSeek := &agent.BailianDeepSeekClient{BaseURL: cfg.BailianDeepSeekBaseURL, APIKey: cfg.BailianDeepSeekAPIKey, HTTP: httpClient}
+		engine.RegisterProvider("bailian-deepseek", agent.ModelProvider{Client: bailianDeepSeek, Model: cfg.BailianDeepSeekModel, MemoryExtractor: agent.LLMMemoryExtractor{Client: bailianDeepSeek, Model: cfg.BailianDeepSeekModel}, HostedWebSearch: true, InputPricePerM: cfg.BailianDeepSeekInputPricePerM, OutputPricePerM: cfg.BailianDeepSeekOutputPricePerM})
 	}
 	engine.TokenBudget = cfg.StudentTokenBudget
 	engine.MaxToolCalls = cfg.MaxToolCalls
@@ -98,6 +102,12 @@ func main() {
 	app.AvailableDeepSeekSearchChannels = []string{tools.DeepSeekSearchAnthropic, tools.DeepSeekSearchResponses}
 	if strings.TrimSpace(cfg.ZhipuSearchAPIKey) != "" {
 		app.AvailableSearchProviders = append(app.AvailableSearchProviders, "zhipu")
+	}
+	if strings.TrimSpace(cfg.QwenAPIKey) != "" {
+		app.AvailableSearchProviders = append(app.AvailableSearchProviders, "qwen")
+	}
+	if strings.TrimSpace(cfg.BailianDeepSeekAPIKey) != "" {
+		app.AvailableSearchProviders = append(app.AvailableSearchProviders, "bailian-deepseek")
 	}
 	app.Runner = runnerClient
 	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: app.Routes(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}

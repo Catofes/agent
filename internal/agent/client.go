@@ -84,10 +84,110 @@ type QwenClient struct {
 	BaseURL         string
 	APIKey          string
 	ReasoningEffort string
+	UseResponses    bool
 	HTTP            *http.Client
 }
 
+// BailianDeepSeekClient speaks Alibaba Cloud Model Studio's OpenAI-compatible
+// API. It stays distinct from DeepSeekClient because Alibaba operates the
+// endpoint, credentials, request extensions, and hosted search.
+type BailianDeepSeekClient struct {
+	BaseURL string
+	APIKey  string
+	HTTP    *http.Client
+}
+
+func (c *BailianDeepSeekClient) Complete(ctx context.Context, in CompletionRequest) (Completion, error) {
+	if in.EnableWebSearch {
+		return c.completeResponses(ctx, in)
+	}
+	body := map[string]any{
+		"model":           in.Model,
+		"messages":        in.Messages,
+		"stream":          true,
+		"stream_options":  map[string]any{"include_usage": true},
+		"user":            in.UserID,
+		"enable_thinking": true,
+	}
+	if len(in.Tools) > 0 {
+		body["tools"] = in.Tools
+	}
+	return c.postChat(ctx, body, in.OnDelta, in.OnReasoningDelta)
+}
+
+func (c *BailianDeepSeekClient) postChat(ctx context.Context, body map[string]any, onDelta, onReasoningDelta func(string) error) (Completion, error) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return Completion{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+"/chat/completions", bytes.NewReader(raw))
+	if err != nil {
+		return Completion{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return Completion{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return Completion{}, fmt.Errorf("provider status %d: %s", resp.StatusCode, sanitizeProviderError(limited))
+	}
+	return decodeStreamWithDelta(resp.Body, onDelta, onReasoningDelta)
+}
+
+func (c *BailianDeepSeekClient) completeResponses(ctx context.Context, in CompletionRequest) (Completion, error) {
+	body := map[string]any{
+		"model":  in.Model,
+		"input":  responseInput(in.Messages),
+		"stream": true,
+		"user":   in.UserID,
+	}
+	responseTools := make([]map[string]any, 0, len(in.Tools)+2)
+	for _, definition := range in.Tools {
+		responseTools = append(responseTools, map[string]any{
+			"type":        "function",
+			"name":        definition.Function.Name,
+			"description": definition.Function.Description,
+			"parameters":  definition.Function.Parameters,
+		})
+	}
+	responseTools = append(responseTools, map[string]any{"type": "web_search"}, map[string]any{"type": "web_extractor"})
+	body["tools"] = responseTools
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return Completion{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+"/responses", bytes.NewReader(raw))
+	if err != nil {
+		return Completion{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return Completion{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return Completion{}, fmt.Errorf("provider status %d: %s", resp.StatusCode, sanitizeProviderError(limited))
+	}
+	return decodeResponseStreamForProvider(resp.Body, in.OnDelta, in.OnReasoningDelta, in.OnHostedTool, "百炼 DeepSeek")
+}
+
 func (c *QwenClient) Complete(ctx context.Context, in CompletionRequest) (Completion, error) {
+	if c.UseResponses && in.EnableWebSearch {
+		return c.completeResponses(ctx, in)
+	}
+	return c.completeChat(ctx, in)
+}
+
+func (c *QwenClient) completeChat(ctx context.Context, in CompletionRequest) (Completion, error) {
 	effort := strings.ToLower(strings.TrimSpace(c.ReasoningEffort))
 	if effort == "" {
 		effort = "low"
@@ -130,6 +230,53 @@ func (c *QwenClient) Complete(ctx context.Context, in CompletionRequest) (Comple
 		return Completion{}, fmt.Errorf("provider status %d: %s", resp.StatusCode, sanitizeProviderError(limited))
 	}
 	return decodeStreamWithDelta(resp.Body, in.OnDelta, in.OnReasoningDelta)
+}
+
+func (c *QwenClient) completeResponses(ctx context.Context, in CompletionRequest) (Completion, error) {
+	effort := strings.ToLower(strings.TrimSpace(c.ReasoningEffort))
+	if effort == "" {
+		effort = "low"
+	}
+	body := map[string]any{
+		"model":     in.Model,
+		"input":     responseInput(in.Messages),
+		"stream":    true,
+		"user":      in.UserID,
+		"reasoning": map[string]string{"effort": effort},
+	}
+	responseTools := make([]map[string]any, 0, len(in.Tools)+1)
+	for _, definition := range in.Tools {
+		responseTools = append(responseTools, map[string]any{
+			"type":        "function",
+			"name":        definition.Function.Name,
+			"description": definition.Function.Description,
+			"parameters":  definition.Function.Parameters,
+		})
+	}
+	responseTools = append(responseTools, map[string]any{"type": "web_search"})
+	body["tools"] = responseTools
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return Completion{}, err
+	}
+	endpoint := strings.TrimRight(c.BaseURL, "/") + "/responses"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return Completion{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return Completion{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return Completion{}, fmt.Errorf("provider status %d: %s", resp.StatusCode, sanitizeProviderError(limited))
+	}
+	return decodeResponseStreamForProvider(resp.Body, in.OnDelta, in.OnReasoningDelta, in.OnHostedTool, "千问")
 }
 
 func (c *DeepSeekClient) Complete(ctx context.Context, in CompletionRequest) (Completion, error) {
@@ -250,6 +397,10 @@ func responseInput(messages []Message) []any {
 }
 
 func decodeResponseStream(r io.Reader, onDelta, onReasoningDelta func(string) error, onHostedTool func(HostedToolEvent) error) (Completion, error) {
+	return decodeResponseStreamForProvider(r, onDelta, onReasoningDelta, onHostedTool, "DeepSeek")
+}
+
+func decodeResponseStreamForProvider(r io.Reader, onDelta, onReasoningDelta func(string) error, onHostedTool func(HostedToolEvent) error, providerLabel string) (Completion, error) {
 	type responseEnvelope struct {
 		Status string            `json:"status"`
 		Output []json.RawMessage `json:"output"`
@@ -276,13 +427,57 @@ func decodeResponseStream(r io.Reader, onDelta, onReasoningDelta func(string) er
 		Name      string          `json:"name"`
 		Arguments string          `json:"arguments"`
 		Action    json.RawMessage `json:"action"`
+		Goal      string          `json:"goal"`
+		URLs      []string        `json:"urls"`
 		Content   []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
+		Summary []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"summary"`
 	}
 	var terminal *responseEnvelope
 	started := map[string]bool{}
+	completed := map[string]bool{}
+	emitHosted := func(value item, phase string) error {
+		if onHostedTool == nil || (value.Type != "web_search_call" && value.Type != "web_extractor_call") {
+			return nil
+		}
+		id := value.ID
+		if id == "" {
+			id = value.Type
+		}
+		name, label := "web_search", "联网搜索"
+		if value.Type == "web_extractor_call" {
+			name, label = "web_extractor", "网页抓取"
+		}
+		if phase == "start" {
+			if started[id] {
+				return nil
+			}
+			started[id] = true
+			return onHostedTool(HostedToolEvent{ID: id, Phase: phase, Name: name, Summary: providerLabel + "正在执行" + label})
+		}
+		if completed[id] {
+			return nil
+		}
+		completed[id] = true
+		detail := map[string]any{}
+		if value.Type == "web_search_call" && len(value.Action) > 0 {
+			var action any
+			if json.Unmarshal(value.Action, &action) == nil {
+				detail["action"] = action
+			}
+		}
+		if value.Type == "web_extractor_call" {
+			detail["goal"] = value.Goal
+			detail["urls"] = value.URLs
+		}
+		rawDetail, _ := json.Marshal(detail)
+		return onHostedTool(HostedToolEvent{ID: id, Phase: phase, Name: name, Summary: providerLabel + "已完成" + label, Detail: rawDetail})
+	}
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
@@ -312,15 +507,17 @@ func decodeResponseStream(r io.Reader, onDelta, onReasoningDelta func(string) er
 				}
 			}
 		case "response.web_search_call.in_progress", "response.web_search_call.searching":
-			if onHostedTool != nil && !started[ev.ItemID] {
-				started[ev.ItemID] = true
-				if err := onHostedTool(HostedToolEvent{ID: ev.ItemID, Phase: "start", Name: "web_search", Summary: "正在由 DeepSeek 搜索网上信息"}); err != nil {
-					return Completion{}, err
-				}
+			if err := emitHosted(item{Type: "web_search_call", ID: ev.ItemID}, "start"); err != nil {
+				return Completion{}, err
 			}
-		case "response.web_search_call.completed":
-			if onHostedTool != nil {
-				if err := onHostedTool(HostedToolEvent{ID: ev.ItemID, Phase: "result", Name: "web_search", Summary: "DeepSeek 已完成联网搜索"}); err != nil {
+		case "response.output_item.added", "response.output_item.done":
+			var value item
+			if len(ev.Item) > 0 && json.Unmarshal(ev.Item, &value) == nil {
+				phase := "start"
+				if ev.Type == "response.output_item.done" {
+					phase = "result"
+				}
+				if err := emitHosted(value, phase); err != nil {
 					return Completion{}, err
 				}
 			}
@@ -342,6 +539,17 @@ func decodeResponseStream(r io.Reader, onDelta, onReasoningDelta func(string) er
 		}
 		return Completion{}, fmt.Errorf("provider response %s: %s", terminal.Status, message)
 	}
+	for _, raw := range terminal.Output {
+		var value item
+		if json.Unmarshal(raw, &value) == nil && (value.Type == "web_search_call" || value.Type == "web_extractor_call") {
+			if err := emitHosted(value, "start"); err != nil {
+				return Completion{}, err
+			}
+			if err := emitHosted(value, "result"); err != nil {
+				return Completion{}, err
+			}
+		}
+	}
 	out := Completion{TokensIn: terminal.Usage.Input, TokensOut: terminal.Usage.Output, RawResponseItems: terminal.Output}
 	for _, raw := range terminal.Output {
 		var value item
@@ -359,6 +567,11 @@ func decodeResponseStream(r io.Reader, onDelta, onReasoningDelta func(string) er
 			for _, content := range value.Content {
 				if content.Type == "reasoning_text" {
 					out.Reasoning += content.Text
+				}
+			}
+			for _, summary := range value.Summary {
+				if summary.Type == "summary_text" || summary.Type == "reasoning_text" {
+					out.Reasoning += summary.Text
 				}
 			}
 		case "function_call":

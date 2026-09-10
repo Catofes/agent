@@ -118,6 +118,119 @@ func TestQwenClientUsesCompatibleStreamingReasoningAndTools(t *testing.T) {
 	}
 }
 
+func TestQwenResponsesUsesHostedSearchAndExposesSources(t *testing.T) {
+	var requestBody map[string]any
+	client := &QwenClient{BaseURL: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", APIKey: "qwen-secret", ReasoningEffort: "medium", UseResponses: true, HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/compatible-mode/v1/responses" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &requestBody); err != nil {
+			t.Fatal(err)
+		}
+		stream := strings.Join([]string{
+			`data: {"type":"response.web_search_call.in_progress","item_id":"ws_1"}`,
+			`data: {"type":"response.web_search_call.searching","item_id":"ws_1"}`,
+			`data: {"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"杭州天气","sources":[{"type":"url","url":"https://weather.example/hangzhou"}]}}}`,
+			`data: {"type":"response.reasoning_text.delta","delta":"先查"}`,
+			`data: {"type":"response.output_text.delta","delta":"杭州晴"}`,
+			`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"先查"}]},{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"杭州天气","sources":[{"type":"url","url":"https://weather.example/hangzhou"}]}},{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"杭州晴"}]}],"usage":{"input_tokens":120,"output_tokens":8}}}`,
+			"",
+		}, "\n")
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil
+	})}}
+	definition := tools.Definition{Type: "function", Function: tools.FunctionSpec{Name: "calculator", Description: "test tool", Parameters: map[string]any{"type": "object"}}}
+	var hosted []HostedToolEvent
+	got, err := client.Complete(context.Background(), CompletionRequest{Model: "qwen3.8-flash", UserID: "anonymous", Messages: []Message{{Role: "user", Content: "杭州天气"}}, Tools: []tools.Definition{definition}, EnableWebSearch: true, OnHostedTool: func(event HostedToolEvent) error {
+		hosted = append(hosted, event)
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != "杭州晴" || got.Reasoning != "先查" || got.TokensIn != 120 || got.TokensOut != 8 {
+		t.Fatalf("completion=%#v", got)
+	}
+	if len(hosted) != 2 || hosted[0].Name != "web_search" || hosted[1].Phase != "result" || !strings.Contains(string(hosted[1].Detail), "weather.example/hangzhou") {
+		t.Fatalf("hosted=%#v", hosted)
+	}
+	if reasoning, _ := requestBody["reasoning"].(map[string]any); reasoning["effort"] != "medium" {
+		t.Fatalf("reasoning=%#v", requestBody["reasoning"])
+	}
+	toolList, _ := requestBody["tools"].([]any)
+	if len(toolList) != 2 {
+		t.Fatalf("tools=%#v", requestBody["tools"])
+	}
+	function, _ := toolList[0].(map[string]any)
+	builtin, _ := toolList[1].(map[string]any)
+	if function["type"] != "function" || function["name"] != "calculator" || builtin["type"] != "web_search" {
+		t.Fatalf("tools=%#v", toolList)
+	}
+}
+
+func TestBailianDeepSeekUsesChatWithoutHostedSearch(t *testing.T) {
+	var requestBody map[string]any
+	client := &BailianDeepSeekClient{BaseURL: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", APIKey: "bailian-secret", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/compatible-mode/v1/chat/completions" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &requestBody); err != nil {
+			t.Fatal(err)
+		}
+		stream := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先想\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"答案\"}}]}\n\ndata: [DONE]\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil
+	})}}
+	got, err := client.Complete(context.Background(), CompletionRequest{Model: "deepseek-v4-flash-0731", UserID: "anonymous", Messages: []Message{{Role: "user", Content: "问题"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestBody["enable_thinking"] != true || requestBody["user"] != "anonymous" || requestBody["thinking"] != nil {
+		t.Fatalf("Bailian controls=%#v", requestBody)
+	}
+	if got.Reasoning != "先想" || got.Content != "答案" {
+		t.Fatalf("completion=%#v", got)
+	}
+}
+
+func TestBailianDeepSeekResponsesUsesBailianHostedSearch(t *testing.T) {
+	var requestBody map[string]any
+	client := &BailianDeepSeekClient{BaseURL: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", APIKey: "bailian-secret", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/compatible-mode/v1/responses" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &requestBody); err != nil {
+			t.Fatal(err)
+		}
+		stream := strings.Join([]string{
+			`data: {"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"杭州天气","sources":[{"type":"url","url":"https://weather.example/hangzhou"}]}}}`,
+			`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"杭州天气","sources":[{"type":"url","url":"https://weather.example/hangzhou"}]}},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"杭州晴"}]}],"usage":{"input_tokens":12,"output_tokens":2}}}`,
+			"",
+		}, "\n")
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil
+	})}}
+	definition := tools.Definition{Type: "function", Function: tools.FunctionSpec{Name: "calculator", Description: "test tool", Parameters: map[string]any{"type": "object"}}}
+	var hosted []HostedToolEvent
+	got, err := client.Complete(context.Background(), CompletionRequest{Model: "deepseek-v4-flash-0731", UserID: "anonymous", Messages: []Message{{Role: "user", Content: "杭州天气"}}, Tools: []tools.Definition{definition}, EnableWebSearch: true, OnHostedTool: func(event HostedToolEvent) error {
+		hosted = append(hosted, event)
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != "杭州晴" || requestBody["enable_thinking"] != nil || requestBody["reasoning"] != nil {
+		t.Fatalf("completion/body=%#v %#v", got, requestBody)
+	}
+	toolList, _ := requestBody["tools"].([]any)
+	if len(toolList) != 3 || toolList[1].(map[string]any)["type"] != "web_search" || toolList[2].(map[string]any)["type"] != "web_extractor" {
+		t.Fatalf("tools=%#v", requestBody["tools"])
+	}
+	if len(hosted) != 2 || !strings.Contains(hosted[1].Summary, "百炼 DeepSeek") {
+		t.Fatalf("hosted=%#v", hosted)
+	}
+}
+
 func TestDecodeStreamAcrossJSONAndUTF8ChunkBoundaries(t *testing.T) {
 	stream := strings.Join([]string{
 		`data: {"choices":[{"delta":{"reasoning_content":"先想"}}]}`,

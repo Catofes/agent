@@ -72,6 +72,18 @@ func TestValidateWebSearchProvider(t *testing.T) {
 			t.Fatalf("got %v", err)
 		}
 	})
+	t.Run("qwen requires model key", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.WebSearchProvider = "qwen"
+		cfg.QwenAPIKey = ""
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "QWEN_API_KEY") {
+			t.Fatalf("got %v", err)
+		}
+		cfg.QwenAPIKey = "qwen-secret"
+		if err := cfg.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("rejects unknown provider", func(t *testing.T) {
 		cfg := validConfig()
 		cfg.WebSearchProvider = "brave"
@@ -102,6 +114,24 @@ func TestValidateQwenReasoningEffort(t *testing.T) {
 	cfg.QwenReasoningEffort = "low"
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestValidateBailianDeepSeekConfiguration(t *testing.T) {
+	cfg := validConfig()
+	cfg.BailianDeepSeekBaseURL = "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+	cfg.BailianDeepSeekAPIKey = "bailian-secret"
+	cfg.BailianDeepSeekModel = "deepseek-v4-flash-0731"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.BailianDeepSeekBaseURL = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "configured together") {
+		t.Fatalf("mismatched Bailian config error=%v", err)
+	}
+	cfg.BailianDeepSeekBaseURL = "workspace-only"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "absolute http or https URL") {
+		t.Fatalf("invalid Bailian URL error=%v", err)
 	}
 }
 

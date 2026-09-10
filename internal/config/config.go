@@ -12,52 +12,57 @@ import (
 )
 
 type Config struct {
-	ListenAddr            string
-	DatabasePath          string
-	StudentsCSV           string
-	DeepSeekBaseURL       string
-	DeepSeekModel         string
-	DeepSeekAPIKey        string
-	QwenBaseURL           string
-	QwenModel             string
-	QwenAPIKey            string
-	QwenReasoningEffort   string
-	QwenInputPricePerM    float64
-	QwenOutputPricePerM   float64
-	WebSearchProvider     string
-	DeepSeekSearchChannel string
-	ZhipuSearchAPIKey     string
-	ZhipuSearchEngine     string
-	RunnerURL             string
-	RunnerToken           string
-	RunnerTimeout         time.Duration
-	MaxPythonCodeChars    int
-	MaxArtifactBytes      int64
-	AdminPassword         string
-	AnonymousHMACKey      string
-	CookieSecure          bool
-	RequireNameInitial    bool
-	SessionTTL            time.Duration
-	LLMTimeout            time.Duration
-	LLMConcurrency        int
-	StudentTokenBudget    int64
-	DefaultMaxTurns       int
-	MinMaxTurns           int
-	MaxMaxTurns           int
-	MaxToolCalls          int
-	MaxPersonaChars       int
-	MaxSkillChars         int
-	MaxInputChars         int
-	MaxOutputChars        int
-	MaxReasoningChars     int
-	MaxMemoryItems        int
-	MaxMemoryChars        int
-	MaxMemoryTokens       int
-	MemoryExtractTimeout  time.Duration
-	InputPricePerM        float64
-	OutputPricePerM       float64
-	InitialRunName        string
-	Version               string
+	ListenAddr                     string
+	DatabasePath                   string
+	StudentsCSV                    string
+	DeepSeekBaseURL                string
+	DeepSeekModel                  string
+	DeepSeekAPIKey                 string
+	QwenBaseURL                    string
+	QwenModel                      string
+	QwenAPIKey                     string
+	QwenReasoningEffort            string
+	QwenInputPricePerM             float64
+	QwenOutputPricePerM            float64
+	BailianDeepSeekBaseURL         string
+	BailianDeepSeekModel           string
+	BailianDeepSeekAPIKey          string
+	BailianDeepSeekInputPricePerM  float64
+	BailianDeepSeekOutputPricePerM float64
+	WebSearchProvider              string
+	DeepSeekSearchChannel          string
+	ZhipuSearchAPIKey              string
+	ZhipuSearchEngine              string
+	RunnerURL                      string
+	RunnerToken                    string
+	RunnerTimeout                  time.Duration
+	MaxPythonCodeChars             int
+	MaxArtifactBytes               int64
+	AdminPassword                  string
+	AnonymousHMACKey               string
+	CookieSecure                   bool
+	RequireNameInitial             bool
+	SessionTTL                     time.Duration
+	LLMTimeout                     time.Duration
+	LLMConcurrency                 int
+	StudentTokenBudget             int64
+	DefaultMaxTurns                int
+	MinMaxTurns                    int
+	MaxMaxTurns                    int
+	MaxToolCalls                   int
+	MaxPersonaChars                int
+	MaxSkillChars                  int
+	MaxInputChars                  int
+	MaxOutputChars                 int
+	MaxReasoningChars              int
+	MaxMemoryItems                 int
+	MaxMemoryChars                 int
+	MaxMemoryTokens                int
+	MemoryExtractTimeout           time.Duration
+	InputPricePerM                 float64
+	OutputPricePerM                float64
+	InitialRunName                 string
+	Version                        string
 }
 
 func Load(version string) (Config, error) {
@@ -74,7 +79,12 @@ func Load(version string) (Config, error) {
 	flag.StringVar(&c.QwenReasoningEffort, "qwen-reasoning-effort", env("QWEN_REASONING_EFFORT", "low"), "Qwen reasoning effort: none, low, medium, or xhigh")
 	flag.Float64Var(&c.QwenInputPricePerM, "qwen-input-price-per-million", envFloat("QWEN_INPUT_PRICE_PER_MILLION", 0), "Qwen input price per million tokens")
 	flag.Float64Var(&c.QwenOutputPricePerM, "qwen-output-price-per-million", envFloat("QWEN_OUTPUT_PRICE_PER_MILLION", 0), "Qwen output price per million tokens")
-	flag.StringVar(&c.WebSearchProvider, "web-search-provider", env("WEB_SEARCH_PROVIDER", "disabled"), "web search provider: disabled, zhipu, or deepseek")
+	flag.StringVar(&c.BailianDeepSeekBaseURL, "bailian-deepseek-base-url", os.Getenv("BAILIAN_DEEPSEEK_BASE_URL"), "Alibaba Cloud Model Studio OpenAI-compatible API base URL")
+	flag.StringVar(&c.BailianDeepSeekModel, "bailian-deepseek-model", env("BAILIAN_DEEPSEEK_MODEL", "deepseek-v4-flash-0731"), "DeepSeek model served by Alibaba Cloud Model Studio")
+	flag.StringVar(&c.BailianDeepSeekAPIKey, "bailian-deepseek-api-key", os.Getenv("BAILIAN_DEEPSEEK_API_KEY"), "Alibaba Cloud Model Studio API key; optional backup provider")
+	flag.Float64Var(&c.BailianDeepSeekInputPricePerM, "bailian-deepseek-input-price-per-million", envFloat("BAILIAN_DEEPSEEK_INPUT_PRICE_PER_MILLION", 0), "Alibaba-hosted DeepSeek input price per million tokens")
+	flag.Float64Var(&c.BailianDeepSeekOutputPricePerM, "bailian-deepseek-output-price-per-million", envFloat("BAILIAN_DEEPSEEK_OUTPUT_PRICE_PER_MILLION", 0), "Alibaba-hosted DeepSeek output price per million tokens")
+	flag.StringVar(&c.WebSearchProvider, "web-search-provider", env("WEB_SEARCH_PROVIDER", "disabled"), "web search provider: disabled, zhipu, deepseek, qwen, or bailian-deepseek")
 	flag.StringVar(&c.DeepSeekSearchChannel, "deepseek-search-channel", env("DEEPSEEK_SEARCH_CHANNEL", "anthropic"), "DeepSeek web search channel: anthropic or responses")
 	flag.StringVar(&c.ZhipuSearchAPIKey, "zhipu-search-api-key", os.Getenv("ZHIPU_SEARCH_API_KEY"), "Zhipu Web Search API key")
 	flag.StringVar(&c.ZhipuSearchEngine, "zhipu-search-engine", env("ZHIPU_SEARCH_ENGINE", "search_std"), "Zhipu search engine: search_std, search_pro, search_pro_sogou, or search_pro_quark")
@@ -130,11 +140,17 @@ func (c Config) Validate() error {
 		return fmt.Errorf("missing required configuration: %s", strings.Join(missing, ", "))
 	}
 	provider := strings.ToLower(strings.TrimSpace(c.WebSearchProvider))
-	if provider != "" && provider != "disabled" && provider != "zhipu" && provider != "deepseek" {
-		return errors.New("WEB_SEARCH_PROVIDER must be disabled, zhipu, or deepseek")
+	if provider != "" && provider != "disabled" && provider != "zhipu" && provider != "deepseek" && provider != "qwen" && provider != "bailian-deepseek" {
+		return errors.New("WEB_SEARCH_PROVIDER must be disabled, zhipu, deepseek, qwen, or bailian-deepseek")
 	}
 	if provider == "zhipu" && strings.TrimSpace(c.ZhipuSearchAPIKey) == "" {
 		return errors.New("ZHIPU_SEARCH_API_KEY is required when WEB_SEARCH_PROVIDER=zhipu")
+	}
+	if provider == "qwen" && strings.TrimSpace(c.QwenAPIKey) == "" {
+		return errors.New("QWEN_API_KEY is required when WEB_SEARCH_PROVIDER=qwen")
+	}
+	if provider == "bailian-deepseek" && (strings.TrimSpace(c.BailianDeepSeekAPIKey) == "" || strings.TrimSpace(c.BailianDeepSeekBaseURL) == "") {
+		return errors.New("BAILIAN_DEEPSEEK_API_KEY and BAILIAN_DEEPSEEK_BASE_URL are required when WEB_SEARCH_PROVIDER=bailian-deepseek")
 	}
 	channel := strings.ToLower(strings.TrimSpace(c.DeepSeekSearchChannel))
 	if channel == "" {
@@ -149,6 +165,18 @@ func (c Config) Validate() error {
 	}
 	if effort != "none" && effort != "low" && effort != "medium" && effort != "xhigh" {
 		return errors.New("QWEN_REASONING_EFFORT must be none, low, medium, or xhigh")
+	}
+	if (strings.TrimSpace(c.BailianDeepSeekBaseURL) == "") != (strings.TrimSpace(c.BailianDeepSeekAPIKey) == "") {
+		return errors.New("BAILIAN_DEEPSEEK_BASE_URL and BAILIAN_DEEPSEEK_API_KEY must be configured together")
+	}
+	if strings.TrimSpace(c.BailianDeepSeekBaseURL) != "" {
+		parsed, err := url.Parse(c.BailianDeepSeekBaseURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return errors.New("BAILIAN_DEEPSEEK_BASE_URL must be an absolute http or https URL")
+		}
+		if strings.TrimSpace(c.BailianDeepSeekModel) == "" {
+			return errors.New("BAILIAN_DEEPSEEK_MODEL must not be empty")
+		}
 	}
 	engines := map[string]bool{"search_std": true, "search_pro": true, "search_pro_sogou": true, "search_pro_quark": true}
 	if engine := strings.TrimSpace(c.ZhipuSearchEngine); engine != "" && !engines[engine] {

@@ -295,17 +295,18 @@ func TestEngineHostedSearchUsesProviderAndPersistsVisibleTrace(t *testing.T) {
 			if err := req.OnHostedTool(HostedToolEvent{ID: "ws_1", Phase: "start", Name: "web_search", Summary: "正在搜索"}); err != nil {
 				return Completion{}, err
 			}
-			if err := req.OnHostedTool(HostedToolEvent{ID: "ws_1", Phase: "result", Name: "web_search", Summary: "搜索完成"}); err != nil {
+			if err := req.OnHostedTool(HostedToolEvent{ID: "ws_1", Phase: "result", Name: "web_search", Summary: "搜索完成", Detail: json.RawMessage(`{"action":{"query":"杭州天气","sources":[{"url":"https://weather.example/hangzhou"}]}}`)}); err != nil {
 				return Completion{}, err
 			}
 		}
 		return Completion{Content: "杭州晴", Deltas: []string{"杭州晴"}, TokensIn: 10, TokensOut: 2}, nil
 	})
 	engine := NewEngine(st, client, tools.NewRegistry(testCalculator{}, tools.HostedWebSearch{}), "model", "secret", time.Second, 1)
-	engine.HostedWebSearch = true
+	engine.RegisterProvider("qwen", ModelProvider{Client: client, Model: "qwen3.8-flash", HostedWebSearch: true})
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	engine.MaxToolCallsByName = map[string]int{"web_search": 3}
 	var events []Event
-	err = engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "杭州天气", Design: store.Design{Tools: []string{"web_search"}, MaxTurns: 2}}, func(event Event) error {
+	err = engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "杭州天气", ModelProvider: "qwen", SearchProvider: "qwen", Design: store.Design{Tools: []string{"web_search"}, MaxTurns: 2}}, func(event Event) error {
 		events = append(events, event)
 		return nil
 	})
@@ -329,15 +330,17 @@ func TestEngineHostedSearchUsesProviderAndPersistsVisibleTrace(t *testing.T) {
 		}
 	}
 	var starts, results int
+	var resultDetail json.RawMessage
 	for _, event := range events {
 		if event.Type == "tool_start" {
 			starts++
 		}
 		if event.Type == "tool_result" {
 			results++
+			resultDetail = event.Detail
 		}
 	}
-	if starts != 1 || results != 1 {
+	if starts != 1 || results != 1 || !strings.Contains(string(resultDetail), "weather.example/hangzhou") {
 		t.Fatalf("events=%#v", events)
 	}
 }
