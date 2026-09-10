@@ -231,6 +231,7 @@ func (s *Server) Routes() http.Handler {
 				r.Get("/policy", s.getTeacherPolicy)
 				r.Put("/policy", s.setTeacherPolicy)
 				r.Get("/student/{id}", s.teacherStudent)
+				r.Post("/student/{id}/usage/reset", s.resetStudentUsage)
 				r.Post("/lock", s.lock)
 				r.Post("/run", s.createRun)
 				r.Post("/spotlight", s.spotlight)

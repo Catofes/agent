@@ -47,6 +47,34 @@ func TestZhipuSearchRejectsLongQuery(t *testing.T) {
 	}
 }
 
+func TestZhipuSearchRelaxesFreshnessAfterNoResults(t *testing.T) {
+	var recencies []string
+	search := NewZhipuSearch("secret", "search_std")
+	search.client = &http.Client{Transport: searchRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var got map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		recency, _ := got["search_recency_filter"].(string)
+		recencies = append(recencies, recency)
+		body := `{"search_result":[]}`
+		if recency == "noLimit" {
+			body = `{"search_result":[{"title":"库里中国行","content":"较早的相关报道","link":"https://example.com/curry"}]}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	result, err := search.Execute(context.Background(), json.RawMessage(`{"query":"库里 中国行 最新消息","freshness":"week"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(recencies, ",") != "oneWeek,noLimit" {
+		t.Fatalf("recencies=%v", recencies)
+	}
+	if !strings.Contains(result.ModelText, "已自动放宽为不限时间") || !strings.Contains(result.ModelText, "https://example.com/curry") {
+		t.Fatalf("unexpected result: %s", result.ModelText)
+	}
+}
+
 func TestZhipuQuarkRequestOmitsUnsupportedCount(t *testing.T) {
 	var got map[string]any
 	search := NewZhipuSearch("secret", "search_pro_quark")

@@ -168,6 +168,8 @@ type WallStudent struct {
 	HasPersona bool       `json:"has_persona"`
 	HasSkill   bool       `json:"has_skill"`
 	ChatTurns  int        `json:"chat_turns"`
+	TokensIn   int64      `json:"tokens_in"`
+	TokensOut  int64      `json:"tokens_out"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
@@ -1486,6 +1488,25 @@ func (s *Store) AddUsage(ctx context.Context, runID, studentID string, in, out, 
 	return err
 }
 
+func (s *Store) ResetUsage(ctx context.Context, runID, studentID string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM usage WHERE run_id=? AND student_id=?
+ AND EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`, runID, studentID, runID, studentID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	var exists bool
+	if err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`, runID, studentID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) MemoryState(ctx context.Context, runID, studentID string) (MemoryState, error) {
 	var state MemoryState
 	err := s.db.QueryRowContext(ctx, `SELECT enabled FROM memory_settings WHERE run_id=? AND student_id=?`, runID, studentID).Scan(&state.Enabled)
@@ -1664,8 +1685,12 @@ func (s *Store) Wall(ctx context.Context, runID string) ([]WallStudent, error) {
  (SELECT count(DISTINCT m.turn_id) FROM messages m
   JOIN conversations c ON c.run_id=m.run_id AND c.student_id=m.student_id AND c.id=m.conversation_id
   WHERE m.run_id=st.run_id AND m.student_id=st.id AND m.role='user' AND c.kind='student'),
- (SELECT max(last_seen_at) FROM sessions se WHERE se.run_id=st.run_id AND se.student_id=st.id AND se.revoked_at IS NULL)
- FROM students st LEFT JOIN designs d ON d.run_id=st.run_id AND d.student_id=st.id WHERE st.run_id=? ORDER BY st.id`, formatTime(time.Now().UTC()), runID)
+	 COALESCE(u.tokens_in,0),COALESCE(u.tokens_out,0),
+	 (SELECT max(last_seen_at) FROM sessions se WHERE se.run_id=st.run_id AND se.student_id=st.id AND se.revoked_at IS NULL)
+	 FROM students st
+	 LEFT JOIN designs d ON d.run_id=st.run_id AND d.student_id=st.id
+	 LEFT JOIN usage u ON u.run_id=st.run_id AND u.student_id=st.id
+	 WHERE st.run_id=? ORDER BY st.id`, formatTime(time.Now().UTC()), runID)
 	if err != nil {
 		return nil, err
 	}
@@ -1674,7 +1699,7 @@ func (s *Store) Wall(ctx context.Context, runID string) ([]WallStudent, error) {
 	for rows.Next() {
 		var w WallStudent
 		var last sql.NullString
-		if err := rows.Scan(&w.ID, &w.Name, &w.LoggedIn, &w.HasPersona, &w.HasSkill, &w.ChatTurns, &last); err != nil {
+		if err := rows.Scan(&w.ID, &w.Name, &w.LoggedIn, &w.HasPersona, &w.HasSkill, &w.ChatTurns, &w.TokensIn, &w.TokensOut, &last); err != nil {
 			return nil, err
 		}
 		if last.Valid {

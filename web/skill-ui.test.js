@@ -51,3 +51,12 @@ test('student chat input supports multiline text and explicit keyboard sending',
   assert.match(html, /\$\("chatForm"\)\.requestSubmit\(\)/);
   assert.match(html, /caps\.max_input_chars/);
 });
+
+test('student sees the remaining token quota and refreshes it after chat or teacher reset', () => {
+  assert.match(html, /id="tokenQuota"/);
+  assert.match(html, /本场剩余额度/);
+  assert.match(html, /tokens_remaining/);
+  assert.match(html, /token_budget/);
+  assert.match(html, /function refreshTokenQuota\(\)/);
+  assert.match(html, /d\.type === "usage_reset"/);
+});

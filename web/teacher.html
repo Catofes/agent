@@ -108,6 +108,20 @@
       .msg.user {
         background: #e8edff;
       }
+      .usage-panel {
+        display: grid;
+        grid-template-columns: minmax(180px, 1fr) minmax(220px, 2fr) auto;
+        align-items: center;
+        gap: 12px;
+        margin: 12px 0 16px;
+        padding: 12px 14px;
+        border: 1px solid #dfe5ef;
+        border-radius: 12px;
+        background: #f8faff;
+      }
+      .usage-copy { display: grid; gap: 3px; }
+      .usage-copy small { color: #667085; }
+      .usage-meter { width: 100%; accent-color: #5b4ee8; }
       .policy-stack {
         display: grid;
         gap: 16px;
@@ -203,6 +217,7 @@
         .detail {
           grid-template-columns: 1fr;
         }
+        .usage-panel { grid-template-columns: 1fr; }
         .policy-select-grid, .policy-tools {
           grid-template-columns: 1fr;
         }
@@ -306,6 +321,14 @@
               <div id="spotlightStatus" role="status"></div>
             </div>
           </div>
+          <section id="usagePanel" class="usage-panel" aria-label="本场模型用量">
+            <div class="usage-copy">
+              <strong id="usageTotal"></strong>
+              <small id="usageBreakdown"></small>
+            </div>
+            <progress id="usageMeter" class="usage-meter" max="1" value="0"></progress>
+            <button id="resetUsage" class="secondary" type="button">重置用量</button>
+          </section>
           <div class="detail">
             <div>
               <h3>设计</h3>
@@ -347,7 +370,8 @@
         policyBusy = false,
         demoState = null,
         demoStudentID = null,
-        demoController = null;
+        demoController = null,
+        usageResetBusy = false;
       async function api(url, opt = {}) {
         const r = await fetch(url, {
           ...opt,
@@ -418,12 +442,33 @@
                 `人设 ${s.has_persona ? "✓" : "…"}　Skill ${wallState.policy.skills_enabled === false ? "关闭" : s.has_skill ? "✓" : "…"}`,
               ),
               t(`💬 ${s.chat_turns} 轮`),
+              t(`用量 ${formatTokens(Number(s.tokens_in || 0) + Number(s.tokens_out || 0))} / ${formatTokens(Number(wallState.student_token_budget || 0))}`),
               t(!s.logged_in ? "⚫ 离线" : idle ? "🟡 idle" : "🟢 活跃"),
             );
             b.onclick = () => openStudent(s.id);
             return b;
           }),
         );
+      }
+      function formatTokens(value) {
+        return new Intl.NumberFormat("zh-CN", {
+          notation: value >= 10000 ? "compact" : "standard",
+          maximumFractionDigits: 2,
+        }).format(Math.max(0, Number(value) || 0));
+      }
+      function renderStudentUsage() {
+        if (!current) return;
+        const input = Number(current.usage?.tokens_in || 0),
+          output = Number(current.usage?.tokens_out || 0),
+          used = input + output,
+          budget = Number(current.student_token_budget || wallState?.student_token_budget || 0),
+          percent = budget > 0 ? (used / budget) * 100 : 0;
+        $("usageTotal").textContent = `本场已用 ${formatTokens(used)} / ${formatTokens(budget)} token（${percent < 0.01 && percent > 0 ? "<0.01" : percent.toFixed(2)}%）`;
+        $("usageBreakdown").textContent = `输入 ${formatTokens(input)}，输出 ${formatTokens(output)}；重置不会删除对话、设计或 Memory`;
+        $("usageMeter").max = Math.max(1, budget);
+        $("usageMeter").value = Math.min(used, Math.max(1, budget));
+        $("resetUsage").disabled = usageResetBusy || used === 0;
+        $("resetUsage").textContent = usageResetBusy ? "正在重置…" : "重置用量";
       }
       function toolLabel(name) {
         return {
@@ -698,6 +743,7 @@
         const d = await api("/api/teacher/student/" + encodeURIComponent(id));
         current = d;
         $("studentTitle").textContent = `${d.student.id}　${d.student.name}`;
+        renderStudentUsage();
         const skills = (d.skills || [])
           .map(
             (skill) =>
@@ -754,6 +800,25 @@
         $("detailCard").classList.add("hidden");
         $("wall").classList.remove("hidden");
         current = null;
+      };
+      $("resetUsage").onclick = async () => {
+        if (!current || usageResetBusy) return;
+        if (!confirm(`确认重置 ${current.student.name} 在当前场次的模型用量吗？\n\n对话、设计和 Memory 都会保留。`)) return;
+        usageResetBusy = true;
+        renderStudentUsage();
+        try {
+          const result = await api(`/api/teacher/student/${encodeURIComponent(current.student.id)}/usage/reset`, { method: "POST" });
+          current.usage = result.usage;
+          current.student_token_budget = result.student_token_budget;
+          const wallStudent = wallState?.students?.find((student) => student.id === current.student.id);
+          if (wallStudent) wallStudent.tokens_in = wallStudent.tokens_out = 0;
+          $("spotlightStatus").textContent = "本场模型用量已重置";
+        } catch (error) {
+          $("spotlightStatus").textContent = "重置用量失败：" + error.message;
+        } finally {
+          usageResetBusy = false;
+          renderStudentUsage();
+        }
       };
       function renderDemo(state) {
         demoState = state;

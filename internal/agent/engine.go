@@ -218,6 +218,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	toolCounts := map[string]int{}
 	loadedSkills := map[string]bool{}
 	hostedSteps := map[string]int{}
+	webSearchUnavailable := false
 	reasoningChars := 0
 	defer func() {
 		if totalIn+totalOut > 0 || unknownUsage > 0 {
@@ -241,6 +242,9 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			}
 		}
 		if req.SearchProvider == "disabled" {
+			effectiveTools = without(effectiveTools, "web_search")
+		}
+		if webSearchUnavailable {
 			effectiveTools = without(effectiveTools, "web_search")
 		}
 		defs := e.Tools.Definitions(effectiveTools)
@@ -463,6 +467,10 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			modelText := result.ModelText
 			if toolErr != nil {
 				modelText = "工具执行失败：" + toolErr.Error()
+				if call.Function.Name == "web_search" {
+					webSearchUnavailable = true
+					modelText += "。本轮不要再次调用 web_search；请根据已有信息回答，并明确说明联网搜索未成功。"
+				}
 				result.Summary = modelText
 			}
 			if _, err = e.Store.AddMessage(ctx, store.Message{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID, Role: "tool", Content: modelText, ToolCalls: call.ID}); err != nil {

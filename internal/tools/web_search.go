@@ -32,6 +32,8 @@ const (
 	zhipuSearchConcurrency   = 20
 )
 
+var errNoZhipuSearchResults = errors.New("智谱没有返回可用的网页搜索结果")
+
 type searchCacheEntry struct {
 	result  Result
 	expires time.Time
@@ -204,10 +206,24 @@ func (b *ZhipuSearch) search(ctx context.Context, query, freshness string) (Resu
 		return Result{}, fmt.Errorf("搜索排队超时: %w", searchCtx.Err())
 	}
 
+	result, err := b.searchOnce(searchCtx, query, freshness)
+	if !errors.Is(err, errNoZhipuSearchResults) || freshness == "noLimit" {
+		return result, err
+	}
+	result, err = b.searchOnce(searchCtx, query, "noLimit")
+	if err != nil {
+		return Result{}, err
+	}
+	result.ModelText = "指定时间范围内没有找到可用结果，已自动放宽为不限时间。\n" + result.ModelText
+	result.Summary += "（已放宽时间范围）"
+	return result, nil
+}
+
+func (b *ZhipuSearch) searchOnce(ctx context.Context, query, freshness string) (Result, error) {
 	var response zhipuSearchResponse
 	var responseErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		resp, err := b.request(searchCtx, query, freshness)
+		resp, err := b.request(ctx, query, freshness)
 		if err != nil {
 			return Result{}, err
 		}
@@ -216,12 +232,12 @@ func (b *ZhipuSearch) search(ctx context.Context, query, freshness string) (Resu
 			resp.Body.Close()
 			timer := time.NewTimer(delay)
 			select {
-			case <-searchCtx.Done():
+			case <-ctx.Done():
 				timer.Stop()
-				return Result{}, fmt.Errorf("智谱搜索限流: %w", searchCtx.Err())
+				return Result{}, fmt.Errorf("智谱搜索限流: %w", ctx.Err())
 			case <-timer.C:
 			}
-			if err = b.limiter.Wait(searchCtx); err != nil {
+			if err = b.limiter.Wait(ctx); err != nil {
 				return Result{}, fmt.Errorf("搜索重试排队超时: %w", err)
 			}
 			continue
@@ -341,7 +357,7 @@ func formatZhipuResults(query string, response zhipuSearchResponse) (Result, err
 		lines = append(lines, "")
 	}
 	if count == 0 {
-		return Result{}, errors.New("智谱没有返回可用的网页搜索结果")
+		return Result{}, errNoZhipuSearchResults
 	}
 	lines = append(lines, "--- 搜索结果结束 ---", "如需确认细节，应选择最相关的少量 URL 调用 web_fetch 阅读原文，并在最终回答中保留来源链接。")
 	shortQuery, _ := truncateWebText(query, 80)

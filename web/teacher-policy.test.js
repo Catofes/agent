@@ -55,6 +55,17 @@ test("new classroom inherits the policy currently shown in the controls", () => 
   assert.match(html, /JSON\.stringify\(\{ name, \.\.\.selectedPolicy\(\) \}\)/);
 });
 
+test("teacher sees and can reset per-student token usage", () => {
+  for (const id of ["usagePanel", "usageTotal", "usageBreakdown", "usageMeter", "resetUsage"]) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(html, /student_token_budget/);
+  assert.match(html, /tokens_in/);
+  assert.match(html, /tokens_out/);
+  assert.match(html, /\/api\/teacher\/student\/.*\/usage\/reset/);
+  assert.match(html, /重置不会删除对话、设计或 Memory/);
+});
+
 test("teacher controls an authenticated screen demo while the screen stays read-only", () => {
   for (const id of ["startDemo", "stopDemo", "demoControl", "demoMessages", "demoForm", "demoInput", "sendDemo"]) {
     assert.match(html, new RegExp(`id=["']${id}["']`));

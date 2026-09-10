@@ -561,7 +561,7 @@ func TestTeacherPolicyControlsStudentCapabilities(t *testing.T) {
 		t.Fatal(status)
 	}
 	status, capabilities, _ := requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
-	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || capabilities["skills_enabled"] != true || len(capabilities["preset_skills"].([]any)) != 0 || len(capabilities["allowed_tools"].([]any)) != 0 || capabilities["max_input_chars"].(float64) != 100 {
+	if status != http.StatusOK || capabilities["memory_mode"] != store.MemoryModeReviewRequired || capabilities["skills_enabled"] != true || len(capabilities["preset_skills"].([]any)) != 0 || len(capabilities["allowed_tools"].([]any)) != 0 || capabilities["max_input_chars"].(float64) != 100 || capabilities["token_budget"].(float64) != 1000 || capabilities["tokens_used"].(float64) != 0 || capabilities["tokens_remaining"].(float64) != 1000 {
 		t.Fatalf("default capabilities status=%d body=%#v", status, capabilities)
 	}
 	status, body, _ := requestJSON(t, student, http.MethodGet, "/api/templates", nil)
@@ -791,6 +791,61 @@ func TestAuthenticationAndRoleBoundaries(t *testing.T) {
 	status, body, _ = requestJSON(t, student, http.MethodGet, "/api/me", nil)
 	if status != http.StatusUnauthorized || body["error"].(map[string]any)["code"] != "UNAUTHENTICATED" {
 		t.Fatalf("logged-out status=%d body=%v", status, body)
+	}
+}
+
+func TestTeacherCanInspectAndResetStudentUsage(t *testing.T) {
+	handler, st := testServer(t)
+	run, err := st.ActiveRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.AddUsage(context.Background(), run.ID, "2101", 800, 150, 2, .25); err != nil {
+		t.Fatal(err)
+	}
+	student := newClient(handler)
+	if status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"}); status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, capabilities, _ := requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
+	if status != http.StatusOK || capabilities["tokens_used"] != float64(950) || capabilities["tokens_remaining"] != float64(50) {
+		t.Fatalf("student capabilities status=%d body=%#v", status, capabilities)
+	}
+	stream, cancelStream, streamDone := startHandlerStream(handler, http.MethodGet, "/api/events", student.cookie, nil)
+	defer func() {
+		cancelStream()
+		<-streamDone
+	}()
+	if initial := waitSSEJSON(t, stream, 1); initial["type"] != "classroom" {
+		t.Fatalf("initial classroom event=%#v", initial)
+	}
+	teacher := newClient(handler)
+	if status, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"}); status != http.StatusOK {
+		t.Fatal(status)
+	}
+	status, detail, _ := requestJSON(t, teacher, http.MethodGet, "/api/teacher/student/2101", nil)
+	usage := detail["usage"].(map[string]any)
+	if status != http.StatusOK || detail["student_token_budget"] != float64(1000) || usage["tokens_in"] != float64(800) || usage["tokens_out"] != float64(150) {
+		t.Fatalf("detail status=%d body=%#v", status, detail)
+	}
+	status, result, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/student/2101/usage/reset", nil)
+	if status != http.StatusOK || result["student_token_budget"] != float64(1000) || result["usage"].(map[string]any)["tokens_in"] != float64(0) {
+		t.Fatalf("reset status=%d body=%#v", status, result)
+	}
+	if update := waitSSEJSON(t, stream, 2); update["type"] != "usage_reset" {
+		t.Fatalf("usage reset SSE=%#v", update)
+	}
+	usageAfter, err := st.Usage(context.Background(), run.ID, "2101")
+	if err != nil || usageAfter != (store.Usage{}) {
+		t.Fatalf("usage=%#v err=%v", usageAfter, err)
+	}
+	status, capabilities, _ = requestJSON(t, student, http.MethodGet, "/api/capabilities", nil)
+	if status != http.StatusOK || capabilities["tokens_used"] != float64(0) || capabilities["tokens_remaining"] != float64(1000) {
+		t.Fatalf("reset student capabilities status=%d body=%#v", status, capabilities)
+	}
+	status, _, _ = requestJSON(t, teacher, http.MethodPost, "/api/teacher/student/missing/usage/reset", nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("missing student reset status=%d", status)
 	}
 }
 

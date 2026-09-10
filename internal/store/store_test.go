@@ -82,6 +82,38 @@ func TestStoreRunIsolationAndSessionReplacement(t *testing.T) {
 	}
 }
 
+func TestUsageAppearsOnWallAndCanBeReset(t *testing.T) {
+	ctx := context.Background()
+	st, csvPath := testStore(t)
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.AddUsage(ctx, run.ID, "2101", 120, 30, 2, .5); err != nil {
+		t.Fatal(err)
+	}
+	wall, err := st.Wall(ctx, run.ID)
+	if err != nil || len(wall) != 2 || wall[0].TokensIn != 120 || wall[0].TokensOut != 30 {
+		t.Fatalf("wall=%#v err=%v", wall, err)
+	}
+	if err = st.ResetUsage(ctx, run.ID, "2101"); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := st.Usage(ctx, run.ID, "2101")
+	if err != nil || usage != (Usage{}) {
+		t.Fatalf("usage=%#v err=%v", usage, err)
+	}
+	if err = st.ResetUsage(ctx, run.ID, "2101"); err != nil {
+		t.Fatalf("reset with no usage should be idempotent: %v", err)
+	}
+	if err = st.ResetUsage(ctx, run.ID, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing student err=%v", err)
+	}
+}
+
 func TestConversationIsolation(t *testing.T) {
 	ctx := context.Background()
 	st, csvPath := testStore(t)

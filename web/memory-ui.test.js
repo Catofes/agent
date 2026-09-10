@@ -54,10 +54,10 @@ test("Soul, Skill, Memory and Tools share the design area as accessible tabs", (
   assert.match(html, /role=["']tabpanel["']/);
 });
 
-test("agent step control defaults to 30 and allows up to 60", () => {
+test("agent step control defaults to 45 and allows up to 60", () => {
   assert.match(
     html,
-    /id=["']maxTurns["'][^>]*min=["']1["'][^>]*max=["']60["'][^>]*value=["']30["']/,
+    /id=["']maxTurns["'][^>]*min=["']1["'][^>]*max=["']60["'][^>]*value=["']45["']/,
   );
-  assert.match(html, /id=["']turnValue["']>30</);
+  assert.match(html, /id=["']turnValue["']>45</);
 });

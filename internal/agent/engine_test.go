@@ -239,6 +239,35 @@ func TestEngineRoutesLocalSearchFromRequestPolicy(t *testing.T) {
 	}
 }
 
+type failingWebSearch struct{}
+
+func (failingWebSearch) Definition() tools.Definition { return testWebSearch{}.Definition() }
+func (failingWebSearch) Execute(context.Context, json.RawMessage) (tools.Result, error) {
+	return tools.Result{}, errors.New("上游没有结果")
+}
+
+func TestEngineDisablesWebSearchForTurnAfterFailure(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	fake := &fakeClient{answers: []Completion{
+		{ToolCalls: []ToolCall{{ID: "search_1", Type: "function", Function: ToolFunction{Name: "web_search", Arguments: `{"query":"测试"}`}}}},
+		{Content: "联网搜索未成功，暂时无法确认最新消息。"},
+	}}
+	engine := NewEngine(st, fake, tools.NewRegistry(failingWebSearch{}), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 30, 1000
+	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "搜索", SearchProvider: "zhipu", Design: store.Design{Tools: []string{"web_search"}, MaxTurns: 2}}, func(Event) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 2 || len(fake.requests[1].Tools) != 0 {
+		t.Fatalf("requests=%#v", fake.requests)
+	}
+	last := fake.requests[1].Messages[len(fake.requests[1].Messages)-1]
+	if !strings.Contains(last.Content, "本轮不要再次调用 web_search") {
+		t.Fatalf("tool result=%#v", last)
+	}
+}
+
 func TestEngineHostedSearchUsesProviderAndPersistsVisibleTrace(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

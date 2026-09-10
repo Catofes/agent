@@ -43,6 +43,16 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	if policy.SearchProvider == "disabled" {
 		availableTools = withoutString(availableTools, "web_search")
 	}
+	usage, err := s.Store.Usage(r.Context(), p.Session.RunID, p.Session.StudentID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取模型用量失败")
+		return
+	}
+	used := usage.TokensIn + usage.TokensOut
+	remaining := s.Agent.TokenBudget - used
+	if remaining < 0 {
+		remaining = 0
+	}
 	writeJSON(w, 200, map[string]any{
 		"memory_mode":           policy.MemoryMode,
 		"skills_enabled":        policy.SkillsEnabled,
@@ -51,6 +61,9 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		"available_tools":       availableTools,
 		"max_input_chars":       s.Config.MaxInputChars,
 		"max_python_code_chars": s.Config.MaxPythonCodeChars,
+		"token_budget":          s.Agent.TokenBudget,
+		"tokens_used":           used,
+		"tokens_remaining":      remaining,
 		"revision":              policy.Revision,
 	})
 }
@@ -876,7 +889,7 @@ func (s *Server) wallEvents(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return false
 		}
-		sendSSE(w, "wall", map[string]any{"run": current, "policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "available_model_providers": s.Agent.ProviderNames(), "available_search_providers": s.AvailableSearchProviders, "available_deepseek_search_channels": s.AvailableDeepSeekSearchChannels, "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
+		sendSSE(w, "wall", map[string]any{"run": current, "policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "available_model_providers": s.Agent.ProviderNames(), "available_search_providers": s.AvailableSearchProviders, "available_deepseek_search_channels": s.AvailableDeepSeekSearchChannels, "students": items, "student_token_budget": s.Agent.TokenBudget, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
 		flusher.Flush()
 		return true
 	}
@@ -935,7 +948,31 @@ func (s *Server) teacherStudent(w http.ResponseWriter, r *http.Request) {
 	usage, _ := s.Store.Usage(r.Context(), run.ID, id)
 	conversations, _ := s.Store.Conversations(r.Context(), run.ID, id, 100)
 	skills, _ := s.Store.Skills(r.Context(), run.ID, id)
-	writeJSON(w, 200, map[string]any{"student": st, "design": d, "skills": skills, "conversations": conversations, "messages": msgs, "usage": usage})
+	writeJSON(w, 200, map[string]any{"student": st, "design": d, "skills": skills, "conversations": conversations, "messages": msgs, "usage": usage, "student_token_budget": s.Agent.TokenBudget})
+}
+
+func (s *Server) resetStudentUsage(w http.ResponseWriter, r *http.Request) {
+	run, err := s.Store.ActiveRun(r.Context())
+	if err != nil {
+		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" || runeLen(id) > maxStudentIDChars {
+		writeError(w, 404, "STUDENT_NOT_FOUND", "未找到该学生")
+		return
+	}
+	if err = s.Store.ResetUsage(r.Context(), run.ID, id); errors.Is(err, store.ErrNotFound) {
+		writeError(w, 404, "STUDENT_NOT_FOUND", "未找到该学生")
+		return
+	} else if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "重置用量失败")
+		return
+	}
+	s.Logger.Info("student usage reset", "run_id", run.ID, "student_id", id)
+	s.wallHub.Publish(struct{}{})
+	s.studentHub.Publish(classroomEvent{Type: "usage_reset", Target: id})
+	writeJSON(w, 200, map[string]any{"usage": store.Usage{}, "student_token_budget": s.Agent.TokenBudget})
 }
 
 func (s *Server) getTeacherPolicy(w http.ResponseWriter, r *http.Request) {
