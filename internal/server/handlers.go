@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 
 	"classroom-agent/internal/agent"
 	"classroom-agent/internal/store"
@@ -723,6 +724,19 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, Skills: skills, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, ModelProvider: policy.ModelProvider, SearchProvider: policy.SearchProvider, DeepSeekSearchChannel: policy.DeepSeekSearchChannel, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, SkillsAllowedForCall: skillsAllowedForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
 	if err != nil {
 		code, msg := agentError(err)
+		s.Logger.Warn("student chat failed",
+			"request_id", middleware.GetReqID(r.Context()),
+			"run_id", p.Session.RunID,
+			"student_id", p.Session.StudentID,
+			"conversation_id", in.ConversationID,
+			"turn_id", turnID,
+			"model_provider", policy.ModelProvider,
+			"search_provider", policy.SearchProvider,
+			"policy_revision", policy.Revision,
+			"response_started", emitted,
+			"code", code,
+			"error", err,
+		)
 		if !emitted {
 			writeError(w, statusForAgent(err), code, msg)
 		} else {

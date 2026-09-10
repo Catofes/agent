@@ -381,7 +381,11 @@ func responseInput(messages []Message) []any {
 			out = append(out, map[string]any{"type": "function_call_output", "call_id": message.ToolCallID, "output": message.Content})
 		case "assistant":
 			if message.Reasoning != "" {
-				out = append(out, map[string]any{"type": "reasoning", "content": []map[string]string{{"type": "reasoning_text", "text": message.Reasoning}}})
+				out = append(out, map[string]any{
+					"type":    "reasoning",
+					"summary": []any{},
+					"content": []map[string]string{{"type": "reasoning_text", "text": message.Reasoning}},
+				})
 			}
 			if message.Content != "" {
 				out = append(out, map[string]any{"type": "message", "role": "assistant", "content": message.Content})

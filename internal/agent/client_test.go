@@ -338,3 +338,30 @@ func TestResponseInputReplaysRawProviderItemsBeforeToolOutput(t *testing.T) {
 		t.Fatalf("input=%#v", input)
 	}
 }
+
+func TestResponseInputReconstructedReasoningIncludesRequiredSummary(t *testing.T) {
+	input := responseInput([]Message{{
+		Role:      "assistant",
+		Reasoning: "需要读取记忆",
+		ToolCalls: []ToolCall{{ID: "call_memory", Type: "function", Function: ToolFunction{Name: "recall_memory", Arguments: `{"query":"居住城市"}`}}},
+	}})
+	if len(input) != 2 {
+		t.Fatalf("input=%#v", input)
+	}
+	reasoning := input[0].(map[string]any)
+	summary, ok := reasoning["summary"].([]any)
+	if reasoning["type"] != "reasoning" || !ok || len(summary) != 0 {
+		t.Fatalf("reasoning=%#v", reasoning)
+	}
+	encoded, err := json.Marshal(reasoning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"summary":[]`) {
+		t.Fatalf("encoded reasoning=%s", encoded)
+	}
+	call := input[1].(map[string]any)
+	if call["type"] != "function_call" || call["call_id"] != "call_memory" {
+		t.Fatalf("call=%#v", call)
+	}
+}
