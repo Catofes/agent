@@ -222,10 +222,20 @@
           <div class="top">
             <div>
               <h2 id="policyTitle" style="margin-bottom: 4px">课堂能力</h2>
-              <div class="status">统一控制本场课堂的 Skill、Memory 与 Agent 可用工具。</div>
+              <div class="status">统一控制本场课堂的模型、搜索、Skill、Memory 与 Agent 可用工具。</div>
             </div>
           </div>
           <div class="policy-grid">
+            <label class="policy-field">
+              <span>模型服务</span>
+              <select id="policyModelProvider"></select>
+              <small>只显示服务器已配置密钥的服务；切换后新回答立即生效。</small>
+            </label>
+            <label class="policy-field">
+              <span>联网搜索服务</span>
+              <select id="policySearchProvider"></select>
+              <small>DeepSeek 托管搜索只能与 DeepSeek 模型组合；Qwen 可使用智谱搜索或关闭。</small>
+            </label>
             <label class="policy-field">
               <span>Memory 模式</span>
               <select id="policyMemoryMode">
@@ -373,6 +383,8 @@
       }
       function selectedPolicy() {
         return {
+          model_provider: $("policyModelProvider").value,
+          search_provider: $("policySearchProvider").value,
           memory_mode: $("policyMemoryMode").value,
           skills_enabled: $("policySkillsEnabled").checked,
           preset_skills: [...$("policyPresets").querySelectorAll("input:checked")].map(
@@ -385,6 +397,34 @@
       }
       function renderPolicy() {
         if (!wallState?.policy) return;
+        const providerLabel = (name) =>
+          ({ deepseek: "DeepSeek", qwen: "Qwen", zhipu: "智谱搜索", disabled: "关闭搜索" })[name] || name;
+        const modelProviders = wallState.available_model_providers || [];
+        const modelKey = modelProviders.join("\u0000");
+        if ($("policyModelProvider").dataset.key !== modelKey) {
+          $("policyModelProvider").dataset.key = modelKey;
+          $("policyModelProvider").replaceChildren(
+            ...modelProviders.map((name) => {
+              const option = document.createElement("option");
+              option.value = name;
+              option.textContent = providerLabel(name);
+              return option;
+            }),
+          );
+        }
+        const searchProviders = wallState.available_search_providers || [];
+        const searchKey = searchProviders.join("\u0000");
+        if ($("policySearchProvider").dataset.key !== searchKey) {
+          $("policySearchProvider").dataset.key = searchKey;
+          $("policySearchProvider").replaceChildren(
+            ...searchProviders.map((name) => {
+              const option = document.createElement("option");
+              option.value = name;
+              option.textContent = providerLabel(name);
+              return option;
+            }),
+          );
+        }
         const available = wallState.available_tools || [];
         const key = available.join("\u0000");
         if ($("policyTools").dataset.key !== key) {
@@ -429,6 +469,8 @@
           );
         }
         if (!policyDirty) {
+          $("policyModelProvider").value = wallState.policy.model_provider;
+          $("policySearchProvider").value = wallState.policy.search_provider;
           $("policyMemoryMode").value = wallState.policy.memory_mode;
           $("policySkillsEnabled").checked = wallState.policy.skills_enabled !== false;
           const enabled = new Set(wallState.policy.allowed_tools || []);
@@ -440,6 +482,13 @@
             .querySelectorAll("input")
             .forEach((input) => (input.checked = enabledPresets.has(input.value)));
         }
+        $("policySearchProvider")
+          .querySelectorAll("option")
+          .forEach((option) =>
+            (option.disabled = option.value === "deepseek" && $("policyModelProvider").value !== "deepseek"),
+          );
+        $("policyModelProvider").disabled = policyBusy;
+        $("policySearchProvider").disabled = policyBusy;
         $("policyMemoryMode").disabled = policyBusy;
         $("policySkillsEnabled").disabled = policyBusy;
         $("policyTools")
@@ -458,6 +507,15 @@
       }
       $("policyMemoryMode").onchange = markPolicyDirty;
       $("policySkillsEnabled").onchange = markPolicyDirty;
+      $("policyModelProvider").onchange = () => {
+        if ($("policyModelProvider").value !== "deepseek" && $("policySearchProvider").value === "deepseek") {
+          $("policySearchProvider").value = (wallState.available_search_providers || []).includes("zhipu")
+            ? "zhipu"
+            : "disabled";
+        }
+        markPolicyDirty();
+      };
+      $("policySearchProvider").onchange = markPolicyDirty;
       $("savePolicy").onclick = async () => {
         if (!wallState || policyBusy || !policyDirty) return;
         policyBusy = true;

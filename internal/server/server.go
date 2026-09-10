@@ -106,31 +106,32 @@ type studentMessage struct {
 }
 
 type Server struct {
-	Config              config.Config
-	Store               *store.Store
-	Agent               *agent.Engine
-	Runner              *runnerapi.Client
-	WebFS               fs.FS
-	Templates           fs.FS
-	Logger              *slog.Logger
-	studentHub          *Hub[classroomEvent]
-	studentMemoryHub    *TargetHub[classroomEvent]
-	wallHub             *Hub[struct{}]
-	screenHub           *Hub[screenState]
-	screenMu            sync.RWMutex
-	controlMu           sync.RWMutex
-	screen              screenState
-	screenAck           chan struct{}
-	screenRevision      uint64
-	spotlightAckTimeout time.Duration
-	shutdown            context.Context
-	cancel              context.CancelFunc
-	stopOnce            sync.Once
+	Config                   config.Config
+	Store                    *store.Store
+	Agent                    *agent.Engine
+	Runner                   *runnerapi.Client
+	AvailableSearchProviders []string
+	WebFS                    fs.FS
+	Templates                fs.FS
+	Logger                   *slog.Logger
+	studentHub               *Hub[classroomEvent]
+	studentMemoryHub         *TargetHub[classroomEvent]
+	wallHub                  *Hub[struct{}]
+	screenHub                *Hub[screenState]
+	screenMu                 sync.RWMutex
+	controlMu                sync.RWMutex
+	screen                   screenState
+	screenAck                chan struct{}
+	screenRevision           uint64
+	spotlightAckTimeout      time.Duration
+	shutdown                 context.Context
+	cancel                   context.CancelFunc
+	stopOnce                 sync.Once
 }
 
 func New(cfg config.Config, st *store.Store, engine *agent.Engine, webFS, templates fs.FS, logger *slog.Logger) *Server {
 	shutdown, cancel := context.WithCancel(context.Background())
-	return &Server{Config: cfg, Store: st, Agent: engine, WebFS: webFS, Templates: templates, Logger: logger, studentHub: NewHub[classroomEvent](), studentMemoryHub: NewTargetHub[classroomEvent](), wallHub: NewHub[struct{}](), screenHub: NewHub[screenState](), screen: screenState{Empty: true}, spotlightAckTimeout: time.Second, shutdown: shutdown, cancel: cancel}
+	return &Server{Config: cfg, Store: st, Agent: engine, AvailableSearchProviders: []string{"disabled"}, WebFS: webFS, Templates: templates, Logger: logger, studentHub: NewHub[classroomEvent](), studentMemoryHub: NewTargetHub[classroomEvent](), wallHub: NewHub[struct{}](), screenHub: NewHub[screenState](), screen: screenState{Empty: true}, spotlightAckTimeout: time.Second, shutdown: shutdown, cancel: cancel}
 }
 
 // Shutdown cancels server-owned long-running work before http.Server.Shutdown

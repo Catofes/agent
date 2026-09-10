@@ -169,6 +169,33 @@ func TestEngineToolLoop(t *testing.T) {
 	}
 }
 
+func TestEngineUsesSelectedModelProvider(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	run, _ := st.EnsureActiveRun(ctx, "run", "课堂")
+	csvPath := filepath.Join(dir, "students.csv")
+	_ = os.WriteFile(csvPath, []byte("id,name\n2101,张三\n"), 0o600)
+	_, _ = st.ImportStudentsCSV(ctx, run.ID, csvPath)
+	_, _ = st.CreateConversation(ctx, store.Conversation{ID: "conv", RunID: run.ID, StudentID: "2101"})
+	primary := &fakeClient{answers: []Completion{{Content: "DeepSeek"}}}
+	backup := &fakeClient{answers: []Completion{{Content: "Qwen"}}}
+	engine := NewEngine(st, primary, tools.NewRegistry(tools.HostedWebSearch{}), "deepseek-model", "secret", time.Second, 2)
+	engine.RegisterProvider("qwen", ModelProvider{Client: backup, Model: "qwen3.8-flash"})
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	err = engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "问题", ModelProvider: "qwen", SearchProvider: "disabled", Design: store.Design{Tools: []string{"web_search"}, MaxTurns: 1}}, func(Event) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(primary.requests) != 0 || len(backup.requests) != 1 || backup.requests[0].Model != "qwen3.8-flash" || len(backup.requests[0].Tools) != 0 {
+		t.Fatalf("primary=%d backup=%#v", len(primary.requests), backup.requests)
+	}
+}
+
 func TestEngineHostedSearchUsesProviderAndPersistsVisibleTrace(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

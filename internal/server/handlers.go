@@ -39,12 +39,16 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
 		return
 	}
+	availableTools := s.Agent.Tools.Names()
+	if policy.SearchProvider == "disabled" {
+		availableTools = withoutString(availableTools, "web_search")
+	}
 	writeJSON(w, 200, map[string]any{
 		"memory_mode":           policy.MemoryMode,
 		"skills_enabled":        policy.SkillsEnabled,
 		"preset_skills":         policy.PresetSkills,
 		"allowed_tools":         policy.AllowedTools,
-		"available_tools":       s.Agent.Tools.Names(),
+		"available_tools":       availableTools,
 		"max_input_chars":       s.Config.MaxInputChars,
 		"max_python_code_chars": s.Config.MaxPythonCodeChars,
 		"revision":              policy.Revision,
@@ -703,7 +707,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		target := p.Session.RunID + "\x00" + p.Session.StudentID
 		s.studentMemoryHub.Publish(target, classroomEvent{Type: "memory_status", RunID: p.Session.RunID, MemoryStatus: update.Status, MemoryItems: items})
 	}
-	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, Skills: skills, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, SkillsAllowedForCall: skillsAllowedForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
+	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, Skills: skills, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, ModelProvider: policy.ModelProvider, SearchProvider: policy.SearchProvider, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, SkillsAllowedForCall: skillsAllowedForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
 	if err != nil {
 		code, msg := agentError(err)
 		if !emitted {
@@ -872,7 +876,7 @@ func (s *Server) wallEvents(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return false
 		}
-		sendSSE(w, "wall", map[string]any{"run": current, "policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
+		sendSSE(w, "wall", map[string]any{"run": current, "policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "available_model_providers": s.Agent.ProviderNames(), "available_search_providers": s.AvailableSearchProviders, "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
 		flusher.Flush()
 		return true
 	}
@@ -945,15 +949,17 @@ func (s *Server) getTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions()})
+	writeJSON(w, 200, map[string]any{"policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "available_model_providers": s.Agent.ProviderNames(), "available_search_providers": s.AvailableSearchProviders})
 }
 
 func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		MemoryMode    string    `json:"memory_mode"`
-		SkillsEnabled *bool     `json:"skills_enabled"`
-		PresetSkills  *[]string `json:"preset_skills"`
-		AllowedTools  []string  `json:"allowed_tools"`
+		MemoryMode     string    `json:"memory_mode"`
+		SkillsEnabled  *bool     `json:"skills_enabled"`
+		PresetSkills   *[]string `json:"preset_skills"`
+		AllowedTools   []string  `json:"allowed_tools"`
+		ModelProvider  string    `json:"model_provider"`
+		SearchProvider string    `json:"search_provider"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -978,11 +984,26 @@ func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 	if in.PresetSkills != nil {
 		presetSkills = *in.PresetSkills
 	}
+	if strings.TrimSpace(in.ModelProvider) == "" {
+		in.ModelProvider = currentPolicy.ModelProvider
+		if in.ModelProvider == "" {
+			in.ModelProvider = s.Agent.ProviderNames()[0]
+		}
+	}
+	if strings.TrimSpace(in.SearchProvider) == "" {
+		in.SearchProvider = currentPolicy.SearchProvider
+		if in.SearchProvider == "" {
+			in.SearchProvider = "disabled"
+		}
+	}
 	cleanTools, cleanPresets, ok := s.validatePolicyInput(w, in.MemoryMode, in.AllowedTools, presetSkills)
 	if !ok {
 		return
 	}
-	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: skillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools})
+	if !s.validateProviderSelection(w, in.ModelProvider, in.SearchProvider) {
+		return
+	}
+	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: skillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "更新课堂能力失败")
 		return
@@ -1025,6 +1046,43 @@ func (s *Server) validatePolicyInput(w http.ResponseWriter, memoryMode string, a
 	return clean, presets, true
 }
 
+func (s *Server) validateProviderSelection(w http.ResponseWriter, modelProvider, searchProvider string) bool {
+	modelProvider = strings.ToLower(strings.TrimSpace(modelProvider))
+	searchProvider = strings.ToLower(strings.TrimSpace(searchProvider))
+	if !s.Agent.HasProvider(modelProvider) {
+		writeError(w, 400, "MODEL_PROVIDER_UNAVAILABLE", "所选模型服务尚未在服务器配置")
+		return false
+	}
+	if !containsString(s.AvailableSearchProviders, searchProvider) {
+		writeError(w, 400, "SEARCH_PROVIDER_UNAVAILABLE", "所选搜索服务尚未在服务器配置")
+		return false
+	}
+	if searchProvider == "deepseek" && modelProvider != "deepseek" {
+		writeError(w, 400, "INCOMPATIBLE_PROVIDERS", "DeepSeek 托管搜索只能与 DeepSeek 模型一起使用")
+		return false
+	}
+	return true
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutString(items []string, target string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if item != target {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Locked bool `json:"locked"`
@@ -1052,11 +1110,13 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name          string    `json:"name"`
-		MemoryMode    string    `json:"memory_mode"`
-		SkillsEnabled *bool     `json:"skills_enabled"`
-		PresetSkills  *[]string `json:"preset_skills"`
-		AllowedTools  []string  `json:"allowed_tools"`
+		Name           string    `json:"name"`
+		MemoryMode     string    `json:"memory_mode"`
+		SkillsEnabled  *bool     `json:"skills_enabled"`
+		PresetSkills   *[]string `json:"preset_skills"`
+		AllowedTools   []string  `json:"allowed_tools"`
+		ModelProvider  string    `json:"model_provider"`
+		SearchProvider string    `json:"search_provider"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -1069,8 +1129,8 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	s.controlMu.Lock()
 	defer s.controlMu.Unlock()
 	old, _ := s.Store.ActiveRun(r.Context())
+	oldPolicy, _ := s.Store.RunPolicy(r.Context(), old.ID)
 	if in.MemoryMode == "" {
-		oldPolicy, _ := s.Store.RunPolicy(r.Context(), old.ID)
 		in.MemoryMode = oldPolicy.MemoryMode
 		if in.SkillsEnabled == nil {
 			in.SkillsEnabled = new(bool)
@@ -1081,6 +1141,18 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.PresetSkills == nil {
 			in.PresetSkills = &oldPolicy.PresetSkills
+		}
+	}
+	if strings.TrimSpace(in.ModelProvider) == "" {
+		in.ModelProvider = oldPolicy.ModelProvider
+		if in.ModelProvider == "" {
+			in.ModelProvider = s.Agent.ProviderNames()[0]
+		}
+	}
+	if strings.TrimSpace(in.SearchProvider) == "" {
+		in.SearchProvider = oldPolicy.SearchProvider
+		if in.SearchProvider == "" {
+			in.SearchProvider = "disabled"
 		}
 	}
 	if in.SkillsEnabled == nil {
@@ -1095,7 +1167,10 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: *in.SkillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools})
+	if !s.validateProviderSelection(w, in.ModelProvider, in.SearchProvider) {
+		return
+	}
+	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: *in.SkillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "新建场次失败")
 		return

@@ -86,6 +86,38 @@ func TestDeepSeekClientEnablesThinkingAndStreamsSeparateDeltas(t *testing.T) {
 	}
 }
 
+func TestQwenClientUsesCompatibleStreamingReasoningAndTools(t *testing.T) {
+	var requestBody map[string]any
+	client := &QwenClient{BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", APIKey: "qwen-secret", ReasoningEffort: "low", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/compatible-mode/v1/chat/completions" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &requestBody); err != nil {
+			t.Fatal(err)
+		}
+		stream := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先判断\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"答案\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil
+	})}}
+	definition := tools.Definition{Type: "function", Function: tools.FunctionSpec{Name: "calculator", Description: "test tool", Parameters: map[string]any{"type": "object"}}}
+	got, err := client.Complete(context.Background(), CompletionRequest{Model: "qwen3.8-flash", UserID: "anonymous", Messages: []Message{{Role: "user", Content: "问题"}}, Tools: []tools.Definition{definition}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestBody["enable_thinking"] != true || requestBody["reasoning_effort"] != "low" || requestBody["user"] != "anonymous" {
+		t.Fatalf("Qwen controls missing: %#v", requestBody)
+	}
+	if requestBody["thinking"] != nil || requestBody["user_id"] != nil {
+		t.Fatalf("DeepSeek-only controls leaked: %#v", requestBody)
+	}
+	if toolsList, ok := requestBody["tools"].([]any); !ok || len(toolsList) != 1 {
+		t.Fatalf("tools=%#v", requestBody["tools"])
+	}
+	if got.Reasoning != "先判断" || got.Content != "答案" || got.TokensIn != 7 || got.TokensOut != 3 {
+		t.Fatalf("completion=%#v", got)
+	}
+}
+
 func TestDecodeStreamAcrossJSONAndUTF8ChunkBoundaries(t *testing.T) {
 	stream := strings.Join([]string{
 		`data: {"choices":[{"delta":{"reasoning_content":"先想"}}]}`,

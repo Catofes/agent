@@ -16,6 +16,11 @@ id,name
 
 ```dotenv
 DEEPSEEK_API_KEY='替换为真实 Key'
+# 可选：配置后教师可以在课堂中切换到 Qwen，无需重启服务
+QWEN_API_KEY='替换为百炼 Key'
+QWEN_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
+QWEN_MODEL='qwen3.8-flash'
+QWEN_REASONING_EFFORT='low'
 ADMIN_PASSWORD='替换为教师口令'
 ANONYMOUS_HMAC_KEY='替换为独立的长随机字符串'
 WEB_SEARCH_PROVIDER='disabled' # disabled、zhipu 或 deepseek
@@ -79,13 +84,15 @@ DEEPSEEK_API_KEY='...' make smoke-real
 ./build/classroom-agent -h
 ```
 
-联网搜索提供商在启动时通过 `WEB_SEARCH_PROVIDER` 互斥选择，修改 `.env` 后需重启：
+`WEB_SEARCH_PROVIDER` 决定首次启动或旧数据库升级后的联网搜索初始值：
 
-- `disabled`：不注册 `web_search`。
+- `disabled`：学生 Agent 不获得 `web_search`。
 - `zhipu`：使用智谱 Web Search API，本地执行并保留搜索参数、结果、缓存和每轮最多 2 次的限制；需要 `ZHIPU_SEARCH_API_KEY`，可通过 `ZHIPU_SEARCH_ENGINE` 选择搜索档位。
 - `deepseek`：使用现有 `DEEPSEEK_API_KEY` 和 Responses API 的服务端 `web_search`；搜索开始/完成仍显示为课堂行动，但查询改写、网页读取和服务端自动续跑由 DeepSeek 托管，本地无法逐次限制。
 
 两种模式都沿用教师的课堂 Tool 开关和学生装备状态。`web_fetch` 仍是独立的本地网页读取工具；若不希望课堂服务器直接访问搜索结果网址，应由教师关闭它。
+
+教师端“课堂能力”可以在服务启动后切换主模型和搜索服务，选择会随课堂场次保存在 SQLite 中，新回合立即生效，不需要重启。页面只显示服务器已通过环境变量配置好的服务，不会显示 API Key、Base URL 等秘密。DeepSeek 托管搜索只能与 DeepSeek 模型组合；切换到 Qwen 时应同时选择智谱搜索或关闭搜索。已有场次会保留上次保存的选择，`WEB_SEARCH_PROVIDER` 不会在普通重启时覆盖它。
 
 ## Python Runner（可选）
 

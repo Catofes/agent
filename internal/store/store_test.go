@@ -143,8 +143,11 @@ func TestRunPolicyDefaultsAndRevision(t *testing.T) {
 	if err != nil || policy.MemoryMode != MemoryModeReviewRequired || !policy.SkillsEnabled || len(policy.PresetSkills) != 0 || len(policy.AllowedTools) != 0 || policy.Revision != 1 {
 		t.Fatalf("default policy=%#v err=%v", policy, err)
 	}
-	policy, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeAdaptive, SkillsEnabled: false, PresetSkills: []string{"python-beginner", "python-beginner"}, AllowedTools: []string{"web_fetch", "web_fetch"}})
-	if err != nil || policy.MemoryMode != MemoryModeAdaptive || policy.SkillsEnabled || len(policy.PresetSkills) != 1 || policy.PresetSkills[0] != "python-beginner" || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "web_fetch" || policy.Revision != 2 {
+	if err = st.InitializeRunProviders(ctx, run.ID, "deepseek", "zhipu"); err != nil {
+		t.Fatal(err)
+	}
+	policy, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeAdaptive, SkillsEnabled: false, PresetSkills: []string{"python-beginner", "python-beginner"}, AllowedTools: []string{"web_fetch", "web_fetch"}, ModelProvider: "qwen", SearchProvider: "disabled"})
+	if err != nil || policy.MemoryMode != MemoryModeAdaptive || policy.SkillsEnabled || len(policy.PresetSkills) != 1 || policy.PresetSkills[0] != "python-beginner" || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "web_fetch" || policy.ModelProvider != "qwen" || policy.SearchProvider != "disabled" || policy.Revision != 2 {
 		t.Fatalf("updated policy=%#v err=%v", policy, err)
 	}
 }
@@ -414,7 +417,7 @@ func TestVersionTwelveAddsPresetPolicyAndRemovesCalculator(t *testing.T) {
 		t.Fatalf("design=%#v err=%v", design, err)
 	}
 	var version int
-	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
+	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 14 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 }

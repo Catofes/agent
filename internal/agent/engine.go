@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,12 +19,22 @@ import (
 )
 
 var (
-	ErrBusy        = errors.New("chat already in progress")
-	ErrBudget      = errors.New("student token budget exceeded")
-	ErrTurnLimit   = errors.New("agent turn limit reached")
-	ErrToolLimit   = errors.New("agent tool call limit reached")
-	ErrClassLocked = errors.New("classroom is locked")
+	ErrBusy                = errors.New("chat already in progress")
+	ErrBudget              = errors.New("student token budget exceeded")
+	ErrTurnLimit           = errors.New("agent turn limit reached")
+	ErrToolLimit           = errors.New("agent tool call limit reached")
+	ErrClassLocked         = errors.New("classroom is locked")
+	ErrProviderUnavailable = errors.New("model provider is unavailable")
 )
+
+type ModelProvider struct {
+	Client          Client
+	Model           string
+	MemoryExtractor MemoryExtractor
+	HostedWebSearch bool
+	InputPricePerM  float64
+	OutputPricePerM float64
+}
 
 type Event struct {
 	Type      string           `json:"type"`
@@ -64,6 +75,8 @@ type Request struct {
 	Skills                                          []store.Skill
 	MemoryMode                                      string
 	PolicyRevision                                  int64
+	ModelProvider                                   string
+	SearchProvider                                  string
 	BeforeModelCall                                 func(context.Context) error
 	ToolsForCall                                    func(context.Context) ([]string, error)
 	SkillsAllowedForCall                            func(context.Context) (bool, error)
@@ -90,16 +103,63 @@ type Engine struct {
 	MaxMemoryTokens                 int
 	HostedWebSearch                 bool
 	InputPricePerM, OutputPricePerM float64
+	Providers                       map[string]ModelProvider
 	mu                              sync.Mutex
 	active                          map[string]bool
 	memoryActive                    map[string]bool
 }
 
 func NewEngine(st *store.Store, client Client, registry *tools.Registry, model, hmacKey string, timeout time.Duration, concurrency int) *Engine {
-	return &Engine{Store: st, Client: client, Tools: registry, Model: model, HMACKey: []byte(hmacKey), Timeout: timeout, Semaphore: make(chan struct{}, concurrency), MaxReasoningChars: 12000, MemoryExtractTimeout: 20 * time.Second, MaxMemoryItems: 30, MaxMemoryChars: 400, MaxMemoryTokens: 1200, active: map[string]bool{}, memoryActive: map[string]bool{}}
+	providers := map[string]ModelProvider{"deepseek": {Client: client, Model: model}}
+	return &Engine{Store: st, Client: client, Tools: registry, Model: model, HMACKey: []byte(hmacKey), Timeout: timeout, Semaphore: make(chan struct{}, concurrency), MaxReasoningChars: 12000, MemoryExtractTimeout: 20 * time.Second, MaxMemoryItems: 30, MaxMemoryChars: 400, MaxMemoryTokens: 1200, Providers: providers, active: map[string]bool{}, memoryActive: map[string]bool{}}
+}
+
+func (e *Engine) RegisterProvider(name string, provider ModelProvider) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || provider.Client == nil || strings.TrimSpace(provider.Model) == "" {
+		return
+	}
+	if e.Providers == nil {
+		e.Providers = map[string]ModelProvider{}
+	}
+	e.Providers[name] = provider
+}
+
+func (e *Engine) ProviderNames() []string {
+	names := make([]string, 0, len(e.Providers))
+	for name := range e.Providers {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func (e *Engine) HasProvider(name string) bool {
+	_, ok := e.Providers[strings.ToLower(strings.TrimSpace(name))]
+	return ok
+}
+
+func (e *Engine) provider(name string) (ModelProvider, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name != "" {
+		provider, ok := e.Providers[name]
+		if !ok {
+			return ModelProvider{}, fmt.Errorf("%w: %s", ErrProviderUnavailable, name)
+		}
+		return provider, nil
+	}
+	return ModelProvider{Client: e.Client, Model: e.Model, MemoryExtractor: e.MemoryExtractor, HostedWebSearch: e.HostedWebSearch, InputPricePerM: e.InputPricePerM, OutputPricePerM: e.OutputPricePerM}, nil
 }
 
 func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) error {
+	provider, err := e.provider(req.ModelProvider)
+	if err != nil {
+		return err
+	}
+	hostedWebSearch := req.SearchProvider == "deepseek" && provider.HostedWebSearch
+	if req.SearchProvider == "" {
+		hostedWebSearch = provider.HostedWebSearch
+	}
 	key := req.RunID + "\x00" + req.StudentID
 	e.mu.Lock()
 	if e.active[key] {
@@ -158,7 +218,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 	reasoningChars := 0
 	defer func() {
 		if totalIn+totalOut > 0 || unknownUsage > 0 {
-			cost := float64(totalIn)/1e6*e.InputPricePerM + float64(totalOut)/1e6*e.OutputPricePerM
+			cost := float64(totalIn)/1e6*provider.InputPricePerM + float64(totalOut)/1e6*provider.OutputPricePerM
 			_ = e.Store.AddUsage(context.Background(), req.RunID, req.StudentID, totalIn, totalOut, unknownUsage, cost)
 		}
 	}()
@@ -177,8 +237,11 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 				return err
 			}
 		}
+		if req.SearchProvider == "disabled" {
+			effectiveTools = without(effectiveTools, "web_search")
+		}
 		defs := e.Tools.Definitions(effectiveTools)
-		if e.HostedWebSearch {
+		if hostedWebSearch {
 			filtered := defs[:0]
 			for _, definition := range defs {
 				if definition.Function.Name != "web_search" {
@@ -196,7 +259,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 		streamedText := false
 		streamedChars := 0
 		var displayedReasoning strings.Builder
-		completion, callErr := e.callWithRetry(ctx, CompletionRequest{Model: e.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, EnableWebSearch: e.HostedWebSearch && contains(effectiveTools, "web_search"), BeforeCall: req.BeforeModelCall, OnHostedTool: func(event HostedToolEvent) error {
+		completion, callErr := e.callWithRetry(ctx, provider.Client, CompletionRequest{Model: provider.Model, UserID: e.anonymousID(req.RunID, req.StudentID), Messages: messages, Tools: defs, EnableWebSearch: hostedWebSearch && contains(effectiveTools, "web_search"), BeforeCall: req.BeforeModelCall, OnHostedTool: func(event HostedToolEvent) error {
 			id := strings.TrimSpace(event.ID)
 			if id == "" {
 				id = fmt.Sprintf("hosted_search_%d", toolCount+1)
@@ -302,7 +365,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			if err := emit(Event{Type: "turn_end", TurnID: req.TurnID, Reason: "completed", TokensIn: totalIn, TokensOut: totalOut}); err != nil {
 				return err
 			}
-			e.scheduleMemoryExtraction(req, final)
+			e.scheduleMemoryExtraction(req, final, provider.MemoryExtractor)
 			return nil
 		}
 		if budgetExceeded {
@@ -417,7 +480,7 @@ func (e *Engine) saveTermination(ctx context.Context, req Request, reason, messa
 	return err
 }
 
-func (e *Engine) callWithRetry(ctx context.Context, req CompletionRequest) (Completion, error) {
+func (e *Engine) callWithRetry(ctx context.Context, client Client, req CompletionRequest) (Completion, error) {
 	var last error
 	originalDelta := req.OnDelta
 	originalReasoningDelta := req.OnReasoningDelta
@@ -447,7 +510,7 @@ func (e *Engine) callWithRetry(ctx context.Context, req CompletionRequest) (Comp
 				return Completion{}, err
 			}
 		}
-		out, err := e.Client.Complete(callCtx, req)
+		out, err := client.Complete(callCtx, req)
 		<-e.Semaphore
 		cancel()
 		if err == nil {
@@ -684,6 +747,16 @@ func contains(v []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func without(values []string, excluded string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != excluded {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 func summarizeArguments(v string) string {
 	if utf8.RuneCountInString(v) > 160 {

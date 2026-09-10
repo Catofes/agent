@@ -1687,6 +1687,17 @@
             };
             if (memoryState) memoryState.mode = d.memory_mode;
           }
+          if (d.type === "classroom_policy") {
+            const fresh = await api("/api/capabilities").catch(() => null);
+            if (fresh) {
+              capabilities = {
+                ...fresh,
+                available_tools: arrayOrEmpty(fresh.available_tools),
+                allowed_tools: arrayOrEmpty(fresh.allowed_tools),
+                preset_skills: arrayOrEmpty(fresh.preset_skills),
+              };
+            }
+          }
           if (d.skills_enabled && !skillItems.length) {
             const skills = await api("/api/skills").catch(() => null);
             if (skills) {

@@ -5,8 +5,10 @@ const path = require("node:path");
 
 const html = fs.readFileSync(path.join(__dirname, "teacher.html"), "utf8");
 
-test("teacher can control classroom Memory mode and available tools", () => {
+test("teacher can control classroom providers, Memory mode, and available tools", () => {
   for (const id of [
+    "policyModelProvider",
+    "policySearchProvider",
     "policyMemoryMode",
     "policySkillsEnabled",
     "policyPresets",
@@ -24,6 +26,11 @@ test("teacher can control classroom Memory mode and available tools", () => {
   assert.match(html, /skills_enabled/);
   assert.match(html, /preset_skills/);
   assert.match(html, /available_preset_skills/);
+  assert.match(html, /available_model_providers/);
+  assert.match(html, /available_search_providers/);
+  assert.match(html, /model_provider/);
+  assert.match(html, /search_provider/);
+  assert.match(html, /option\.value === "deepseek"/);
   assert.match(html, /basic: "基础"/);
   assert.match(html, /physics: "物理"/);
   assert.match(html, /math: "数学"/);

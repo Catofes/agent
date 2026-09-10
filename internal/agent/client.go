@@ -76,6 +76,62 @@ type DeepSeekClient struct {
 	HTTP         *http.Client
 }
 
+// QwenClient speaks Alibaba Cloud Model Studio's OpenAI-compatible Chat
+// Completions protocol. Its request parameters intentionally stay separate
+// from DeepSeekClient: the two providers expose similar streams but use
+// different controls for reasoning.
+type QwenClient struct {
+	BaseURL         string
+	APIKey          string
+	ReasoningEffort string
+	HTTP            *http.Client
+}
+
+func (c *QwenClient) Complete(ctx context.Context, in CompletionRequest) (Completion, error) {
+	effort := strings.ToLower(strings.TrimSpace(c.ReasoningEffort))
+	if effort == "" {
+		effort = "low"
+	}
+	body := map[string]any{
+		"model":          in.Model,
+		"messages":       in.Messages,
+		"stream":         true,
+		"stream_options": map[string]any{"include_usage": true},
+		"user":           in.UserID,
+	}
+	if effort == "none" {
+		body["enable_thinking"] = false
+	} else {
+		body["enable_thinking"] = true
+		body["reasoning_effort"] = effort
+	}
+	if len(in.Tools) > 0 {
+		body["tools"] = in.Tools
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return Completion{}, err
+	}
+	endpoint := strings.TrimRight(c.BaseURL, "/") + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return Completion{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return Completion{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return Completion{}, fmt.Errorf("provider status %d: %s", resp.StatusCode, sanitizeProviderError(limited))
+	}
+	return decodeStreamWithDelta(resp.Body, in.OnDelta, in.OnReasoningDelta)
+}
+
 func (c *DeepSeekClient) Complete(ctx context.Context, in CompletionRequest) (Completion, error) {
 	if c.UseResponses && in.EnableWebSearch {
 		return c.completeResponses(ctx, in)

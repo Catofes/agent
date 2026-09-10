@@ -108,8 +108,11 @@ func selectRelevantMemories(items []store.Memory, input string, limit, tokenLimi
 	return selected
 }
 
-func (e *Engine) scheduleMemoryExtraction(req Request, answer string) {
-	if e.MemoryExtractor == nil || strings.TrimSpace(req.Input) == "" || req.MemoryMode == store.MemoryModeDisabled {
+func (e *Engine) scheduleMemoryExtraction(req Request, answer string, extractor MemoryExtractor) {
+	if extractor == nil {
+		extractor = e.MemoryExtractor
+	}
+	if extractor == nil || strings.TrimSpace(req.Input) == "" || req.MemoryMode == store.MemoryModeDisabled {
 		return
 	}
 	key := req.RunID + "\x00" + req.StudentID
@@ -143,7 +146,7 @@ func (e *Engine) scheduleMemoryExtraction(req Request, answer string) {
 			notifyMemoryUpdate(req, MemoryUpdate{Status: "failed", Err: ctx.Err()})
 			return
 		}
-		candidates, err := e.MemoryExtractor.Extract(ctx, req.Input, answer)
+		candidates, err := extractor.Extract(ctx, req.Input, answer)
 		<-e.Semaphore
 		if err != nil {
 			notifyMemoryUpdate(req, MemoryUpdate{Status: "failed", Err: err})

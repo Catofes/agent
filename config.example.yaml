@@ -5,7 +5,13 @@ students_csv: "data/students.csv"
 deepseek_base_url: "https://api.deepseek.com"
 deepseek_model: "deepseek-v4-flash"
 deepseek_api_key: "${DEEPSEEK_API_KEY}"
-web_search_provider: "disabled" # disabled、zhipu 或 deepseek；修改后重启
+qwen_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+qwen_model: "qwen3.8-flash"
+qwen_api_key: "${QWEN_API_KEY}" # 可选；配置后教师可在课堂中切换
+qwen_reasoning_effort: "low"
+qwen_input_price_per_million: 0 # 按实际购买地域和模型填写
+qwen_output_price_per_million: 0
+web_search_provider: "disabled" # 首次启动初始值；运行中可由教师页选择 disabled、zhipu 或 deepseek
 zhipu_search_api_key: "${ZHIPU_SEARCH_API_KEY}" # provider=zhipu 时必填
 zhipu_search_engine: "search_std" # search_std、search_pro、search_pro_sogou 或 search_pro_quark
 runner_url: "" # 例如 http://10.16.100.20:8090；留空时不开放 Python

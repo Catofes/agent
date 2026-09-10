@@ -81,6 +81,18 @@ func TestValidateWebSearchProvider(t *testing.T) {
 	})
 }
 
+func TestValidateQwenReasoningEffort(t *testing.T) {
+	cfg := validConfig()
+	cfg.QwenReasoningEffort = "fastest"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "QWEN_REASONING_EFFORT") {
+		t.Fatalf("got %v", err)
+	}
+	cfg.QwenReasoningEffort = "low"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateRunnerConfiguration(t *testing.T) {
 	cfg := validConfig()
 	cfg.RunnerURL = "http://10.16.100.20:8090"
