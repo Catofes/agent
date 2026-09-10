@@ -19,8 +19,12 @@ function screenRuntime({ animationFrames = true } = {}) {
     textContent: '',
     className: '',
     children: [],
+    attributes: new Map(),
     classList: {
       toggle() {},
+    },
+    setAttribute(name, value) {
+      this.attributes.set(name, value);
     },
     append(...children) {
       this.children.push(...children);
@@ -98,7 +102,7 @@ test('screen SSE event renders DOM and acknowledges the rendered spotlight', asy
   assert.equal(runtime.elements.get('messages').children[2].children[0].textContent, 'Agent');
   assert.equal(runtime.elements.get('messages').children[2].children[1].textContent, '391');
   assert.match(runtime.elements.get('messages').children[2].className, /current/);
-  assert.equal(runtime.elements.get('conversationCard').scrollTop, 0);
+  assert.equal(runtime.elements.get('messages').scrollTop, 0);
   assert.equal(runtime.requests.length, 1);
   assert.equal(runtime.requests[0].url, '/api/screen/ack');
   assert.deepEqual(JSON.parse(runtime.requests[0].options.body), { spotlight_id: 'screen_test' });
@@ -106,6 +110,20 @@ test('screen SSE event renders DOM and acknowledges the rendered spotlight', asy
   runtime.source.listeners.get('screen')({ data: JSON.stringify({ ...state, spotlight_id: 'screen_old', revision: 1, name: '旧画面' }) });
   assert.equal(runtime.elements.get('name').textContent, '张三 的 Agent');
   assert.equal(runtime.requests.length, 1);
+});
+
+test('screen tabs give configuration and conversation separate bounded panels', () => {
+  const runtime = screenRuntime();
+  const config = runtime.elements.get('configPanel');
+  const conversation = runtime.elements.get('conversationPanel');
+
+  assert.equal(config.hidden, false);
+  assert.equal(conversation.hidden, true);
+  assert.equal(runtime.elements.get('configTab').attributes.get('aria-selected'), 'true');
+  runtime.elements.get('conversationTab').onclick();
+  assert.equal(config.hidden, true);
+  assert.equal(conversation.hidden, false);
+  assert.equal(runtime.elements.get('conversationTab').attributes.get('aria-selected'), 'true');
 });
 
 test('screen acknowledgement does not depend on animation frames', async () => {
@@ -121,6 +139,30 @@ test('screen acknowledgement does not depend on animation frames', async () => {
 
   assert.equal(runtime.requests.length, 1);
   assert.equal(runtime.requests[0].url, '/api/screen/ack');
+});
+
+test('screen collapses intermediate tool activity by default', async () => {
+  const runtime = screenRuntime();
+  runtime.source.listeners.get('screen')({ data: JSON.stringify({
+    spotlight_id: 'screen_process',
+    revision: 4,
+    name: '张三',
+    messages: [
+      { role: 'user', content: '帮我计算', conversation: '数学讨论' },
+      { role: 'assistant', content: '调用工具：calculator', conversation: '数学讨论', process: true },
+      { role: 'tool', content: '结果为 42', conversation: '数学讨论', process: true },
+      { role: 'assistant', content: '答案是 42', conversation: '数学讨论' },
+    ],
+    empty: false,
+  }) });
+  await Promise.resolve();
+
+  const children = runtime.elements.get('messages').children;
+  assert.equal(children.length, 4);
+  assert.equal(children[2].className, 'screen-process');
+  assert.match(children[2].children[0].textContent, /2 条/);
+  assert.equal(children[2].children[1].children.length, 2);
+  assert.equal(children[2].open, undefined);
 });
 
 test('screen render errors are visible and are not acknowledged', () => {

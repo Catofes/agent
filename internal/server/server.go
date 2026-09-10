@@ -90,6 +90,7 @@ type screenMessage struct {
 	Content      string `json:"content"`
 	Conversation string `json:"conversation,omitempty"`
 	Current      bool   `json:"current,omitempty"`
+	Process      bool   `json:"process,omitempty"`
 }
 
 type studentMessage struct {

@@ -1340,6 +1340,7 @@ func publicScreenMessages(messages []store.Message, titles map[string]string, cu
 	out := make([]screenMessage, 0, len(messages))
 	for _, message := range messages {
 		content := message.Content
+		process := message.Role == "tool" || message.ToolCalls != ""
 		if message.Role == "assistant" && message.ToolCalls != "" {
 			var calls []agent.ToolCall
 			_ = json.Unmarshal([]byte(message.ToolCalls), &calls)
@@ -1363,7 +1364,7 @@ func publicScreenMessages(messages []store.Message, titles map[string]string, cu
 		if title == "" {
 			title = "历史对话"
 		}
-		out = append(out, screenMessage{Role: message.Role, Content: content, Conversation: title, Current: message.TurnID == currentTurnID})
+		out = append(out, screenMessage{Role: message.Role, Content: content, Conversation: title, Current: message.TurnID == currentTurnID, Process: process})
 	}
 	return out
 }

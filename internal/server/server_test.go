@@ -1040,6 +1040,22 @@ func assertPublicScreenFields(t *testing.T, screen map[string]any) {
 	}
 }
 
+func TestPublicScreenMessagesMarkIntermediateProcess(t *testing.T) {
+	messages := []store.Message{
+		{Role: "user", Content: "帮我计算", ConversationID: "conv", TurnID: "turn"},
+		{Role: "assistant", ToolCalls: `[{"function":{"name":"calculator"}}]`, ConversationID: "conv", TurnID: "turn"},
+		{Role: "tool", Content: "42", ConversationID: "conv", TurnID: "turn"},
+		{Role: "assistant", Content: "答案是 42", Reasoning: "这里不应投屏", ConversationID: "conv", TurnID: "turn"},
+	}
+	got := publicScreenMessages(messages, map[string]string{"conv": "数学讨论"}, "turn")
+	if len(got) != 4 || got[0].Process || !got[1].Process || !got[2].Process || got[3].Process {
+		t.Fatalf("unexpected process markers: %#v", got)
+	}
+	if !strings.Contains(got[1].Content, "调用工具：calculator") || strings.Contains(got[3].Content, "这里不应投屏") {
+		t.Fatalf("unexpected public content: %#v", got)
+	}
+}
+
 func TestShutdownClosesStreamsAndCancelsLLM(t *testing.T) {
 	client := newBlockingClient()
 	app, _ := testServerWithClient(t, client)

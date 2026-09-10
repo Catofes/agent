@@ -100,16 +100,53 @@
           <h1 id="name"></h1>
         </div>
       </header>
-      <div class="grid">
-        <section class="card design-summary">
+      <nav class="screen-tabs" role="tablist" aria-label="大屏展示内容">
+        <button
+          id="configTab"
+          class="screen-tab"
+          type="button"
+          role="tab"
+          aria-controls="configPanel"
+        >
+          学生配置
+        </button>
+        <button
+          id="conversationTab"
+          class="screen-tab"
+          type="button"
+          role="tab"
+          aria-controls="conversationPanel"
+        >
+          对话展示
+        </button>
+      </nav>
+      <div class="screen-panels">
+        <section
+          id="configPanel"
+          class="card design-summary screen-panel"
+          role="tabpanel"
+          aria-labelledby="configTab"
+        >
           <div class="summary-mark">✦</div>
-          <div class="label">Soul · 它是谁</div>
-          <div id="persona" class="content"></div>
-          <div class="label section-label">Skill · 怎样做事</div>
-          <div id="skill" class="content"></div>
+          <div class="design-columns">
+            <div>
+              <div class="label">Soul · 它是谁</div>
+              <div id="persona" class="content"></div>
+            </div>
+            <div>
+              <div class="label">Skill · 怎样做事</div>
+              <div id="skill" class="content"></div>
+            </div>
+          </div>
           <div id="meta" class="meta"></div>
         </section>
-        <section id="conversationCard" class="card conversation-card">
+        <section
+          id="conversationPanel"
+          class="card conversation-card screen-panel"
+          role="tabpanel"
+          aria-labelledby="conversationTab"
+          hidden
+        >
           <div class="conversation-titlebar">
             <div><span class="chat-icon">●</span><strong>对话展示</strong></div>
             <span>完整多轮记录</span>
@@ -124,6 +161,18 @@
       const $ = (id) => document.getElementById(id),
         es = new EventSource("/api/screen/events");
       let lastRevision = -1;
+      function selectTab(name) {
+        const showConfig = name === "config";
+        $("configPanel").hidden = !showConfig;
+        $("conversationPanel").hidden = showConfig;
+        $("configTab").classList.toggle("active", showConfig);
+        $("conversationTab").classList.toggle("active", !showConfig);
+        $("configTab").setAttribute("aria-selected", String(showConfig));
+        $("conversationTab").setAttribute("aria-selected", String(!showConfig));
+      }
+      $("configTab").onclick = () => selectTab("config");
+      $("conversationTab").onclick = () => selectTab("conversation");
+      selectTab("config");
       function connection(message, error = false) {
         $("connection").textContent = message;
         $("connection").classList.toggle("error", error);
@@ -167,18 +216,18 @@
             `装备：${(d.tools || []).map(toolLabel).join("、") || "无"}　｜　最大步数：${d.max_turns}`;
           const history = [],
             messages = d.messages || [];
-          let conversation = "";
+          let conversation = "",
+            processGroup = null;
           messages.forEach((m) => {
             if (m.conversation && m.conversation !== conversation) {
               conversation = m.conversation;
+              processGroup = null;
               const heading = document.createElement("div");
               heading.className = "conversation-heading";
               heading.textContent = conversation;
               history.push(heading);
             }
             const x = document.createElement("div");
-            x.className =
-              "msg " + m.role + (m.current ? " current" : "");
             const role = document.createElement("strong"),
               body = document.createElement("div"),
               content = m.content || "发起工具调用";
@@ -192,10 +241,31 @@
             if (m.role === "assistant") MarkdownRenderer.render(body, content);
             else body.textContent = content;
             x.append(role, body);
+            if (m.process) {
+              if (!processGroup) {
+                const details = document.createElement("details"),
+                  summary = document.createElement("summary"),
+                  items = document.createElement("div");
+                details.className = "screen-process";
+                items.className = "screen-process-items";
+                details.append(summary, items);
+                history.push(details);
+                processGroup = { details, summary, items, count: 0 };
+              }
+              x.className = "screen-process-item " + m.role;
+              processGroup.count += 1;
+              processGroup.summary.textContent =
+                `思考与行动过程（${processGroup.count} 条，点击展开）`;
+              processGroup.items.append(x);
+              return;
+            }
+            processGroup = null;
+            x.className =
+              "msg " + m.role + (m.current ? " current" : "");
             history.push(x);
           });
           $("messages").replaceChildren(...history);
-          $("conversationCard").scrollTop = 0;
+          $("messages").scrollTop = 0;
         }
         connection(`已连接·${new Date().toLocaleTimeString()}`);
         if (d.spotlight_id)
