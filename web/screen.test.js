@@ -136,10 +136,10 @@ test('screen conversation sub-tabs split sessions and select the current one', (
     revision: 3,
     name: '张三',
     messages: [
-      { role: 'user', content: '第一场问题', conversation: '数学讨论', conversation_key: 'conversation-1' },
-      { role: 'assistant', content: '第一场回答', conversation: '数学讨论', conversation_key: 'conversation-1' },
-      { role: 'user', content: '第二场问题', conversation: '数学讨论', conversation_key: 'conversation-2', current: true },
-      { role: 'assistant', content: '第二场回答', conversation: '数学讨论', conversation_key: 'conversation-2', current: true },
+      { role: 'user', content: '第一场问题', conversation: '数学讨论', conversation_key: 'a' },
+      { role: 'assistant', content: '第一场回答', conversation: '数学讨论', conversation_key: 'a' },
+      { role: 'user', content: '第二场问题', conversation: '数学讨论', conversation_key: 'b', current: true },
+      { role: 'assistant', content: '第二场回答', conversation: '数学讨论', conversation_key: 'b', current: true },
     ],
     empty: false,
   }) });
