@@ -1182,8 +1182,33 @@ func TestPublicScreenMessagesMarkIntermediateProcess(t *testing.T) {
 	if len(got) != 4 || got[0].Process || !got[1].Process || !got[2].Process || got[3].Process {
 		t.Fatalf("unexpected process markers: %#v", got)
 	}
+	if got[0].ConversationKey == "" || got[0].ConversationKey != got[3].ConversationKey {
+		t.Fatalf("same conversation did not receive one public key: %#v", got)
+	}
 	if !strings.Contains(got[1].Content, "调用工具：calculator") || strings.Contains(got[3].Content, "这里不应投屏") {
 		t.Fatalf("unexpected public content: %#v", got)
+	}
+}
+
+func TestPublicScreenMessagesDistinguishConversationsWithSameTitle(t *testing.T) {
+	messages := []store.Message{
+		{Role: "user", Content: "第一场", ConversationID: "private-conversation-a", TurnID: "turn-a"},
+		{Role: "assistant", Content: "回答一", ConversationID: "private-conversation-a", TurnID: "turn-a"},
+		{Role: "user", Content: "第二场", ConversationID: "private-conversation-b", TurnID: "turn-b"},
+	}
+	got := publicScreenMessages(messages, map[string]string{
+		"private-conversation-a": "同名对话",
+		"private-conversation-b": "同名对话",
+	}, "turn-b")
+	if got[0].ConversationKey != got[1].ConversationKey || got[0].ConversationKey == got[2].ConversationKey {
+		t.Fatalf("conversation keys did not preserve session boundaries: %#v", got)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "private-conversation") {
+		t.Fatalf("public conversation keys leaked internal IDs: %s", raw)
 	}
 }
 

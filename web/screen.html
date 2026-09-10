@@ -158,8 +158,14 @@
         >
           <div class="conversation-titlebar">
             <div><span class="chat-icon">●</span><strong>对话展示</strong></div>
-            <span>完整多轮记录</span>
+            <span id="conversationSummary">完整多轮记录</span>
           </div>
+          <nav
+            id="conversationTabs"
+            class="conversation-tabs"
+            role="tablist"
+            aria-label="学生对话场次"
+          ></nav>
           <div id="messages" class="content"></div>
         </section>
         <section
@@ -185,7 +191,9 @@
         es = new EventSource("/api/screen/events");
       let lastRevision = -1,
         lastDemoRevision = -1,
-        currentDemoID = "";
+        currentDemoID = "",
+        activeConversationKey = "",
+        studentConversations = [];
       function selectTab(name) {
         for (const tab of ["config", "conversation", "test"]) {
           const selected = tab === name;
@@ -230,12 +238,12 @@
           recall_memory: "读取 Memory",
         }[name] || name;
       }
-      function renderMessages(target, messages, userLabel = "学生") {
+      function renderMessages(target, messages, userLabel = "学生", showConversationHeadings = true) {
         const history = [];
         let conversation = "",
           processGroup = null;
         messages.forEach((m) => {
-          if (m.conversation && m.conversation !== conversation) {
+          if (showConversationHeadings && m.conversation && m.conversation !== conversation) {
             conversation = m.conversation;
             processGroup = null;
             const heading = document.createElement("div");
@@ -282,6 +290,73 @@
         target.replaceChildren(...history);
         target.scrollTop = target.scrollHeight;
       }
+      function groupConversations(messages) {
+        const groups = [], byKey = new Map();
+        messages.forEach((message) => {
+          const key = message.conversation_key || `legacy:${message.conversation || "default"}`;
+          let group = byKey.get(key);
+          if (!group) {
+            group = {
+              key,
+              title: message.conversation || `对话 ${groups.length + 1}`,
+              messages: [],
+              current: false,
+            };
+            groups.push(group);
+            byKey.set(key, group);
+          }
+          group.messages.push(message);
+          group.current ||= Boolean(message.current);
+        });
+        return groups;
+      }
+      function selectConversation(key) {
+        const group = studentConversations.find((item) => item.key === key);
+        if (!group) return;
+        activeConversationKey = key;
+        Array.from($("conversationTabs").children).forEach((tab) => {
+          const selected = tab.dataset.conversationKey === key;
+          tab.classList.toggle("active", selected);
+          tab.setAttribute("aria-selected", String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+        });
+        renderMessages($("messages"), group.messages, "学生", false);
+      }
+      function renderStudentConversations(messages) {
+        studentConversations = groupConversations(messages);
+        const titleCounts = new Map();
+        studentConversations.forEach((group) =>
+          titleCounts.set(group.title, (titleCounts.get(group.title) || 0) + 1),
+        );
+        const titleIndexes = new Map();
+        const tabs = studentConversations.map((group) => {
+          const tab = document.createElement("button");
+          const duplicateIndex = (titleIndexes.get(group.title) || 0) + 1;
+          titleIndexes.set(group.title, duplicateIndex);
+          tab.type = "button";
+          tab.className = "conversation-tab";
+          tab.dataset.conversationKey = group.key;
+          tab.setAttribute("role", "tab");
+          tab.textContent = titleCounts.get(group.title) > 1
+            ? `${group.title}（${duplicateIndex}）`
+            : group.title;
+          tab.onclick = () => selectConversation(group.key);
+          return tab;
+        });
+        $("conversationTabs").replaceChildren(...tabs);
+        $("conversationTabs").hidden = tabs.length === 0;
+        $("conversationSummary").textContent = tabs.length
+          ? `共 ${tabs.length} 场对话`
+          : "暂无对话";
+        const selected = studentConversations.find((group) => group.current)
+          || studentConversations.find((group) => group.key === activeConversationKey)
+          || studentConversations.at(-1);
+        if (selected) selectConversation(selected.key);
+        else {
+          activeConversationKey = "";
+          $("messages").replaceChildren();
+        }
+      }
       function render(d) {
         $("empty").hidden = !d.empty;
         $("screen").hidden = d.empty;
@@ -291,7 +366,7 @@
           $("skill").textContent = d.skill_md || "（未填写）";
           $("meta").textContent =
             `装备：${(d.tools || []).map(toolLabel).join("、") || "无"}　｜　最大步数：${d.max_turns}`;
-          renderMessages($("messages"), d.messages || []);
+          renderStudentConversations(d.messages || []);
           $("messages").scrollTop = 0;
         }
         connection(`已连接·${new Date().toLocaleTimeString()}`);

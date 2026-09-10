@@ -23,6 +23,7 @@ function screenRuntime({ animationFrames = true } = {}) {
     classList: {
       toggle() {},
     },
+    dataset: {},
     setAttribute(name, value) {
       this.attributes.set(name, value);
     },
@@ -97,11 +98,12 @@ test('screen SSE event renders DOM and acknowledges the rendered spotlight', asy
   assert.equal(runtime.elements.get('screen').hidden, false);
   assert.equal(runtime.elements.get('name').textContent, '张三 的 Agent');
   assert.equal(runtime.elements.get('persona').textContent, '耐心的数学老师');
-  assert.equal(runtime.elements.get('messages').children.length, 3);
-  assert.equal(runtime.elements.get('messages').children[0].textContent, '数学讨论');
-  assert.equal(runtime.elements.get('messages').children[2].children[0].textContent, 'Agent');
-  assert.equal(runtime.elements.get('messages').children[2].children[1].textContent, '391');
-  assert.match(runtime.elements.get('messages').children[2].className, /current/);
+  assert.equal(runtime.elements.get('conversationTabs').children.length, 1);
+  assert.equal(runtime.elements.get('conversationTabs').children[0].textContent, '数学讨论');
+  assert.equal(runtime.elements.get('messages').children.length, 2);
+  assert.equal(runtime.elements.get('messages').children[1].children[0].textContent, 'Agent');
+  assert.equal(runtime.elements.get('messages').children[1].children[1].textContent, '391');
+  assert.match(runtime.elements.get('messages').children[1].className, /current/);
   assert.equal(runtime.elements.get('messages').scrollTop, 0);
   assert.equal(runtime.requests.length, 1);
   assert.equal(runtime.requests[0].url, '/api/screen/ack');
@@ -125,6 +127,35 @@ test('screen tabs give configuration and conversation separate bounded panels', 
   assert.equal(config.hidden, true);
   assert.equal(conversation.hidden, false);
   assert.equal(runtime.elements.get('conversationTab').attributes.get('aria-selected'), 'true');
+});
+
+test('screen conversation sub-tabs split sessions and select the current one', () => {
+  const runtime = screenRuntime();
+  runtime.source.listeners.get('screen')({ data: JSON.stringify({
+    spotlight_id: 'screen_sessions',
+    revision: 3,
+    name: '张三',
+    messages: [
+      { role: 'user', content: '第一场问题', conversation: '数学讨论', conversation_key: 'conversation-1' },
+      { role: 'assistant', content: '第一场回答', conversation: '数学讨论', conversation_key: 'conversation-1' },
+      { role: 'user', content: '第二场问题', conversation: '数学讨论', conversation_key: 'conversation-2', current: true },
+      { role: 'assistant', content: '第二场回答', conversation: '数学讨论', conversation_key: 'conversation-2', current: true },
+    ],
+    empty: false,
+  }) });
+
+  const tabs = runtime.elements.get('conversationTabs').children;
+  assert.equal(tabs.length, 2);
+  assert.equal(tabs[0].textContent, '数学讨论（1）');
+  assert.equal(tabs[1].textContent, '数学讨论（2）');
+  assert.equal(tabs[1].attributes.get('aria-selected'), 'true');
+  assert.equal(runtime.elements.get('conversationSummary').textContent, '共 2 场对话');
+  assert.equal(runtime.elements.get('messages').children.length, 2);
+  assert.equal(runtime.elements.get('messages').children[0].children[1].textContent, '第二场问题');
+
+  tabs[0].onclick();
+  assert.equal(tabs[0].attributes.get('aria-selected'), 'true');
+  assert.equal(runtime.elements.get('messages').children[0].children[1].textContent, '第一场问题');
 });
 
 test('screen demo event switches to the live test tab and renders shared state', () => {
@@ -183,11 +214,11 @@ test('screen collapses intermediate tool activity by default', async () => {
   await Promise.resolve();
 
   const children = runtime.elements.get('messages').children;
-  assert.equal(children.length, 4);
-  assert.equal(children[2].className, 'screen-process');
-  assert.match(children[2].children[0].textContent, /2 条/);
-  assert.equal(children[2].children[1].children.length, 2);
-  assert.equal(children[2].open, undefined);
+  assert.equal(children.length, 3);
+  assert.equal(children[1].className, 'screen-process');
+  assert.match(children[1].children[0].textContent, /2 条/);
+  assert.equal(children[1].children[1].children.length, 2);
+  assert.equal(children[1].open, undefined);
 });
 
 test('screen render errors are visible and are not acknowledged', () => {

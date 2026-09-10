@@ -104,11 +104,12 @@ type screenDemoState struct {
 }
 
 type screenMessage struct {
-	Role         string `json:"role"`
-	Content      string `json:"content"`
-	Conversation string `json:"conversation,omitempty"`
-	Current      bool   `json:"current,omitempty"`
-	Process      bool   `json:"process,omitempty"`
+	Role            string `json:"role"`
+	Content         string `json:"content"`
+	Conversation    string `json:"conversation,omitempty"`
+	ConversationKey string `json:"conversation_key,omitempty"`
+	Current         bool   `json:"current,omitempty"`
+	Process         bool   `json:"process,omitempty"`
 }
 
 type studentMessage struct {

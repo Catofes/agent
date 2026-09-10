@@ -1410,6 +1410,7 @@ func (s *Server) ackScreen(w http.ResponseWriter, r *http.Request) {
 
 func publicScreenMessages(messages []store.Message, titles map[string]string, currentTurnID string) []screenMessage {
 	out := make([]screenMessage, 0, len(messages))
+	conversationKeys := make(map[string]string)
 	for _, message := range messages {
 		content := message.Content
 		process := message.Role == "tool" || message.ToolCalls != ""
@@ -1436,7 +1437,12 @@ func publicScreenMessages(messages []store.Message, titles map[string]string, cu
 		if title == "" {
 			title = "历史对话"
 		}
-		out = append(out, screenMessage{Role: message.Role, Content: content, Conversation: title, Current: message.TurnID == currentTurnID, Process: process})
+		conversationKey := conversationKeys[message.ConversationID]
+		if conversationKey == "" {
+			conversationKey = fmt.Sprintf("conversation-%d", len(conversationKeys)+1)
+			conversationKeys[message.ConversationID] = conversationKey
+		}
+		out = append(out, screenMessage{Role: message.Role, Content: content, Conversation: title, ConversationKey: conversationKey, Current: message.TurnID == currentTurnID, Process: process})
 	}
 	return out
 }

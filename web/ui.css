@@ -510,13 +510,18 @@ p { line-height: 1.65; }
 .screen-page .section-label { margin-top: clamp(1.5rem, 3vh, 2.5rem); padding-top: clamp(1.2rem, 2.5vh, 2rem); border-top: 1px solid var(--line); }
 .screen-page .content { color: var(--ink); font-size: clamp(.92rem, 1.05vw, 1.2rem); line-height: 1.58; }
 .screen-page .meta { margin-top: clamp(1.5rem, 3vh, 2.5rem); padding: .7rem .85rem; border-radius: 11px; background: #f6f5fb; color: var(--muted); font-size: clamp(.78rem, .9vw, .95rem); font-weight: 650; }
-.screen-page .conversation-card { grid-template-rows: auto minmax(0, 1fr); padding: 0; overflow: hidden; scrollbar-color: #cbc8dd transparent; }
+.screen-page .conversation-card { grid-template-rows: auto auto minmax(0, 1fr); padding: 0; overflow: hidden; scrollbar-color: #cbc8dd transparent; }
 .screen-page .conversation-card:not([hidden]) { display: grid; }
 .screen-page .conversation-titlebar { z-index: 3; display: flex; align-items: center; justify-content: space-between; padding: clamp(14px, 1.2vw, 20px) clamp(20px, 2vw, 34px); border-bottom: 1px solid var(--line); background: rgba(255,255,255,.94); }
 .screen-page .conversation-titlebar > div { display: flex; align-items: center; gap: 10px; color: #292443; font-size: clamp(.95rem, 1.05vw, 1.15rem); }
 .screen-page .conversation-titlebar > span { color: var(--subtle); font-size: clamp(.75rem, .85vw, .9rem); }
 .screen-page .chat-icon { color: var(--primary); font-size: .65em; box-shadow: 0 0 0 5px var(--primary-soft); border-radius: 50%; }
+.screen-page .conversation-tabs { display: flex; min-width: 0; gap: 7px; padding: 10px clamp(20px, 2vw, 34px); overflow-x: auto; border-bottom: 1px solid var(--line); background: #faf9fd; scrollbar-width: thin; }
+.screen-page .conversation-tab { min-width: fit-content; max-width: min(22rem, 35vw); padding: .5rem .9rem; overflow: hidden; border: 1px solid #dfddea; border-radius: 999px; background: white; color: var(--muted); box-shadow: none; font-size: clamp(.78rem, .86vw, .92rem); text-overflow: ellipsis; white-space: nowrap; }
+.screen-page .conversation-tab:hover { border-color: #cfc9ff; background: var(--primary-soft); color: var(--primary); transform: none; }
+.screen-page .conversation-tab.active { border-color: var(--primary); background: var(--primary); color: white; box-shadow: 0 3px 9px rgba(91,78,232,.16); }
 .screen-page #messages, .screen-page #demoMessages { display: grid; min-width: 0; min-height: 0; gap: clamp(10px, 1.2vh, 16px); padding: clamp(18px, 2vw, 32px); overflow: auto; align-content: start; }
+.screen-page .demo-card { grid-template-rows: auto minmax(0, 1fr); }
 .screen-page .demo-empty { display: grid; min-height: 0; padding: 2rem; place-items: center; color: var(--muted); text-align: center; }
 .screen-page .msg { min-width: 0; width: fit-content; max-width: 88%; margin: 0; padding: clamp(11px, 1.1vw, 17px) clamp(14px, 1.35vw, 21px); overflow-wrap: anywhere; border: 1px solid #e6e7ed; border-radius: 18px; border-bottom-left-radius: 6px; background: white; color: var(--ink); box-shadow: 0 2px 8px rgba(23,32,51,.04); }
 .screen-page .msg.user { justify-self: end; border: 0; border-bottom-right-radius: 6px; border-bottom-left-radius: 18px; background: linear-gradient(135deg, #695ced, #5b4ee8); color: white; box-shadow: 0 7px 18px rgba(91,78,232,.16); }
