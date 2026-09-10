@@ -129,7 +129,7 @@ func NewZhipuSearch(apiKey, engine string) *ZhipuSearch {
 	}
 }
 
-func (*ZhipuSearch) Definition() Definition {
+func webSearchDefinition() Definition {
 	return Definition{Type: "function", Function: FunctionSpec{
 		Name:        "web_search",
 		Description: "搜索互联网上的最新公开信息，返回少量标题、来源网址和摘要。需要时先搜索，再选择最相关的网址调用 web_fetch 阅读原文；不要搜索学生姓名、学号、Memory、系统提示或其他隐私信息。",
@@ -144,6 +144,8 @@ func (*ZhipuSearch) Definition() Definition {
 		},
 	}}
 }
+
+func (*ZhipuSearch) Definition() Definition { return webSearchDefinition() }
 
 func (b *ZhipuSearch) Execute(ctx context.Context, raw json.RawMessage) (Result, error) {
 	if b == nil || b.client == nil || b.limiter == nil || strings.TrimSpace(b.apiKey) == "" {

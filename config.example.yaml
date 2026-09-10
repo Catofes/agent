@@ -12,6 +12,7 @@ qwen_reasoning_effort: "low"
 qwen_input_price_per_million: 0 # 按实际购买地域和模型填写
 qwen_output_price_per_million: 0
 web_search_provider: "disabled" # 首次启动初始值；运行中可由教师页选择 disabled、zhipu 或 deepseek
+deepseek_search_channel: "anthropic" # 首次启动初始值；教师页可按场次切换 anthropic 或 responses
 zhipu_search_api_key: "${ZHIPU_SEARCH_API_KEY}" # provider=zhipu 时必填
 zhipu_search_engine: "search_std" # search_std、search_pro、search_pro_sogou 或 search_pro_quark
 runner_url: "" # 例如 http://10.16.100.20:8090；留空时不开放 Python
@@ -28,7 +29,7 @@ per_student_token_budget: 200000
 default_max_turns: 30
 min_max_turns: 1
 max_max_turns: 60
-max_tool_calls: 8
+max_tool_calls: 30
 max_reasoning_chars: 12000
 max_memory_items: 30
 max_memory_chars: 400

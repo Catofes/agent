@@ -707,7 +707,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		target := p.Session.RunID + "\x00" + p.Session.StudentID
 		s.studentMemoryHub.Publish(target, classroomEvent{Type: "memory_status", RunID: p.Session.RunID, MemoryStatus: update.Status, MemoryItems: items})
 	}
-	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, Skills: skills, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, ModelProvider: policy.ModelProvider, SearchProvider: policy.SearchProvider, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, SkillsAllowedForCall: skillsAllowedForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
+	err = s.Agent.Run(r.Context(), agent.Request{RunID: p.Session.RunID, StudentID: p.Session.StudentID, ConversationID: in.ConversationID, TurnID: turnID, Input: in.Message, Design: d, Skills: skills, MemoryMode: policy.MemoryMode, PolicyRevision: policy.Revision, ModelProvider: policy.ModelProvider, SearchProvider: policy.SearchProvider, DeepSeekSearchChannel: policy.DeepSeekSearchChannel, BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, SkillsAllowedForCall: skillsAllowedForCall, OnMemoryUpdate: onMemoryUpdate}, emit)
 	if err != nil {
 		code, msg := agentError(err)
 		if !emitted {
@@ -876,7 +876,7 @@ func (s *Server) wallEvents(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return false
 		}
-		sendSSE(w, "wall", map[string]any{"run": current, "policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "available_model_providers": s.Agent.ProviderNames(), "available_search_providers": s.AvailableSearchProviders, "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
+		sendSSE(w, "wall", map[string]any{"run": current, "policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "available_model_providers": s.Agent.ProviderNames(), "available_search_providers": s.AvailableSearchProviders, "available_deepseek_search_channels": s.AvailableDeepSeekSearchChannels, "students": items, "screen_connections": s.screenHub.Count(), "server_time": time.Now().UTC()})
 		flusher.Flush()
 		return true
 	}
@@ -949,17 +949,18 @@ func (s *Server) getTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取课堂能力失败")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "available_model_providers": s.Agent.ProviderNames(), "available_search_providers": s.AvailableSearchProviders})
+	writeJSON(w, 200, map[string]any{"policy": policy, "available_tools": s.Agent.Tools.Names(), "available_preset_skills": presetSkillOptions(), "available_model_providers": s.Agent.ProviderNames(), "available_search_providers": s.AvailableSearchProviders, "available_deepseek_search_channels": s.AvailableDeepSeekSearchChannels})
 }
 
 func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		MemoryMode     string    `json:"memory_mode"`
-		SkillsEnabled  *bool     `json:"skills_enabled"`
-		PresetSkills   *[]string `json:"preset_skills"`
-		AllowedTools   []string  `json:"allowed_tools"`
-		ModelProvider  string    `json:"model_provider"`
-		SearchProvider string    `json:"search_provider"`
+		MemoryMode            string    `json:"memory_mode"`
+		SkillsEnabled         *bool     `json:"skills_enabled"`
+		PresetSkills          *[]string `json:"preset_skills"`
+		AllowedTools          []string  `json:"allowed_tools"`
+		ModelProvider         string    `json:"model_provider"`
+		SearchProvider        string    `json:"search_provider"`
+		DeepSeekSearchChannel string    `json:"deepseek_search_channel"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -996,21 +997,27 @@ func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 			in.SearchProvider = "disabled"
 		}
 	}
+	if strings.TrimSpace(in.DeepSeekSearchChannel) == "" {
+		in.DeepSeekSearchChannel = currentPolicy.DeepSeekSearchChannel
+		if in.DeepSeekSearchChannel == "" {
+			in.DeepSeekSearchChannel = "anthropic"
+		}
+	}
 	cleanTools, cleanPresets, ok := s.validatePolicyInput(w, in.MemoryMode, in.AllowedTools, presetSkills)
 	if !ok {
 		return
 	}
-	if !s.validateProviderSelection(w, in.ModelProvider, in.SearchProvider) {
+	if !s.validateProviderSelection(w, in.ModelProvider, in.SearchProvider, in.DeepSeekSearchChannel) {
 		return
 	}
-	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: skillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider})
+	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: skillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider, DeepSeekSearchChannel: in.DeepSeekSearchChannel})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "更新课堂能力失败")
 		return
 	}
 	s.studentHub.Publish(classroomEvent{Type: "classroom_policy", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	s.wallHub.Publish(struct{}{})
-	s.Logger.Info("classroom policy changed", "run_id", run.ID, "memory_mode", policy.MemoryMode, "skills_enabled", policy.SkillsEnabled, "preset_skills", policy.PresetSkills, "allowed_tools", policy.AllowedTools, "revision", policy.Revision)
+	s.Logger.Info("classroom policy changed", "run_id", run.ID, "memory_mode", policy.MemoryMode, "skills_enabled", policy.SkillsEnabled, "preset_skills", policy.PresetSkills, "allowed_tools", policy.AllowedTools, "model_provider", policy.ModelProvider, "search_provider", policy.SearchProvider, "deepseek_search_channel", policy.DeepSeekSearchChannel, "revision", policy.Revision)
 	writeJSON(w, 200, policy)
 }
 
@@ -1046,7 +1053,7 @@ func (s *Server) validatePolicyInput(w http.ResponseWriter, memoryMode string, a
 	return clean, presets, true
 }
 
-func (s *Server) validateProviderSelection(w http.ResponseWriter, modelProvider, searchProvider string) bool {
+func (s *Server) validateProviderSelection(w http.ResponseWriter, modelProvider, searchProvider, deepSeekSearchChannel string) bool {
 	modelProvider = strings.ToLower(strings.TrimSpace(modelProvider))
 	searchProvider = strings.ToLower(strings.TrimSpace(searchProvider))
 	if !s.Agent.HasProvider(modelProvider) {
@@ -1058,7 +1065,12 @@ func (s *Server) validateProviderSelection(w http.ResponseWriter, modelProvider,
 		return false
 	}
 	if searchProvider == "deepseek" && modelProvider != "deepseek" {
-		writeError(w, 400, "INCOMPATIBLE_PROVIDERS", "DeepSeek 托管搜索只能与 DeepSeek 模型一起使用")
+		writeError(w, 400, "INCOMPATIBLE_PROVIDERS", "DeepSeek 搜索只能与 DeepSeek 模型一起使用")
+		return false
+	}
+	deepSeekSearchChannel = strings.ToLower(strings.TrimSpace(deepSeekSearchChannel))
+	if !containsString(s.AvailableDeepSeekSearchChannels, deepSeekSearchChannel) {
+		writeError(w, 400, "DEEPSEEK_SEARCH_CHANNEL_UNAVAILABLE", "所选 DeepSeek 搜索通道不可用")
 		return false
 	}
 	return true
@@ -1110,13 +1122,14 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name           string    `json:"name"`
-		MemoryMode     string    `json:"memory_mode"`
-		SkillsEnabled  *bool     `json:"skills_enabled"`
-		PresetSkills   *[]string `json:"preset_skills"`
-		AllowedTools   []string  `json:"allowed_tools"`
-		ModelProvider  string    `json:"model_provider"`
-		SearchProvider string    `json:"search_provider"`
+		Name                  string    `json:"name"`
+		MemoryMode            string    `json:"memory_mode"`
+		SkillsEnabled         *bool     `json:"skills_enabled"`
+		PresetSkills          *[]string `json:"preset_skills"`
+		AllowedTools          []string  `json:"allowed_tools"`
+		ModelProvider         string    `json:"model_provider"`
+		SearchProvider        string    `json:"search_provider"`
+		DeepSeekSearchChannel string    `json:"deepseek_search_channel"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -1155,6 +1168,12 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			in.SearchProvider = "disabled"
 		}
 	}
+	if strings.TrimSpace(in.DeepSeekSearchChannel) == "" {
+		in.DeepSeekSearchChannel = oldPolicy.DeepSeekSearchChannel
+		if in.DeepSeekSearchChannel == "" {
+			in.DeepSeekSearchChannel = "anthropic"
+		}
+	}
 	if in.SkillsEnabled == nil {
 		value := true
 		in.SkillsEnabled = &value
@@ -1167,10 +1186,10 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.validateProviderSelection(w, in.ModelProvider, in.SearchProvider) {
+	if !s.validateProviderSelection(w, in.ModelProvider, in.SearchProvider, in.DeepSeekSearchChannel) {
 		return
 	}
-	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: *in.SkillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider})
+	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: *in.SkillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider, DeepSeekSearchChannel: in.DeepSeekSearchChannel})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "新建场次失败")
 		return

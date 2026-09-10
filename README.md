@@ -24,6 +24,8 @@ QWEN_REASONING_EFFORT='low'
 ADMIN_PASSWORD='替换为教师口令'
 ANONYMOUS_HMAC_KEY='替换为独立的长随机字符串'
 WEB_SEARCH_PROVIDER='disabled' # disabled、zhipu 或 deepseek
+# DeepSeek 搜索子请求通道；可在教师页按场次覆盖
+DEEPSEEK_SEARCH_CHANNEL='anthropic' # anthropic 或 responses
 # 使用智谱本地工具链时再配置：
 ZHIPU_SEARCH_API_KEY='替换为智谱 API Key'
 ZHIPU_SEARCH_ENGINE='search_std'
@@ -87,12 +89,12 @@ DEEPSEEK_API_KEY='...' make smoke-real
 `WEB_SEARCH_PROVIDER` 决定首次启动或旧数据库升级后的联网搜索初始值：
 
 - `disabled`：学生 Agent 不获得 `web_search`。
-- `zhipu`：使用智谱 Web Search API，本地执行并保留搜索参数、结果、缓存和每轮最多 2 次的限制；需要 `ZHIPU_SEARCH_API_KEY`，可通过 `ZHIPU_SEARCH_ENGINE` 选择搜索档位。
-- `deepseek`：使用现有 `DEEPSEEK_API_KEY` 和 Responses API 的服务端 `web_search`；搜索开始/完成仍显示为课堂行动，但查询改写、网页读取和服务端自动续跑由 DeepSeek 托管，本地无法逐次限制。
+- `zhipu`：使用智谱 Web Search API，本地执行并保留搜索参数、结果和缓存；需要 `ZHIPU_SEARCH_API_KEY`，可通过 `ZHIPU_SEARCH_ENGINE` 选择搜索档位。
+- `deepseek`：主对话仍使用 Chat Completions，`web_search` 作为普通工具另行调用 DeepSeek 搜索。`DEEPSEEK_SEARCH_CHANNEL=anthropic` 使用当前可用的 Anthropic Messages `web_search_20250305`；`responses` 保留 Responses `web_search` 通道，若服务端没有实际执行搜索会明确失败，不会把模型凭记忆生成的内容冒充搜索结果。
 
-两种模式都沿用教师的课堂 Tool 开关和学生装备状态。`web_fetch` 仍是独立的本地网页读取工具；若不希望课堂服务器直接访问搜索结果网址，应由教师关闭它。
+两种模式都沿用教师的课堂 Tool 开关和学生装备状态。每次对话默认最多执行 30 个工具，其中 `web_search`、`web_fetch` 各最多 10 次，`python_execute`、`recall_memory` 各最多 5 次；模型迭代数仍由学生设计里的最大步数独立限制。`web_fetch` 是独立的本地网页读取工具；若不希望课堂服务器直接访问搜索结果网址，应由教师关闭它。
 
-教师端“课堂能力”可以在服务启动后切换主模型和搜索服务，选择会随课堂场次保存在 SQLite 中，新回合立即生效，不需要重启。页面只显示服务器已通过环境变量配置好的服务，不会显示 API Key、Base URL 等秘密。DeepSeek 托管搜索只能与 DeepSeek 模型组合；切换到 Qwen 时应同时选择智谱搜索或关闭搜索。已有场次会保留上次保存的选择，`WEB_SEARCH_PROVIDER` 不会在普通重启时覆盖它。
+教师端“课堂能力”可以在服务启动后切换主模型、搜索服务和 DeepSeek 搜索通道，选择会随课堂场次保存在 SQLite 中，新回合立即生效，不需要重启。保存后页面会核对服务端返回值和设置 revision；也可以不修改选项而重新保存当前设置，以确认请求确实到达后台。页面只显示服务器已配置好的服务，不会显示 API Key、Base URL 等秘密。DeepSeek 搜索只能与 DeepSeek 模型组合；切换到 Qwen 时应同时选择智谱搜索或关闭搜索。已有场次会保留上次保存的选择，环境变量不会在普通重启时覆盖它。
 
 ## Python Runner（可选）
 
@@ -170,4 +172,4 @@ Nginx HTTPS 配置和流式检查步骤见 [HTTPS 反向代理部署](doc/HTTPS�
 
 ## 当前边界
 
-Memory 对每个学生仍默认关闭，老师可以按场次选择关闭、确认后记忆或自然记忆，并分别控制本场 Skill 和 Tool。关闭 Skill 后，学生端隐藏 Skill 编辑入口，已有 Skill 保留但不可修改、不会进入模型上下文或投屏。Memory 只在同一课堂场次内跨对话生效；除回合开始时的相关筛选外，任务或已加载 Skill 还可以通过受限的 `recall_memory` 补充召回当前学生已确认的事实。MVP 边界见 [Memory MVP 设计](doc/MemoryMVP设计.md)，演进状态见 [Memory V2 设计与实施计划](doc/MemoryV2设计与实施计划.md)。v0.3 已提供受控联网链路：智谱模式执行本地 `web_search → web_fetch`，DeepSeek 模式由 Responses API 托管搜索；两者都需要教师按场次显式开放、学生自行装备。智谱搜索与本地网页读取每轮分别最多调用 2 次；DeepSeek 服务端内部的搜索和网页读取轮次无法由本地逐次限制。zip 导出、随机点名、优秀池、绘图和多智能体演示仍在 [todo.md](todo.md) 的后续版本清单中。
+Memory 对每个学生仍默认关闭，老师可以按场次选择关闭、确认后记忆或自然记忆，并分别控制本场 Skill 和 Tool。关闭 Skill 后，学生端隐藏 Skill 编辑入口，已有 Skill 保留但不可修改、不会进入模型上下文或投屏。Memory 只在同一课堂场次内跨对话生效；除回合开始时的相关筛选外，任务或已加载 Skill 还可以通过受限的 `recall_memory` 补充召回当前学生已确认的事实。MVP 边界见 [Memory MVP 设计](doc/MemoryMVP设计.md)，演进状态见 [Memory V2 设计与实施计划](doc/MemoryV2设计与实施计划.md)。联网搜索作为主对话的普通工具执行：智谱直接返回检索结果，DeepSeek 可由教师在 Anthropic Messages 与 Responses 子通道之间切换，随后均可继续调用本地 `web_fetch` 核对原文。zip 导出、随机点名、优秀池、绘图和多智能体演示仍在 [todo.md](todo.md) 的后续版本清单中。

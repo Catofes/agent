@@ -34,6 +34,16 @@ type completionClientFunc func(context.Context, CompletionRequest) (Completion, 
 // shipping the removed classroom calculator in the production registry.
 type testCalculator struct{}
 
+type testWebSearch struct{}
+
+func (testWebSearch) Definition() tools.Definition {
+	return tools.Definition{Type: "function", Function: tools.FunctionSpec{Name: "web_search", Parameters: map[string]any{"type": "object"}}}
+}
+
+func (testWebSearch) Execute(context.Context, json.RawMessage) (tools.Result, error) {
+	return tools.Result{ModelText: "zhipu routed result", Summary: "智谱搜索完成"}, nil
+}
+
 func (testCalculator) Definition() tools.Definition {
 	return tools.Definition{Type: "function", Function: tools.FunctionSpec{
 		Name: "calculator", Description: "test tool",
@@ -193,6 +203,30 @@ func TestEngineUsesSelectedModelProvider(t *testing.T) {
 	}
 	if len(primary.requests) != 0 || len(backup.requests) != 1 || backup.requests[0].Model != "qwen3.8-flash" || len(backup.requests[0].Tools) != 0 {
 		t.Fatalf("primary=%d backup=%#v", len(primary.requests), backup.requests)
+	}
+}
+
+func TestEngineRoutesLocalSearchFromRequestPolicy(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	fake := &fakeClient{answers: []Completion{
+		{ToolCalls: []ToolCall{{ID: "search_1", Type: "function", Function: ToolFunction{Name: "web_search", Arguments: `{"query":"上海天气"}`}}}},
+		{Content: "查到了"},
+	}}
+	router := tools.NewRoutedWebSearch(testWebSearch{}, nil)
+	engine := NewEngine(st, fake, tools.NewRegistry(router), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 30, 1000
+	engine.MaxToolCallsByName = map[string]int{"web_search": 10}
+	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "搜索", SearchProvider: "zhipu", DeepSeekSearchChannel: "anthropic", Design: store.Design{Tools: []string{"web_search"}, MaxTurns: 2}}, func(Event) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 2 || len(fake.requests[0].Tools) != 1 {
+		t.Fatalf("requests=%#v", fake.requests)
+	}
+	last := fake.requests[1].Messages[len(fake.requests[1].Messages)-1]
+	if last.Role != "tool" || last.Content != "zhipu routed result" {
+		t.Fatalf("tool result=%#v", last)
 	}
 }
 

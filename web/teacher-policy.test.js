@@ -9,6 +9,8 @@ test("teacher can control classroom providers, Memory mode, and available tools"
   for (const id of [
     "policyModelProvider",
     "policySearchProvider",
+    "policyDeepSeekSearchChannel",
+    "deepSeekSearchChannelField",
     "policyMemoryMode",
     "policySkillsEnabled",
     "policyPresets",
@@ -28,8 +30,14 @@ test("teacher can control classroom providers, Memory mode, and available tools"
   assert.match(html, /available_preset_skills/);
   assert.match(html, /available_model_providers/);
   assert.match(html, /available_search_providers/);
+  assert.match(html, /available_deepseek_search_channels/);
   assert.match(html, /model_provider/);
   assert.match(html, /search_provider/);
+  assert.match(html, /deepseek_search_channel/);
+  assert.match(html, /Anthropic Messages（当前推荐）/);
+  assert.match(html, /Responses（保留待恢复）/);
+  assert.match(html, /服务器没有生成新的设置版本/);
+  assert.match(html, /重新保存当前设置/);
   assert.match(html, /option\.value === "deepseek"/);
   assert.match(html, /basic: "基础"/);
   assert.match(html, /physics: "物理"/);

@@ -77,6 +77,7 @@ type Request struct {
 	PolicyRevision                                  int64
 	ModelProvider                                   string
 	SearchProvider                                  string
+	DeepSeekSearchChannel                           string
 	BeforeModelCall                                 func(context.Context) error
 	ToolsForCall                                    func(context.Context) ([]string, error)
 	SkillsAllowedForCall                            func(context.Context) (bool, error)
@@ -452,6 +453,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 					toolErr = fmt.Errorf("工具 %q 未启用", call.Function.Name)
 				} else if toolErr == nil {
 					toolCtx := tools.WithExecutionScope(ctx, tools.ExecutionScope{RunID: req.RunID, StudentID: req.StudentID, ConversationID: req.ConversationID, TurnID: req.TurnID})
+					toolCtx = tools.WithSearchRoute(toolCtx, tools.SearchRoute{Provider: req.SearchProvider, DeepSeekChannel: req.DeepSeekSearchChannel})
 					result, toolErr = t.Execute(toolCtx, json.RawMessage(call.Function.Arguments))
 				}
 			}

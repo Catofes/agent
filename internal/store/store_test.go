@@ -187,15 +187,59 @@ func TestRunPolicyDefaultsAndRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy, err := st.RunPolicy(ctx, run.ID)
-	if err != nil || policy.MemoryMode != MemoryModeReviewRequired || !policy.SkillsEnabled || len(policy.PresetSkills) != 0 || len(policy.AllowedTools) != 0 || policy.Revision != 1 {
+	if err != nil || policy.MemoryMode != MemoryModeReviewRequired || !policy.SkillsEnabled || len(policy.PresetSkills) != 0 || len(policy.AllowedTools) != 0 || policy.DeepSeekSearchChannel != "anthropic" || policy.Revision != 1 {
 		t.Fatalf("default policy=%#v err=%v", policy, err)
 	}
-	if err = st.InitializeRunProviders(ctx, run.ID, "deepseek", "zhipu"); err != nil {
+	if err = st.InitializeRunProviders(ctx, run.ID, "deepseek", "zhipu", "anthropic"); err != nil {
 		t.Fatal(err)
 	}
-	policy, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeAdaptive, SkillsEnabled: false, PresetSkills: []string{"python-beginner", "python-beginner"}, AllowedTools: []string{"web_fetch", "web_fetch"}, ModelProvider: "qwen", SearchProvider: "disabled"})
-	if err != nil || policy.MemoryMode != MemoryModeAdaptive || policy.SkillsEnabled || len(policy.PresetSkills) != 1 || policy.PresetSkills[0] != "python-beginner" || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "web_fetch" || policy.ModelProvider != "qwen" || policy.SearchProvider != "disabled" || policy.Revision != 2 {
+	policy, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeAdaptive, SkillsEnabled: false, PresetSkills: []string{"python-beginner", "python-beginner"}, AllowedTools: []string{"web_fetch", "web_fetch"}, ModelProvider: "qwen", SearchProvider: "disabled", DeepSeekSearchChannel: "responses"})
+	if err != nil || policy.MemoryMode != MemoryModeAdaptive || policy.SkillsEnabled || len(policy.PresetSkills) != 1 || policy.PresetSkills[0] != "python-beginner" || len(policy.AllowedTools) != 1 || policy.AllowedTools[0] != "web_fetch" || policy.ModelProvider != "qwen" || policy.SearchProvider != "disabled" || policy.DeepSeekSearchChannel != "responses" || policy.Revision != 2 {
 		t.Fatalf("updated policy=%#v err=%v", policy, err)
+	}
+}
+
+func TestMigrateDeepSeekSearchChannelPreservesSavedProvider(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "app.db")
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.SetRunPolicy(ctx, run.ID, RunPolicy{MemoryMode: MemoryModeReviewRequired, SkillsEnabled: true, AllowedTools: []string{"web_search"}, ModelProvider: "deepseek", SearchProvider: "zhipu"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec(`ALTER TABLE run_policies DROP COLUMN deepseek_search_channel`); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec(`PRAGMA user_version = 15`); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if err = raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+	policy, err := migrated.RunPolicy(ctx, run.ID)
+	if err != nil || policy.SearchProvider != "zhipu" || policy.DeepSeekSearchChannel != "anthropic" || policy.Revision != 2 {
+		t.Fatalf("policy=%#v err=%v", policy, err)
 	}
 }
 
@@ -464,7 +508,7 @@ func TestVersionTwelveAddsPresetPolicyAndRemovesCalculator(t *testing.T) {
 		t.Fatalf("design=%#v err=%v", design, err)
 	}
 	var version int
-	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 15 {
+	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 16 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 }

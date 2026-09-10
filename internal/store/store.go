@@ -39,15 +39,16 @@ const (
 )
 
 type RunPolicy struct {
-	RunID          string    `json:"-"`
-	MemoryMode     string    `json:"memory_mode"`
-	SkillsEnabled  bool      `json:"skills_enabled"`
-	PresetSkills   []string  `json:"preset_skills"`
-	AllowedTools   []string  `json:"allowed_tools"`
-	ModelProvider  string    `json:"model_provider"`
-	SearchProvider string    `json:"search_provider"`
-	Revision       int64     `json:"revision"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	RunID                 string    `json:"-"`
+	MemoryMode            string    `json:"memory_mode"`
+	SkillsEnabled         bool      `json:"skills_enabled"`
+	PresetSkills          []string  `json:"preset_skills"`
+	AllowedTools          []string  `json:"allowed_tools"`
+	ModelProvider         string    `json:"model_provider"`
+	SearchProvider        string    `json:"search_provider"`
+	DeepSeekSearchChannel string    `json:"deepseek_search_channel"`
+	Revision              int64     `json:"revision"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 type Student struct {
@@ -207,8 +208,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 15 {
-		return fmt.Errorf("database version %d is newer than supported version 15", version)
+	if version > 16 {
+		return fmt.Errorf("database version %d is newer than supported version 16", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -320,7 +321,36 @@ PRAGMA user_version = 1;`
 			return fmt.Errorf("migrate conversation kinds: %w", err)
 		}
 	}
+	if version < 16 {
+		if err := s.migrateDeepSeekSearchChannel(ctx); err != nil {
+			return fmt.Errorf("migrate DeepSeek search channel: %w", err)
+		}
+	}
 	return nil
+}
+
+func (s *Store) migrateDeepSeekSearchChannel(ctx context.Context) error {
+	has, err := s.tableHasColumn(ctx, "run_policies", "deepseek_search_channel")
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !has {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE run_policies ADD COLUMN deepseek_search_channel TEXT NOT NULL DEFAULT 'anthropic'`); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE run_policies SET deepseek_search_channel='anthropic' WHERE deepseek_search_channel=''`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 16`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateConversationKinds(ctx context.Context) error {
@@ -831,7 +861,7 @@ func (s *Store) CreateRunWithPolicy(ctx context.Context, id, name, sourceRunID s
 		return Run{}, err
 	}
 	policy = normalizeRunPolicy(policy)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO run_policies(run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,model_provider,search_provider,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, policy.MemoryMode, policy.SkillsEnabled, encodeTools(policy.PresetSkills), encodeTools(policy.AllowedTools), policy.ModelProvider, policy.SearchProvider, 1, ts); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO run_policies(run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,model_provider,search_provider,deepseek_search_channel,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, id, policy.MemoryMode, policy.SkillsEnabled, encodeTools(policy.PresetSkills), encodeTools(policy.AllowedTools), policy.ModelProvider, policy.SearchProvider, policy.DeepSeekSearchChannel, 1, ts); err != nil {
 		return Run{}, err
 	}
 	if sourceRunID != "" {
@@ -872,41 +902,47 @@ func normalizeRunPolicy(policy RunPolicy) RunPolicy {
 	policy.PresetSkills = presets
 	policy.ModelProvider = strings.ToLower(strings.TrimSpace(policy.ModelProvider))
 	policy.SearchProvider = strings.ToLower(strings.TrimSpace(policy.SearchProvider))
+	policy.DeepSeekSearchChannel = strings.ToLower(strings.TrimSpace(policy.DeepSeekSearchChannel))
+	if policy.DeepSeekSearchChannel == "" {
+		policy.DeepSeekSearchChannel = "anthropic"
+	}
 	return policy
 }
 
 func (s *Store) ensureRunPolicy(ctx context.Context, runID string) error {
 	now := formatTime(time.Now().UTC())
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO run_policies(run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,model_provider,search_provider,revision,updated_at)
-	 VALUES(?,'review_required',1,'[]','[]','','',1,?)`, runID, now)
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO run_policies(run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,model_provider,search_provider,deepseek_search_channel,revision,updated_at)
+	 VALUES(?,'review_required',1,'[]','[]','','','anthropic',1,?)`, runID, now)
 	return err
 }
 
 // InitializeRunProviders fills provider selections introduced after a run was
 // created. Existing teacher selections are never overwritten on restart.
-func (s *Store) InitializeRunProviders(ctx context.Context, runID, modelProvider, searchProvider string) error {
+func (s *Store) InitializeRunProviders(ctx context.Context, runID, modelProvider, searchProvider, deepSeekSearchChannel string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE run_policies
 	 SET model_provider=CASE WHEN model_provider='' THEN ? ELSE model_provider END,
-	     search_provider=CASE WHEN search_provider='' THEN ? ELSE search_provider END
-	 WHERE run_id=?`, strings.ToLower(strings.TrimSpace(modelProvider)), strings.ToLower(strings.TrimSpace(searchProvider)), runID)
+	     search_provider=CASE WHEN search_provider='' THEN ? ELSE search_provider END,
+	     deepseek_search_channel=CASE WHEN deepseek_search_channel='' THEN ? ELSE deepseek_search_channel END
+	 WHERE run_id=?`, strings.ToLower(strings.TrimSpace(modelProvider)), strings.ToLower(strings.TrimSpace(searchProvider)), strings.ToLower(strings.TrimSpace(deepSeekSearchChannel)), runID)
 	return err
 }
 
 func (s *Store) RunPolicy(ctx context.Context, runID string) (RunPolicy, error) {
 	var policy RunPolicy
 	var presets, allowed, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,model_provider,search_provider,revision,updated_at FROM run_policies WHERE run_id=?`, runID).Scan(&policy.RunID, &policy.MemoryMode, &policy.SkillsEnabled, &presets, &allowed, &policy.ModelProvider, &policy.SearchProvider, &policy.Revision, &updated)
+	err := s.db.QueryRowContext(ctx, `SELECT run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,model_provider,search_provider,deepseek_search_channel,revision,updated_at FROM run_policies WHERE run_id=?`, runID).Scan(&policy.RunID, &policy.MemoryMode, &policy.SkillsEnabled, &presets, &allowed, &policy.ModelProvider, &policy.SearchProvider, &policy.DeepSeekSearchChannel, &policy.Revision, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err = s.ensureRunPolicy(ctx, runID); err != nil {
 			return RunPolicy{}, err
 		}
-		err = s.db.QueryRowContext(ctx, `SELECT run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,model_provider,search_provider,revision,updated_at FROM run_policies WHERE run_id=?`, runID).Scan(&policy.RunID, &policy.MemoryMode, &policy.SkillsEnabled, &presets, &allowed, &policy.ModelProvider, &policy.SearchProvider, &policy.Revision, &updated)
+		err = s.db.QueryRowContext(ctx, `SELECT run_id,memory_mode,skills_enabled,preset_skills,allowed_tools,model_provider,search_provider,deepseek_search_channel,revision,updated_at FROM run_policies WHERE run_id=?`, runID).Scan(&policy.RunID, &policy.MemoryMode, &policy.SkillsEnabled, &presets, &allowed, &policy.ModelProvider, &policy.SearchProvider, &policy.DeepSeekSearchChannel, &policy.Revision, &updated)
 	}
 	if err != nil {
 		return RunPolicy{}, err
 	}
 	policy.AllowedTools = decodeTools(allowed)
 	policy.PresetSkills = decodeTools(presets)
+	policy = normalizeRunPolicy(policy)
 	policy.UpdatedAt, _ = parseTime(updated)
 	return policy, nil
 }
@@ -914,8 +950,8 @@ func (s *Store) RunPolicy(ctx context.Context, runID string) (RunPolicy, error) 
 func (s *Store) SetRunPolicy(ctx context.Context, runID string, policy RunPolicy) (RunPolicy, error) {
 	policy = normalizeRunPolicy(policy)
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE run_policies SET memory_mode=?,skills_enabled=?,preset_skills=?,allowed_tools=?,model_provider=?,search_provider=?,revision=revision+1,updated_at=?
-	 WHERE run_id=? AND EXISTS(SELECT 1 FROM runs WHERE id=? AND status='active')`, policy.MemoryMode, policy.SkillsEnabled, encodeTools(policy.PresetSkills), encodeTools(policy.AllowedTools), policy.ModelProvider, policy.SearchProvider, formatTime(now), runID, runID)
+	res, err := s.db.ExecContext(ctx, `UPDATE run_policies SET memory_mode=?,skills_enabled=?,preset_skills=?,allowed_tools=?,model_provider=?,search_provider=?,deepseek_search_channel=?,revision=revision+1,updated_at=?
+	 WHERE run_id=? AND EXISTS(SELECT 1 FROM runs WHERE id=? AND status='active')`, policy.MemoryMode, policy.SkillsEnabled, encodeTools(policy.PresetSkills), encodeTools(policy.AllowedTools), policy.ModelProvider, policy.SearchProvider, policy.DeepSeekSearchChannel, formatTime(now), runID, runID)
 	if err != nil {
 		return RunPolicy{}, err
 	}

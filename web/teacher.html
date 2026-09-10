@@ -118,6 +118,9 @@
         display: grid;
         gap: 7px;
       }
+      .policy-field.muted {
+        opacity: 0.58;
+      }
       .policy-field > span {
         color: #667085;
         font-size: 0.88rem;
@@ -234,7 +237,12 @@
             <label class="policy-field">
               <span>联网搜索服务</span>
               <select id="policySearchProvider"></select>
-              <small>DeepSeek 托管搜索只能与 DeepSeek 模型组合；Qwen 可使用智谱搜索或关闭。</small>
+              <small>DeepSeek 搜索只能与 DeepSeek 模型组合；Qwen 可使用智谱搜索或关闭。</small>
+            </label>
+            <label class="policy-field" id="deepSeekSearchChannelField">
+              <span>DeepSeek 搜索通道</span>
+              <select id="policyDeepSeekSearchChannel"></select>
+              <small>Anthropic Messages 当前可用；Responses 保留，待官方恢复后可手动切回。</small>
             </label>
             <label class="policy-field">
               <span>Memory 模式</span>
@@ -258,7 +266,7 @@
               <span>允许使用的工具</span>
               <div id="policyTools" class="policy-tools"></div>
             </div>
-            <button id="savePolicy">保存课堂设置</button>
+            <button id="savePolicy" type="button">保存课堂设置</button>
           </div>
           <p id="policyStatus" role="status"></p>
         </section>
@@ -404,6 +412,7 @@
         return {
           model_provider: $("policyModelProvider").value,
           search_provider: $("policySearchProvider").value,
+          deepseek_search_channel: $("policyDeepSeekSearchChannel").value,
           memory_mode: $("policyMemoryMode").value,
           skills_enabled: $("policySkillsEnabled").checked,
           preset_skills: [...$("policyPresets").querySelectorAll("input:checked")].map(
@@ -440,6 +449,20 @@
               const option = document.createElement("option");
               option.value = name;
               option.textContent = providerLabel(name);
+              return option;
+            }),
+          );
+        }
+        const searchChannels = wallState.available_deepseek_search_channels || ["anthropic", "responses"];
+        const channelKey = searchChannels.join("\u0000");
+        if ($("policyDeepSeekSearchChannel").dataset.key !== channelKey) {
+          $("policyDeepSeekSearchChannel").dataset.key = channelKey;
+          $("policyDeepSeekSearchChannel").replaceChildren(
+            ...searchChannels.map((name) => {
+              const option = document.createElement("option");
+              option.value = name;
+              option.textContent =
+                name === "anthropic" ? "Anthropic Messages（当前推荐）" : "Responses（保留待恢复）";
               return option;
             }),
           );
@@ -490,6 +513,8 @@
         if (!policyDirty) {
           $("policyModelProvider").value = wallState.policy.model_provider;
           $("policySearchProvider").value = wallState.policy.search_provider;
+          $("policyDeepSeekSearchChannel").value =
+            wallState.policy.deepseek_search_channel || "anthropic";
           $("policyMemoryMode").value = wallState.policy.memory_mode;
           $("policySkillsEnabled").checked = wallState.policy.skills_enabled !== false;
           const enabled = new Set(wallState.policy.allowed_tools || []);
@@ -500,6 +525,11 @@
           $("policyPresets")
             .querySelectorAll("input")
             .forEach((input) => (input.checked = enabledPresets.has(input.value)));
+          const loadedRevision = String(wallState.policy.revision || "");
+          if (!policyBusy && $("policyStatus").dataset.revision !== loadedRevision) {
+            $("policyStatus").dataset.revision = loadedRevision;
+            $("policyStatus").textContent = `已从服务器读取课堂设置（版本 ${loadedRevision || "未知"}）：${providerLabel(wallState.policy.model_provider)} / ${providerLabel(wallState.policy.search_provider)}`;
+          }
         }
         $("policySearchProvider")
           .querySelectorAll("option")
@@ -508,6 +538,9 @@
           );
         $("policyModelProvider").disabled = policyBusy;
         $("policySearchProvider").disabled = policyBusy;
+        const deepSeekSearchSelected = $("policySearchProvider").value === "deepseek";
+        $("deepSeekSearchChannelField").classList.toggle("muted", !deepSeekSearchSelected);
+        $("policyDeepSeekSearchChannel").disabled = policyBusy || !deepSeekSearchSelected;
         $("policyMemoryMode").disabled = policyBusy;
         $("policySkillsEnabled").disabled = policyBusy;
         $("policyTools")
@@ -516,8 +549,12 @@
         $("policyPresets")
           .querySelectorAll("input")
           .forEach((input) => (input.disabled = policyBusy || !$("policySkillsEnabled").checked));
-        $("savePolicy").disabled = policyBusy || !policyDirty;
-        $("savePolicy").textContent = policyBusy ? "正在保存…" : "保存课堂设置";
+        $("savePolicy").disabled = policyBusy;
+        $("savePolicy").textContent = policyBusy
+          ? "正在保存…"
+          : policyDirty
+            ? "保存课堂设置（有改动）"
+            : "重新保存当前设置";
       }
       function markPolicyDirty() {
         policyDirty = true;
@@ -535,18 +572,28 @@
         markPolicyDirty();
       };
       $("policySearchProvider").onchange = markPolicyDirty;
+      $("policyDeepSeekSearchChannel").onchange = markPolicyDirty;
       $("savePolicy").onclick = async () => {
-        if (!wallState || policyBusy || !policyDirty) return;
+        if (!wallState || policyBusy) return;
+        const requested = selectedPolicy();
+        const previousRevision = Number(wallState.policy?.revision || 0);
         policyBusy = true;
         renderPolicy();
         try {
           const policy = await api("/api/teacher/policy", {
             method: "PUT",
-            body: JSON.stringify(selectedPolicy()),
+            body: JSON.stringify(requested),
           });
+          for (const key of ["model_provider", "search_provider", "deepseek_search_channel", "memory_mode", "skills_enabled"]) {
+            if (policy[key] !== requested[key]) throw new Error(`服务器返回的 ${key} 与所选设置不一致`);
+          }
+          if (Number(policy.revision || 0) <= previousRevision) {
+            throw new Error("服务器没有生成新的设置版本");
+          }
           wallState.policy = policy;
           policyDirty = false;
-          $("policyStatus").textContent = "课堂设置已保存，并同步给学生";
+          $("policyStatus").dataset.revision = String(policy.revision);
+          $("policyStatus").textContent = `课堂设置已保存并同步给学生（版本 ${policy.revision}）`;
         } catch (e) {
           $("policyStatus").textContent = "保存失败：" + e.message;
         } finally {
@@ -554,6 +601,11 @@
           renderPolicy();
         }
       };
+      window.addEventListener("beforeunload", (event) => {
+        if (!policyDirty) return;
+        event.preventDefault();
+        event.returnValue = "";
+      });
       function t(v, tag = "div") {
         const e = document.createElement(tag);
         e.textContent = v;

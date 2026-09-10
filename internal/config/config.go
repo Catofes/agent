@@ -12,51 +12,52 @@ import (
 )
 
 type Config struct {
-	ListenAddr           string
-	DatabasePath         string
-	StudentsCSV          string
-	DeepSeekBaseURL      string
-	DeepSeekModel        string
-	DeepSeekAPIKey       string
-	QwenBaseURL          string
-	QwenModel            string
-	QwenAPIKey           string
-	QwenReasoningEffort  string
-	QwenInputPricePerM   float64
-	QwenOutputPricePerM  float64
-	WebSearchProvider    string
-	ZhipuSearchAPIKey    string
-	ZhipuSearchEngine    string
-	RunnerURL            string
-	RunnerToken          string
-	RunnerTimeout        time.Duration
-	MaxPythonCodeChars   int
-	MaxArtifactBytes     int64
-	AdminPassword        string
-	AnonymousHMACKey     string
-	CookieSecure         bool
-	RequireNameInitial   bool
-	SessionTTL           time.Duration
-	LLMTimeout           time.Duration
-	LLMConcurrency       int
-	StudentTokenBudget   int64
-	DefaultMaxTurns      int
-	MinMaxTurns          int
-	MaxMaxTurns          int
-	MaxToolCalls         int
-	MaxPersonaChars      int
-	MaxSkillChars        int
-	MaxInputChars        int
-	MaxOutputChars       int
-	MaxReasoningChars    int
-	MaxMemoryItems       int
-	MaxMemoryChars       int
-	MaxMemoryTokens      int
-	MemoryExtractTimeout time.Duration
-	InputPricePerM       float64
-	OutputPricePerM      float64
-	InitialRunName       string
-	Version              string
+	ListenAddr            string
+	DatabasePath          string
+	StudentsCSV           string
+	DeepSeekBaseURL       string
+	DeepSeekModel         string
+	DeepSeekAPIKey        string
+	QwenBaseURL           string
+	QwenModel             string
+	QwenAPIKey            string
+	QwenReasoningEffort   string
+	QwenInputPricePerM    float64
+	QwenOutputPricePerM   float64
+	WebSearchProvider     string
+	DeepSeekSearchChannel string
+	ZhipuSearchAPIKey     string
+	ZhipuSearchEngine     string
+	RunnerURL             string
+	RunnerToken           string
+	RunnerTimeout         time.Duration
+	MaxPythonCodeChars    int
+	MaxArtifactBytes      int64
+	AdminPassword         string
+	AnonymousHMACKey      string
+	CookieSecure          bool
+	RequireNameInitial    bool
+	SessionTTL            time.Duration
+	LLMTimeout            time.Duration
+	LLMConcurrency        int
+	StudentTokenBudget    int64
+	DefaultMaxTurns       int
+	MinMaxTurns           int
+	MaxMaxTurns           int
+	MaxToolCalls          int
+	MaxPersonaChars       int
+	MaxSkillChars         int
+	MaxInputChars         int
+	MaxOutputChars        int
+	MaxReasoningChars     int
+	MaxMemoryItems        int
+	MaxMemoryChars        int
+	MaxMemoryTokens       int
+	MemoryExtractTimeout  time.Duration
+	InputPricePerM        float64
+	OutputPricePerM       float64
+	InitialRunName        string
+	Version               string
 }
 
 func Load(version string) (Config, error) {
@@ -74,6 +75,7 @@ func Load(version string) (Config, error) {
 	flag.Float64Var(&c.QwenInputPricePerM, "qwen-input-price-per-million", envFloat("QWEN_INPUT_PRICE_PER_MILLION", 0), "Qwen input price per million tokens")
 	flag.Float64Var(&c.QwenOutputPricePerM, "qwen-output-price-per-million", envFloat("QWEN_OUTPUT_PRICE_PER_MILLION", 0), "Qwen output price per million tokens")
 	flag.StringVar(&c.WebSearchProvider, "web-search-provider", env("WEB_SEARCH_PROVIDER", "disabled"), "web search provider: disabled, zhipu, or deepseek")
+	flag.StringVar(&c.DeepSeekSearchChannel, "deepseek-search-channel", env("DEEPSEEK_SEARCH_CHANNEL", "anthropic"), "DeepSeek web search channel: anthropic or responses")
 	flag.StringVar(&c.ZhipuSearchAPIKey, "zhipu-search-api-key", os.Getenv("ZHIPU_SEARCH_API_KEY"), "Zhipu Web Search API key")
 	flag.StringVar(&c.ZhipuSearchEngine, "zhipu-search-engine", env("ZHIPU_SEARCH_ENGINE", "search_std"), "Zhipu search engine: search_std, search_pro, search_pro_sogou, or search_pro_quark")
 	flag.StringVar(&c.RunnerURL, "runner-url", os.Getenv("RUNNER_URL"), "internal Python runner base URL")
@@ -92,7 +94,7 @@ func Load(version string) (Config, error) {
 	flag.IntVar(&c.DefaultMaxTurns, "default-max-turns", envInt("DEFAULT_MAX_TURNS", 30), "default model iterations per chat")
 	flag.IntVar(&c.MinMaxTurns, "min-max-turns", envInt("MIN_MAX_TURNS", 1), "minimum selectable model iterations")
 	flag.IntVar(&c.MaxMaxTurns, "max-max-turns", envInt("MAX_MAX_TURNS", 60), "maximum selectable model iterations")
-	flag.IntVar(&c.MaxToolCalls, "max-tool-calls", envInt("MAX_TOOL_CALLS", 8), "tool call cap per chat")
+	flag.IntVar(&c.MaxToolCalls, "max-tool-calls", envInt("MAX_TOOL_CALLS", 30), "tool call cap per chat")
 	flag.IntVar(&c.MaxPersonaChars, "max-persona-chars", envInt("MAX_PERSONA_CHARS", 4000), "persona character limit")
 	flag.IntVar(&c.MaxSkillChars, "max-skill-chars", envInt("MAX_SKILL_CHARS", 12000), "skill character limit")
 	flag.IntVar(&c.MaxInputChars, "max-input-chars", envInt("MAX_INPUT_CHARS", 12000), "chat input character limit")
@@ -133,6 +135,13 @@ func (c Config) Validate() error {
 	}
 	if provider == "zhipu" && strings.TrimSpace(c.ZhipuSearchAPIKey) == "" {
 		return errors.New("ZHIPU_SEARCH_API_KEY is required when WEB_SEARCH_PROVIDER=zhipu")
+	}
+	channel := strings.ToLower(strings.TrimSpace(c.DeepSeekSearchChannel))
+	if channel == "" {
+		channel = "anthropic"
+	}
+	if channel != "anthropic" && channel != "responses" {
+		return errors.New("DEEPSEEK_SEARCH_CHANNEL must be anthropic or responses")
 	}
 	effort := strings.ToLower(strings.TrimSpace(c.QwenReasoningEffort))
 	if effort == "" {

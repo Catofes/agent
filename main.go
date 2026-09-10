@@ -60,23 +60,24 @@ func main() {
 		runnerClient = runnerapi.NewClient(cfg.RunnerURL, cfg.RunnerToken, &http.Client{Timeout: cfg.RunnerTimeout})
 		toolItems = append(toolItems, &tools.PythonExecute{Runner: runnerClient, Store: st, Timeout: cfg.RunnerTimeout, MaxCodeChars: cfg.MaxPythonCodeChars})
 	}
-	if strings.TrimSpace(cfg.ZhipuSearchAPIKey) != "" {
-		toolItems = append(toolItems, tools.NewZhipuSearch(cfg.ZhipuSearchAPIKey, cfg.ZhipuSearchEngine))
-	} else {
-		toolItems = append(toolItems, tools.HostedWebSearch{})
-	}
-	registry := tools.NewRegistry(toolItems...)
 	httpClient := &http.Client{Transport: &http.Transport{MaxIdleConns: 100, MaxIdleConnsPerHost: 50, IdleConnTimeout: 90 * time.Second}}
-	client := &agent.DeepSeekClient{BaseURL: cfg.DeepSeekBaseURL, APIKey: cfg.DeepSeekAPIKey, UseResponses: true, HTTP: httpClient}
+	var zhipuSearch tools.Tool
+	if strings.TrimSpace(cfg.ZhipuSearchAPIKey) != "" {
+		zhipuSearch = tools.NewZhipuSearch(cfg.ZhipuSearchAPIKey, cfg.ZhipuSearchEngine)
+	}
+	deepSeekSearch := &tools.DeepSeekSearch{BaseURL: cfg.DeepSeekBaseURL, APIKey: cfg.DeepSeekAPIKey, Model: cfg.DeepSeekModel, HTTP: httpClient}
+	toolItems = append(toolItems, tools.NewRoutedWebSearch(zhipuSearch, deepSeekSearch))
+	registry := tools.NewRegistry(toolItems...)
+	client := &agent.DeepSeekClient{BaseURL: cfg.DeepSeekBaseURL, APIKey: cfg.DeepSeekAPIKey, HTTP: httpClient}
 	engine := agent.NewEngine(st, client, registry, cfg.DeepSeekModel, cfg.AnonymousHMACKey, cfg.LLMTimeout, cfg.LLMConcurrency)
-	engine.RegisterProvider("deepseek", agent.ModelProvider{Client: client, Model: cfg.DeepSeekModel, MemoryExtractor: agent.LLMMemoryExtractor{Client: client, Model: cfg.DeepSeekModel}, HostedWebSearch: true, InputPricePerM: cfg.InputPricePerM, OutputPricePerM: cfg.OutputPricePerM})
+	engine.RegisterProvider("deepseek", agent.ModelProvider{Client: client, Model: cfg.DeepSeekModel, MemoryExtractor: agent.LLMMemoryExtractor{Client: client, Model: cfg.DeepSeekModel}, InputPricePerM: cfg.InputPricePerM, OutputPricePerM: cfg.OutputPricePerM})
 	if strings.TrimSpace(cfg.QwenAPIKey) != "" {
 		qwen := &agent.QwenClient{BaseURL: cfg.QwenBaseURL, APIKey: cfg.QwenAPIKey, ReasoningEffort: cfg.QwenReasoningEffort, HTTP: httpClient}
 		engine.RegisterProvider("qwen", agent.ModelProvider{Client: qwen, Model: cfg.QwenModel, MemoryExtractor: agent.LLMMemoryExtractor{Client: qwen, Model: cfg.QwenModel}, InputPricePerM: cfg.QwenInputPricePerM, OutputPricePerM: cfg.QwenOutputPricePerM})
 	}
 	engine.TokenBudget = cfg.StudentTokenBudget
 	engine.MaxToolCalls = cfg.MaxToolCalls
-	engine.MaxToolCallsByName = map[string]int{"web_search": 2, "web_fetch": 2, "recall_memory": 2, "python_execute": 2}
+	engine.MaxToolCallsByName = map[string]int{"web_search": 10, "web_fetch": 10, "recall_memory": 5, "python_execute": 5}
 	engine.MaxOutputChars = cfg.MaxOutputChars
 	engine.MaxReasoningChars = cfg.MaxReasoningChars
 	engine.MemoryExtractor = agent.LLMMemoryExtractor{Client: client, Model: cfg.DeepSeekModel}
@@ -88,12 +89,13 @@ func main() {
 	engine.OutputPricePerM = cfg.OutputPricePerM
 	webFS, _ := fs.Sub(assets, "web")
 	templateFS, _ := fs.Sub(assets, "data/templates")
-	if err = st.InitializeRunProviders(context.Background(), run.ID, "deepseek", searchProvider); err != nil {
+	if err = st.InitializeRunProviders(context.Background(), run.ID, "deepseek", searchProvider, cfg.DeepSeekSearchChannel); err != nil {
 		logger.Error("initialize classroom providers", "error", err)
 		os.Exit(1)
 	}
 	app := server.New(cfg, st, engine, webFS, templateFS, logger)
 	app.AvailableSearchProviders = []string{"disabled", "deepseek"}
+	app.AvailableDeepSeekSearchChannels = []string{tools.DeepSeekSearchAnthropic, tools.DeepSeekSearchResponses}
 	if strings.TrimSpace(cfg.ZhipuSearchAPIKey) != "" {
 		app.AvailableSearchProviders = append(app.AvailableSearchProviders, "zhipu")
 	}

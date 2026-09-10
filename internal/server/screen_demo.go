@@ -348,7 +348,7 @@ func (s *Server) chatScreenDemo(w http.ResponseWriter, r *http.Request) {
 		RunID: demo.RunID, StudentID: demo.StudentID, ConversationID: demo.ConversationID,
 		TurnID: turnID, Input: in.Message, Design: demo.Design, Skills: demo.Skills,
 		MemoryMode: store.MemoryModeDisabled, DisableMemory: true,
-		PolicyRevision: policy.Revision, ModelProvider: policy.ModelProvider, SearchProvider: policy.SearchProvider,
+		PolicyRevision: policy.Revision, ModelProvider: policy.ModelProvider, SearchProvider: policy.SearchProvider, DeepSeekSearchChannel: policy.DeepSeekSearchChannel,
 		BeforeModelCall: beforeModelCall, ToolsForCall: toolsForCall, SkillsAllowedForCall: skillsAllowedForCall,
 	}, emit)
 	if err != nil && !errors.Is(err, context.Canceled) {

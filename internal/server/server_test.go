@@ -662,16 +662,20 @@ func TestTeacherCanSwitchConfiguredModelAndSearchProviders(t *testing.T) {
 		t.Fatal(status)
 	}
 	status, body, _ := requestJSON(t, teacher, http.MethodGet, "/api/teacher/policy", nil)
-	if status != http.StatusOK || len(body["available_model_providers"].([]any)) != 2 || len(body["available_search_providers"].([]any)) != 3 {
+	if status != http.StatusOK || len(body["available_model_providers"].([]any)) != 2 || len(body["available_search_providers"].([]any)) != 3 || len(body["available_deepseek_search_channels"].([]any)) != 2 {
 		t.Fatalf("provider options status=%d body=%#v", status, body)
 	}
-	status, policy, _ := requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "qwen", "search_provider": "zhipu"})
-	if status != http.StatusOK || policy["model_provider"] != "qwen" || policy["search_provider"] != "zhipu" {
+	status, policy, _ := requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "qwen", "search_provider": "zhipu", "deepseek_search_channel": "responses"})
+	if status != http.StatusOK || policy["model_provider"] != "qwen" || policy["search_provider"] != "zhipu" || policy["deepseek_search_channel"] != "responses" || policy["revision"].(float64) != 2 {
 		t.Fatalf("switch status=%d policy=%#v", status, policy)
 	}
 	status, body, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "qwen", "search_provider": "deepseek"})
 	if status != http.StatusBadRequest || body["error"].(map[string]any)["code"] != "INCOMPATIBLE_PROVIDERS" {
 		t.Fatalf("incompatible switch status=%d body=%#v", status, body)
+	}
+	status, body, _ = requestJSON(t, teacher, http.MethodPut, "/api/teacher/policy", map[string]any{"memory_mode": store.MemoryModeReviewRequired, "skills_enabled": true, "preset_skills": []string{}, "allowed_tools": []string{}, "model_provider": "deepseek", "search_provider": "deepseek", "deepseek_search_channel": "unknown"})
+	if status != http.StatusBadRequest || body["error"].(map[string]any)["code"] != "DEEPSEEK_SEARCH_CHANNEL_UNAVAILABLE" {
+		t.Fatalf("invalid channel status=%d body=%#v", status, body)
 	}
 }
 

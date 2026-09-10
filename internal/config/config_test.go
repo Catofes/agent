@@ -81,6 +81,18 @@ func TestValidateWebSearchProvider(t *testing.T) {
 	})
 }
 
+func TestValidateDeepSeekSearchChannel(t *testing.T) {
+	cfg := validConfig()
+	cfg.DeepSeekSearchChannel = "responses"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.DeepSeekSearchChannel = "legacy"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "DEEPSEEK_SEARCH_CHANNEL") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestValidateQwenReasoningEffort(t *testing.T) {
 	cfg := validConfig()
 	cfg.QwenReasoningEffort = "fastest"
