@@ -1321,7 +1321,8 @@
         box.className = "action";
         const toolName = toolLabel(ev.tool);
         heading.textContent = `${ev.step === "" ? "" : `第 ${ev.step} 步：`}${toolName}｜${ev.summary || ""}`;
-        detailsSummary.textContent = "查看技术细节";
+        detailsSummary.textContent =
+          ev.tool === "web_search" ? "查看搜索结果" : "查看技术细节";
         technical.className = "technical-detail";
         result.className = "tool-result-detail hidden";
         result.append(text("strong", "工具结果"), resultText);
@@ -1494,7 +1495,11 @@
             liveToolActions.set(ev.step, actionBox(ev));
           }
           else if (ev.type === "tool_result") {
-            finishAction(liveToolActions.get(ev.step), ev.summary, ev.artifacts);
+            finishAction(
+              liveToolActions.get(ev.step),
+              ev.result || ev.summary,
+              ev.artifacts,
+            );
             if (ev.artifacts?.length) mergeArtifacts(ev.artifacts);
           }
           else if (ev.type === "turn_end") {

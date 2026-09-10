@@ -42,6 +42,7 @@ type Event struct {
 	Step      int              `json:"step,omitempty"`
 	Tool      string           `json:"tool,omitempty"`
 	Summary   string           `json:"summary,omitempty"`
+	Result    string           `json:"result,omitempty"`
 	Detail    json.RawMessage  `json:"detail,omitempty"`
 	Delta     string           `json:"delta,omitempty"`
 	Reason    string           `json:"reason,omitempty"`
@@ -412,7 +413,8 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 			t, ok := e.Tools.Get(call.Function.Name)
 			var result tools.Result
 			var toolErr error
-			if call.Function.Name == "load_skill" {
+			switch call.Function.Name {
+			case "load_skill":
 				var loaded store.Skill
 				if req.SkillsAllowedForCall != nil {
 					skillsAllowed, toolErr = req.SkillsAllowedForCall(ctx)
@@ -433,7 +435,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 						return err
 					}
 				}
-			} else if call.Function.Name == "recall_memory" {
+			case "recall_memory":
 				var recalled []store.Memory
 				recalled, result, toolErr = e.recallMemory(ctx, req, call.Function.Arguments)
 				if toolErr == nil && mergeMemoryReceipts(&receiptEvent, recalled) {
@@ -445,7 +447,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 						return err
 					}
 				}
-			} else {
+			default:
 				if req.ToolsForCall != nil {
 					effectiveTools, toolErr = req.ToolsForCall(ctx)
 				}
@@ -467,7 +469,7 @@ func (e *Engine) Run(ctx context.Context, req Request, emit func(Event) error) e
 				return err
 			}
 			messages = append(messages, Message{Role: "tool", ToolCallID: call.ID, Content: modelText})
-			if err := emit(Event{Type: "tool_result", Step: toolCount, Tool: call.Function.Name, Summary: result.Summary, Success: &success, Artifacts: result.Artifacts}); err != nil {
+			if err := emit(Event{Type: "tool_result", Step: toolCount, Tool: call.Function.Name, Summary: result.Summary, Result: modelText, Success: &success, Artifacts: result.Artifacts}); err != nil {
 				return err
 			}
 		}

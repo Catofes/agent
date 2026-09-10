@@ -217,7 +217,13 @@ func TestEngineRoutesLocalSearchFromRequestPolicy(t *testing.T) {
 	engine := NewEngine(st, fake, tools.NewRegistry(router), "model", "secret", time.Second, 1)
 	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 30, 1000
 	engine.MaxToolCallsByName = map[string]int{"web_search": 10}
-	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "搜索", SearchProvider: "zhipu", DeepSeekSearchChannel: "anthropic", Design: store.Design{Tools: []string{"web_search"}, MaxTurns: 2}}, func(Event) error { return nil })
+	var toolResult Event
+	err := engine.Run(ctx, Request{RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn", Input: "搜索", SearchProvider: "zhipu", DeepSeekSearchChannel: "anthropic", Design: store.Design{Tools: []string{"web_search"}, MaxTurns: 2}}, func(event Event) error {
+		if event.Type == "tool_result" {
+			toolResult = event
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +233,9 @@ func TestEngineRoutesLocalSearchFromRequestPolicy(t *testing.T) {
 	last := fake.requests[1].Messages[len(fake.requests[1].Messages)-1]
 	if last.Role != "tool" || last.Content != "zhipu routed result" {
 		t.Fatalf("tool result=%#v", last)
+	}
+	if toolResult.Result != "zhipu routed result" {
+		t.Fatalf("visible tool result=%#v", toolResult)
 	}
 }
 

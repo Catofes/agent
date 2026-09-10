@@ -108,81 +108,108 @@
       .msg.user {
         background: #e8edff;
       }
-      .policy-grid {
+      .policy-stack {
         display: grid;
-        grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr) minmax(260px, 2fr) auto;
-        gap: 14px;
-        align-items: end;
+        gap: 16px;
+        margin-top: 16px;
+      }
+      .policy-section {
+        padding: 15px;
+        border: 1px solid #e1e5ee;
+        border-radius: 12px;
+        background: #fafbfe;
+      }
+      .policy-section h3 {
+        margin: 0 0 12px;
+        font-size: 0.98rem;
+      }
+      .policy-section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 12px;
+      }
+      .policy-section-head h3 { margin: 0; }
+      .policy-select-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
       }
       .policy-field {
         display: grid;
         gap: 7px;
-      }
-      .policy-field.muted {
-        opacity: 0.58;
+        min-width: 0;
       }
       .policy-field > span {
         color: #667085;
         font-size: 0.88rem;
         font-weight: 650;
       }
-      .policy-switch > span:nth-child(2) {
+      .policy-switch {
         display: flex;
         align-items: center;
         gap: 8px;
-        min-height: 43px;
         color: #302c49;
+        font-weight: 650;
+        cursor: pointer;
       }
       .policy-switch input { width: auto; }
-      .policy-switch small { color: #667085; line-height: 1.4; }
       .policy-tools {
-        display: flex;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         min-height: 43px;
-        align-items: center;
-        gap: 12px;
-        padding: 8px 12px;
-        border: 1px solid #d9dce5;
-        border-radius: 11px;
-        background: #fff;
+        gap: 8px;
       }
       .policy-tools label {
         display: flex;
         align-items: center;
         gap: 7px;
+        min-width: 0;
+        padding: 10px 12px;
+        border: 1px solid #d9dce5;
+        border-radius: 10px;
+        background: #fff;
+        cursor: pointer;
+      }
+      .policy-tools label:has(input:checked) {
+        border-color: #c8c3f7;
+        background: #f3f1ff;
       }
       .policy-tools input {
         min-height: auto;
         accent-color: #5b4ee8;
       }
-      .policy-presets { grid-column: 1 / -1; }
       .preset-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
       .preset-group { min-width: 0; margin: 0; padding: 11px; border: 1px solid #e1e5ee; border-radius: 10px; }
       .preset-group legend { padding: 0 5px; color: #475467; font-size: .84rem; font-weight: 700; }
       .preset-group label { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 7px; padding: 6px 2px; }
+      .preset-group label:has(input:checked) strong { color: #4b3fd0; }
       .preset-group label span { display: grid; gap: 2px; }
       .preset-group label small { color: #667085; font-weight: 400; line-height: 1.35; }
       .preset-group input { width: auto; margin-top: 3px; }
       #policyStatus {
         min-height: 1.4em;
-        margin: 8px 0 0;
+        margin: 12px 0 0;
         color: #667085;
       }
+      .policy-actions { display: flex; align-items: center; justify-content: flex-end; }
       @media (max-width: 1080px) {
-        .policy-grid {
+        .policy-select-grid, .policy-tools {
           grid-template-columns: 1fr 1fr;
-        }
-        #savePolicy {
-          justify-self: start;
         }
       }
       @media (max-width: 760px) {
         .detail {
           grid-template-columns: 1fr;
         }
-        .policy-grid {
+        .policy-select-grid, .policy-tools {
           grid-template-columns: 1fr;
         }
         .preset-groups { grid-template-columns: 1fr; }
+        .policy-section-head { align-items: flex-start; flex-direction: column; }
+        .policy-actions { justify-content: stretch; }
+        #savePolicy { width: 100%; }
       }
     </style>
     <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css" />
@@ -223,50 +250,48 @@
         </header>
         <section class="card" aria-labelledby="policyTitle">
           <div class="top">
-            <div>
-              <h2 id="policyTitle" style="margin-bottom: 4px">课堂能力</h2>
-              <div class="status">统一控制本场课堂的模型、搜索、Skill、Memory 与 Agent 可用工具。</div>
-            </div>
+            <h2 id="policyTitle">课堂能力</h2>
           </div>
-          <div class="policy-grid">
-            <label class="policy-field">
-              <span>模型服务</span>
-              <select id="policyModelProvider"></select>
-              <small>只显示服务器已配置密钥的服务；切换后新回答立即生效。</small>
-            </label>
-            <label class="policy-field">
-              <span>联网搜索服务</span>
-              <select id="policySearchProvider"></select>
-              <small>DeepSeek 搜索只能与 DeepSeek 模型组合；Qwen 可使用智谱搜索或关闭。</small>
-            </label>
-            <label class="policy-field" id="deepSeekSearchChannelField">
-              <span>DeepSeek 搜索通道</span>
-              <select id="policyDeepSeekSearchChannel"></select>
-              <small>Anthropic Messages 当前可用；Responses 保留，待官方恢复后可手动切回。</small>
-            </label>
-            <label class="policy-field">
-              <span>Memory 模式</span>
-              <select id="policyMemoryMode">
-                <option value="disabled">关闭</option>
-                <option value="review_required">学生确认后记住</option>
-                <option value="adaptive">自然积累</option>
-              </select>
-            </label>
-            <label class="policy-field policy-switch">
-              <span>Skill</span>
-              <span><input id="policySkillsEnabled" type="checkbox" /> 允许学生创建和使用 Skill</span>
-              <small>关闭后学生端不显示 Skill，已保存内容会保留但不会交给 Agent。</small>
-            </label>
-            <div class="policy-field policy-presets">
-              <span>允许导入的预设 Skill</span>
-              <small>按本场课程选择。学生只能看到已勾选的预设，并从中创建自己的可编辑副本。</small>
+          <div class="policy-stack">
+            <section class="policy-section" aria-labelledby="serviceSettingsTitle">
+              <h3 id="serviceSettingsTitle">服务与记忆</h3>
+              <div class="policy-select-grid">
+                <label class="policy-field">
+                  <span>模型服务</span>
+                  <select id="policyModelProvider"></select>
+                </label>
+                <label class="policy-field">
+                  <span>联网搜索</span>
+                  <select id="policySearchProvider"></select>
+                </label>
+                <label class="policy-field" id="deepSeekSearchChannelField">
+                  <span>搜索通道</span>
+                  <select id="policyDeepSeekSearchChannel"></select>
+                </label>
+                <label class="policy-field">
+                  <span>Memory</span>
+                  <select id="policyMemoryMode">
+                    <option value="disabled">关闭</option>
+                    <option value="review_required">学生确认后记住</option>
+                    <option value="adaptive">自然积累</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+            <section class="policy-section" aria-labelledby="skillSettingsTitle">
+              <div class="policy-section-head">
+                <h3 id="skillSettingsTitle">Skill</h3>
+                <label class="policy-switch"><input id="policySkillsEnabled" type="checkbox" />允许学生使用 Skill</label>
+              </div>
               <div id="policyPresets" class="preset-groups"></div>
-            </div>
-            <div class="policy-field">
-              <span>允许使用的工具</span>
+            </section>
+            <section class="policy-section" aria-labelledby="toolSettingsTitle">
+              <h3 id="toolSettingsTitle">工具</h3>
               <div id="policyTools" class="policy-tools"></div>
+            </section>
+            <div class="policy-actions">
+              <button id="savePolicy" type="button">保存课堂设置</button>
             </div>
-            <button id="savePolicy" type="button">保存课堂设置</button>
           </div>
           <p id="policyStatus" role="status"></p>
         </section>
@@ -461,8 +486,7 @@
             ...searchChannels.map((name) => {
               const option = document.createElement("option");
               option.value = name;
-              option.textContent =
-                name === "anthropic" ? "Anthropic Messages（当前推荐）" : "Responses（保留待恢复）";
+              option.textContent = name === "anthropic" ? "Anthropic Messages" : "Responses";
               return option;
             }),
           );
@@ -539,7 +563,7 @@
         $("policyModelProvider").disabled = policyBusy;
         $("policySearchProvider").disabled = policyBusy;
         const deepSeekSearchSelected = $("policySearchProvider").value === "deepseek";
-        $("deepSeekSearchChannelField").classList.toggle("muted", !deepSeekSearchSelected);
+        $("deepSeekSearchChannelField").classList.toggle("hidden", !deepSeekSearchSelected);
         $("policyDeepSeekSearchChannel").disabled = policyBusy || !deepSeekSearchSelected;
         $("policyMemoryMode").disabled = policyBusy;
         $("policySkillsEnabled").disabled = policyBusy;

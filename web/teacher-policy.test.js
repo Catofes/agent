@@ -34,14 +34,21 @@ test("teacher can control classroom providers, Memory mode, and available tools"
   assert.match(html, /model_provider/);
   assert.match(html, /search_provider/);
   assert.match(html, /deepseek_search_channel/);
-  assert.match(html, /Anthropic Messages（当前推荐）/);
-  assert.match(html, /Responses（保留待恢复）/);
+  assert.match(html, /"Anthropic Messages"/);
+  assert.match(html, /"Responses"/);
   assert.match(html, /服务器没有生成新的设置版本/);
   assert.match(html, /重新保存当前设置/);
   assert.match(html, /option\.value === "deepseek"/);
   assert.match(html, /basic: "基础"/);
   assert.match(html, /physics: "物理"/);
   assert.match(html, /math: "数学"/);
+  assert.match(html, /class="policy-select-grid"/);
+  assert.match(html, /class="policy-section" aria-labelledby="skillSettingsTitle"/);
+  assert.match(html, /class="policy-section" aria-labelledby="toolSettingsTitle"/);
+  assert.match(html, /classList\.toggle\("hidden", !deepSeekSearchSelected\)/);
+  assert.doesNotMatch(html, /统一控制本场课堂/);
+  assert.doesNotMatch(html, /只显示服务器已配置密钥的服务/);
+  assert.doesNotMatch(html, /允许使用的工具/);
 });
 
 test("new classroom inherits the policy currently shown in the controls", () => {

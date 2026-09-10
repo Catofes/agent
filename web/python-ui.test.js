@@ -47,7 +47,8 @@ test("Python history uses a bounded readable action summary", () => {
 
 test("tool results stay in technical details and generated images are previewed", () => {
   assert.match(html, /className = "tool-result-detail hidden"/);
-  assert.match(html, /finishAction\(liveToolActions\.get\(ev\.step\), ev\.summary, ev\.artifacts\)/);
+  assert.match(html, /ev\.tool === "web_search" \? "查看搜索结果" : "查看技术细节"/);
+  assert.match(html, /ev\.result \|\| ev\.summary/);
   assert.match(html, /historyToolActions\.get\(m\.tool_calls\)/);
   assert.match(html, /className = "artifact-preview"/);
   assert.match(html, /image\.src = link\.href/);
