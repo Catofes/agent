@@ -1184,6 +1184,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	emptyScreen := s.screen
 	s.screenMu.Unlock()
 	s.screenHub.Publish(emptyScreen)
+	s.resetScreenDemo()
 	s.Logger.Info("run created", "run_id", created.ID, "name", created.Name)
 	writeJSON(w, 201, created)
 }
@@ -1280,7 +1281,14 @@ func (s *Server) spotlight(w http.ResponseWriter, r *http.Request) {
 	for _, conversation := range conversations {
 		titles[conversation.ID] = conversation.Title
 	}
-	state := screenState{SpotlightID: newID("screen_"), Name: st.Name, Persona: d.Persona, SkillMD: formatSkillsForDisplay(skills), Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: publicScreenMessages(history, titles, turnID), Empty: false}
+	state := screenState{SpotlightID: newID("screen_"), StudentID: st.ID, Name: st.Name, Persona: d.Persona, SkillMD: formatSkillsForDisplay(skills), Tools: d.Tools, MaxTurns: d.MaxTurns, Messages: publicScreenMessages(history, titles, turnID), Empty: false}
+	s.demoMu.RLock()
+	demoStudentID := s.screenDemo.StudentID
+	demoActive := s.screenDemo.Active
+	s.demoMu.RUnlock()
+	if demoActive && demoStudentID != st.ID {
+		s.resetScreenDemo()
+	}
 	ack := make(chan struct{})
 	s.screenMu.Lock()
 	s.screenRevision++
@@ -1376,10 +1384,12 @@ func (s *Server) screenEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, ch := s.screenHub.Subscribe()
+	demoID, demoCh := s.screenDemoHub.Subscribe()
 	s.Logger.Info("screen connected", "connection_id", id, "screen_connections", s.screenHub.Count())
 	s.wallHub.Publish(struct{}{})
 	defer func() {
 		s.screenHub.Unsubscribe(id)
+		s.screenDemoHub.Unsubscribe(demoID)
 		s.Logger.Info("screen disconnected", "connection_id", id, "screen_connections", s.screenHub.Count())
 		s.wallHub.Publish(struct{}{})
 	}()
@@ -1387,6 +1397,9 @@ func (s *Server) screenEvents(w http.ResponseWriter, r *http.Request) {
 	current := s.screen
 	s.screenMu.RUnlock()
 	sendSSE(w, "screen", current)
+	if demo := s.currentScreenDemo(); demo.Active {
+		sendSSE(w, "demo", demo)
+	}
 	flusher.Flush()
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
@@ -1399,6 +1412,12 @@ func (s *Server) screenEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			sendSSE(w, "screen", state)
+			flusher.Flush()
+		case demo, open := <-demoCh:
+			if !open {
+				return
+			}
+			sendSSE(w, "demo", demo)
 			flusher.Flush()
 		case <-tick.C:
 			_, _ = fmt.Fprint(w, ": heartbeat\n\n")

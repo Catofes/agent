@@ -132,6 +132,53 @@ func TestConversationIsolation(t *testing.T) {
 	}
 }
 
+func TestDemoConversationsStayOutOfStudentHistory(t *testing.T) {
+	ctx := context.Background()
+	st, csvPath := testStore(t)
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
+		t.Fatal(err)
+	}
+	student, err := st.CreateConversation(ctx, Conversation{ID: "student", RunID: run.ID, StudentID: "2101"})
+	if err != nil || student.Kind != ConversationKindStudent {
+		t.Fatalf("student=%#v err=%v", student, err)
+	}
+	demo, err := st.CreateConversation(ctx, Conversation{ID: "demo", RunID: run.ID, StudentID: "2101", Kind: ConversationKindDemo, Title: "大屏演示"})
+	if err != nil || demo.Kind != ConversationKindDemo {
+		t.Fatalf("demo=%#v err=%v", demo, err)
+	}
+	if _, err = st.AddMessage(ctx, Message{RunID: run.ID, StudentID: "2101", ConversationID: demo.ID, TurnID: "turn", Role: "user", Content: "演示问题"}); err != nil {
+		t.Fatal(err)
+	}
+	wall, err := st.Wall(ctx, run.ID)
+	if err != nil || len(wall) == 0 || wall[0].ChatTurns != 0 {
+		t.Fatalf("demo leaked into wall chat count: %#v err=%v", wall, err)
+	}
+	studentMessages, err := st.StudentMessages(ctx, run.ID, "2101", 0, 10)
+	if err != nil || len(studentMessages) != 0 {
+		t.Fatalf("demo leaked into student message history: %#v err=%v", studentMessages, err)
+	}
+	listed, err := st.Conversations(ctx, run.ID, "2101", 10)
+	if err != nil || len(listed) != 1 || listed[0].ID != student.ID {
+		t.Fatalf("student conversations=%#v err=%v", listed, err)
+	}
+	if _, err = st.Conversation(ctx, run.ID, "2101", demo.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("student lookup exposed demo: %v", err)
+	}
+	if _, err = st.DemoConversation(ctx, run.ID, "2101", demo.ID); err != nil {
+		t.Fatalf("demo lookup failed: %v", err)
+	}
+	if err = st.DeleteDemoConversations(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.DemoConversation(ctx, run.ID, "2101", demo.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("demo cleanup err=%v", err)
+	}
+}
+
 func TestRunPolicyDefaultsAndRevision(t *testing.T) {
 	ctx := context.Background()
 	st, _ := testStore(t)
@@ -417,7 +464,7 @@ func TestVersionTwelveAddsPresetPolicyAndRemovesCalculator(t *testing.T) {
 		t.Fatalf("design=%#v err=%v", design, err)
 	}
 	var version int
-	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 14 {
+	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 15 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 }

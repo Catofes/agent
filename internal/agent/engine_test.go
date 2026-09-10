@@ -714,6 +714,39 @@ func TestLoadedSkillCanRecallScopedConfirmedMemoryAndUpdateReceipt(t *testing.T)
 	}
 }
 
+func TestDisabledMemoryOmitsPromptContextAndRecallTool(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddMemory(ctx, store.Memory{ID: "private", RunID: run.ID, StudentID: "2101", Content: "不应进入演示的学生记忆", Status: "confirmed"}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeClient{answers: []Completion{{Content: "演示回答", Deltas: []string{"演示回答"}, TokensIn: 2, TokensOut: 2}}}
+	engine := NewEngine(st, fake, tools.NewRegistry(), "model", "secret", time.Second, 1)
+	engine.TokenBudget, engine.MaxToolCalls, engine.MaxOutputChars = 1000, 4, 1000
+	if err := engine.Run(ctx, Request{
+		RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "memory_disabled", Input: "现场测试",
+		Design: store.Design{Persona: "助手", MaxTurns: 1}, MemoryMode: store.MemoryModeDisabled, DisableMemory: true,
+	}, func(Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("requests=%d", len(fake.requests))
+	}
+	for _, message := range fake.requests[0].Messages {
+		if strings.Contains(message.Content, "不应进入演示的学生记忆") {
+			t.Fatalf("disabled Memory leaked into prompt: %#v", fake.requests[0].Messages)
+		}
+	}
+	for _, definition := range fake.requests[0].Tools {
+		if definition.Function.Name == "recall_memory" {
+			t.Fatal("recall_memory was exposed while Memory was disabled for the request")
+		}
+	}
+}
+
 func TestRecallMemoryUsesConceptMatchAndRequiresMemoryToRemainEnabled(t *testing.T) {
 	ctx := context.Background()
 	st, run := newEngineTestStore(t)

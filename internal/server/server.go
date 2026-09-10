@@ -76,6 +76,7 @@ type memoryEventItem struct {
 type screenState struct {
 	SpotlightID string          `json:"spotlight_id,omitempty"`
 	Revision    uint64          `json:"revision"`
+	StudentID   string          `json:"-"`
 	Name        string          `json:"name,omitempty"`
 	Persona     string          `json:"persona,omitempty"`
 	SkillMD     string          `json:"skill_md,omitempty"`
@@ -83,6 +84,23 @@ type screenState struct {
 	MaxTurns    int             `json:"max_turns,omitempty"`
 	Messages    []screenMessage `json:"messages,omitempty"`
 	Empty       bool            `json:"empty"`
+}
+
+type screenDemoState struct {
+	ID       string          `json:"id,omitempty"`
+	Revision uint64          `json:"revision"`
+	Active   bool            `json:"active"`
+	Name     string          `json:"name,omitempty"`
+	Status   string          `json:"status,omitempty"`
+	Running  bool            `json:"running"`
+	Messages []screenMessage `json:"messages"`
+
+	RunID          string        `json:"-"`
+	StudentID      string        `json:"-"`
+	ConversationID string        `json:"-"`
+	Design         store.Design  `json:"-"`
+	Skills         []store.Skill `json:"-"`
+	answerIndex    int
 }
 
 type screenMessage struct {
@@ -119,12 +137,18 @@ type Server struct {
 	studentMemoryHub         *TargetHub[classroomEvent]
 	wallHub                  *Hub[struct{}]
 	screenHub                *Hub[screenState]
+	screenDemoHub            *Hub[screenDemoState]
 	screenMu                 sync.RWMutex
+	demoMu                   sync.RWMutex
 	controlMu                sync.RWMutex
 	screen                   screenState
 	screenAck                chan struct{}
 	screenRevision           uint64
 	spotlightAckTimeout      time.Duration
+	screenDemo               screenDemoState
+	screenDemoRevision       uint64
+	screenDemoCancel         context.CancelFunc
+	screenDemoStarting       bool
 	shutdown                 context.Context
 	cancel                   context.CancelFunc
 	stopOnce                 sync.Once
@@ -132,13 +156,20 @@ type Server struct {
 
 func New(cfg config.Config, st *store.Store, engine *agent.Engine, webFS, templates fs.FS, logger *slog.Logger) *Server {
 	shutdown, cancel := context.WithCancel(context.Background())
-	return &Server{Config: cfg, Store: st, Agent: engine, AvailableSearchProviders: []string{"disabled"}, WebFS: webFS, Templates: templates, Logger: logger, studentHub: NewHub[classroomEvent](), studentMemoryHub: NewTargetHub[classroomEvent](), wallHub: NewHub[struct{}](), screenHub: NewHub[screenState](), screen: screenState{Empty: true}, spotlightAckTimeout: time.Second, shutdown: shutdown, cancel: cancel}
+	return &Server{Config: cfg, Store: st, Agent: engine, AvailableSearchProviders: []string{"disabled"}, WebFS: webFS, Templates: templates, Logger: logger, studentHub: NewHub[classroomEvent](), studentMemoryHub: NewTargetHub[classroomEvent](), wallHub: NewHub[struct{}](), screenHub: NewHub[screenState](), screenDemoHub: NewHub[screenDemoState](), screen: screenState{Empty: true}, screenDemo: screenDemoState{Messages: []screenMessage{}, answerIndex: -1}, spotlightAckTimeout: time.Second, shutdown: shutdown, cancel: cancel}
 }
 
 // Shutdown cancels server-owned long-running work before http.Server.Shutdown
 // waits for handlers to return. It is safe to call more than once.
 func (s *Server) Shutdown() {
-	s.stopOnce.Do(s.cancel)
+	s.stopOnce.Do(func() {
+		s.cancel()
+		s.demoMu.Lock()
+		if s.screenDemoCancel != nil {
+			s.screenDemoCancel()
+		}
+		s.demoMu.Unlock()
+	})
 }
 
 func (s *Server) withShutdown(parent context.Context) (context.Context, context.CancelFunc) {
@@ -202,6 +233,10 @@ func (s *Server) Routes() http.Handler {
 				r.Post("/lock", s.lock)
 				r.Post("/run", s.createRun)
 				r.Post("/spotlight", s.spotlight)
+				r.Get("/screen-demo", s.getScreenDemo)
+				r.Post("/screen-demo", s.startScreenDemo)
+				r.Post("/screen-demo/chat", s.chatScreenDemo)
+				r.Delete("/screen-demo", s.stopScreenDemo)
 			})
 		})
 		r.Get("/screen/events", s.screenEvents)

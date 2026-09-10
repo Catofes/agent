@@ -268,6 +268,7 @@
             <h2 id="studentTitle"></h2>
             <div>
               <button id="spotlight">投屏展示</button
+              ><button id="startDemo" class="secondary">开始大屏测试</button
               ><button id="close">返回状态墙</button>
               <div id="spotlightStatus" role="status"></div>
             </div>
@@ -282,11 +283,26 @@
               <div id="messages" class="messages"></div>
             </div>
           </div>
+          <section id="demoControl" class="teacher-demo hidden" aria-labelledby="demoTitle">
+            <div class="top">
+              <div>
+                <h3 id="demoTitle">大屏测试对话</h3>
+                <div id="demoStatus" class="status">等待开始</div>
+              </div>
+              <button id="stopDemo" class="danger" type="button">结束测试</button>
+            </div>
+            <div id="demoMessages" class="messages demo-chat-log"></div>
+            <form id="demoForm" class="row">
+              <textarea id="demoInput" maxlength="12000" placeholder="输入要在大屏上演示的问题"></textarea>
+              <button id="sendDemo" type="submit">发送测试问题</button>
+            </form>
+          </section>
         </section>
       </section>
     </main>
     <script src="/assets/vendor/katex/katex.min.js"></script>
     <script src="/assets/markdown.js"></script>
+    <script src="/assets/ndjson-stream.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let wallState = null,
@@ -295,7 +311,10 @@
         lockBusy = false,
         runBusy = false,
         policyDirty = false,
-        policyBusy = false;
+        policyBusy = false,
+        demoState = null,
+        demoStudentID = null,
+        demoController = null;
       async function api(url, opt = {}) {
         const r = await fetch(url, {
           ...opt,
@@ -638,6 +657,20 @@
           }),
         );
         $("spotlightStatus").textContent = "";
+        try {
+          const activeDemo = await api("/api/teacher/screen-demo");
+          demoStudentID = activeDemo.student_id || null;
+          if (activeDemo.demo?.active) renderDemo(activeDemo.demo);
+          else {
+            demoState = null;
+            $("demoControl").classList.add("hidden");
+          }
+        } catch (error) {
+          demoStudentID = null;
+          demoState = null;
+          $("demoControl").classList.add("hidden");
+          $("spotlightStatus").textContent = "读取大屏测试状态失败：" + error.message;
+        }
         $("detailCard").classList.remove("hidden");
         $("wall").classList.add("hidden");
       }
@@ -645,6 +678,122 @@
         $("detailCard").classList.add("hidden");
         $("wall").classList.remove("hidden");
         current = null;
+      };
+      function renderDemo(state) {
+        demoState = state;
+        $("demoControl").classList.toggle("hidden", !state?.active);
+        if (!state?.active) return;
+        const differentStudent = Boolean(current && demoStudentID && demoStudentID !== current.student.id);
+        $("demoStatus").textContent = differentStudent
+          ? `当前正在演示 ${state.name}，结束后才能切换测试学生`
+          : state.status || "等待教师输入";
+        $("sendDemo").disabled = Boolean(differentStudent || state.running || demoController);
+        $("demoInput").disabled = Boolean(differentStudent || state.running || demoController);
+        $("startDemo").disabled = true;
+        const nodes = [];
+        let process = null;
+        for (const message of state.messages || []) {
+          const item = document.createElement("div"),
+            role = t(message.role === "user" ? "教师提问" : message.role === "assistant" ? "Agent" : "工具", "strong"),
+            content = document.createElement("div");
+          role.className = "message-role";
+          if (message.role === "assistant") MarkdownRenderer.render(content, message.content || "");
+          else content.textContent = message.content || "";
+          item.append(role, content);
+          if (message.process) {
+            if (!process) {
+              const details = document.createElement("details"),
+                summary = t("思考与行动过程", "summary"),
+                items = document.createElement("div");
+              details.className = "reasoning";
+              items.className = "demo-process-items";
+              details.append(summary, items);
+              nodes.push(details);
+              process = items;
+            }
+            item.className = "action";
+            process.append(item);
+          } else {
+            process = null;
+            item.className = "msg " + message.role;
+            nodes.push(item);
+          }
+        }
+        $("demoMessages").replaceChildren(...nodes);
+        $("demoMessages").scrollTop = $("demoMessages").scrollHeight;
+      }
+      $("startDemo").onclick = async () => {
+        if (!current || demoState?.active || demoController) return;
+        $("startDemo").disabled = true;
+        $("spotlightStatus").textContent = "正在创建大屏测试…";
+        try {
+          const result = await api("/api/teacher/screen-demo", {
+            method: "POST",
+            body: JSON.stringify({ student_id: current.student.id }),
+          });
+          demoStudentID = result.student_id;
+          renderDemo(result.demo);
+          $("spotlightStatus").textContent = result.screen_connections
+            ? "测试对话已发送到大屏"
+            : "测试已创建，但当前没有大屏连接";
+        } catch (error) {
+          $("spotlightStatus").textContent = "开始测试失败：" + error.message;
+        } finally {
+          $("startDemo").disabled = Boolean(demoState?.active);
+        }
+      };
+      $("demoForm").onsubmit = async (event) => {
+        event.preventDefault();
+        const message = $("demoInput").value.trim();
+        if (!message || !demoState?.active || demoController || demoStudentID !== current?.student.id) return;
+        demoController = new AbortController();
+        $("demoInput").value = "";
+        renderDemo({ ...demoState, running: true, status: "正在提交问题…" });
+        try {
+          const response = await fetch("/api/teacher/screen-demo/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ demo_id: demoState.id, message }),
+            signal: demoController.signal,
+          });
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.error?.message || "测试对话失败");
+          }
+          const reader = response.body.getReader(),
+            parser = NDJSONStream.createParser((item) => {
+              if (item.demo) renderDemo(item.demo);
+            });
+          while (true) {
+            const { value, done } = await reader.read();
+            parser.push(value, done);
+            if (done) break;
+          }
+        } catch (error) {
+          if (error.name !== "AbortError") $("demoStatus").textContent = error.message;
+        } finally {
+          demoController = null;
+          if (demoState) renderDemo(demoState);
+        }
+      };
+      $("demoInput").onkeydown = (event) => {
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+          event.preventDefault();
+          $("demoForm").requestSubmit();
+        }
+      };
+      $("stopDemo").onclick = async () => {
+        demoController?.abort();
+        demoController = null;
+        try {
+          const result = await api("/api/teacher/screen-demo", { method: "DELETE" });
+          demoStudentID = null;
+          renderDemo(result.demo);
+          $("startDemo").disabled = false;
+          $("spotlightStatus").textContent = "大屏测试已结束";
+        } catch (error) {
+          $("demoStatus").textContent = "结束测试失败：" + error.message;
+        }
       };
       $("spotlight").onclick = async () => {
         if (!current) return;

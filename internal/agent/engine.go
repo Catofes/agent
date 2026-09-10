@@ -81,6 +81,7 @@ type Request struct {
 	ToolsForCall                                    func(context.Context) ([]string, error)
 	SkillsAllowedForCall                            func(context.Context) (bool, error)
 	OnMemoryUpdate                                  func(MemoryUpdate)
+	DisableMemory                                   bool
 }
 
 type Engine struct {
@@ -660,6 +661,9 @@ func recallMemoryDefinition() tools.Definition {
 }
 
 func (e *Engine) memoryToolAvailable(ctx context.Context, req Request) bool {
+	if req.DisableMemory {
+		return false
+	}
 	run, err := e.Store.Run(ctx, req.RunID)
 	if err != nil || run.Status != "active" || run.Locked {
 		return false

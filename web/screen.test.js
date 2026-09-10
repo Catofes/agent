@@ -119,11 +119,36 @@ test('screen tabs give configuration and conversation separate bounded panels', 
 
   assert.equal(config.hidden, false);
   assert.equal(conversation.hidden, true);
+  assert.equal(runtime.elements.get('testPanel').hidden, true);
   assert.equal(runtime.elements.get('configTab').attributes.get('aria-selected'), 'true');
   runtime.elements.get('conversationTab').onclick();
   assert.equal(config.hidden, true);
   assert.equal(conversation.hidden, false);
   assert.equal(runtime.elements.get('conversationTab').attributes.get('aria-selected'), 'true');
+});
+
+test('screen demo event switches to the live test tab and renders shared state', () => {
+  const runtime = screenRuntime();
+  runtime.source.listeners.get('demo')({ data: JSON.stringify({
+    id: 'screen_demo_1',
+    revision: 2,
+    active: true,
+    name: '张三',
+    status: '正在回答…',
+    running: true,
+    messages: [
+      { role: 'user', content: '现场问题', current: true },
+      { role: 'assistant', content: '现场回答', current: true },
+    ],
+  }) });
+
+  assert.equal(runtime.elements.get('configPanel').hidden, true);
+  assert.equal(runtime.elements.get('testPanel').hidden, false);
+  assert.equal(runtime.elements.get('demoName').textContent, '张三 的现场测试');
+  assert.equal(runtime.elements.get('demoStatus').textContent, '正在回答…');
+  assert.equal(runtime.elements.get('demoMessages').children.length, 2);
+  assert.equal(runtime.elements.get('demoMessages').children[0].children[0].textContent, '教师提问');
+  assert.equal(runtime.elements.get('demoMessages').children[1].children[1].textContent, '现场回答');
 });
 
 test('screen acknowledgement does not depend on animation frames', async () => {

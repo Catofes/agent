@@ -983,6 +983,61 @@ func TestSpotlightWithoutConnectedScreenIsNotReportedDelivered(t *testing.T) {
 	}
 }
 
+func TestTeacherScreenDemoStreamsToTeacherAndPublicScreen(t *testing.T) {
+	app, st := testServerWithClient(t, directClient{})
+	handler := app.Routes()
+	teacher := newClient(handler)
+	if status, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"}); status != http.StatusOK {
+		t.Fatalf("teacher login status=%d", status)
+	}
+	screen, cancelScreen, screenDone := startScreenStream(handler)
+	defer func() { cancelScreen(); <-screenDone }()
+	if initial := waitSSEJSON(t, screen, 1); initial["empty"] != true {
+		t.Fatalf("initial screen=%v", initial)
+	}
+	status, started, raw := requestJSON(t, teacher, http.MethodPost, "/api/teacher/screen-demo", map[string]string{"student_id": "2101"})
+	if status != http.StatusCreated {
+		t.Fatalf("start demo status=%d body=%s", status, raw)
+	}
+	demo := started["demo"].(map[string]any)
+	demoID, _ := demo["id"].(string)
+	if demoID == "" || demo["active"] != true || started["student_id"] != "2101" {
+		t.Fatalf("started=%v", started)
+	}
+	if snapshot := waitSSEMatch(t, screen, func(event map[string]any) bool { return event["name"] == "张三" }); snapshot["empty"] != false {
+		t.Fatalf("screen config=%v", snapshot)
+	}
+	if publicDemo := waitSSEMatch(t, screen, func(event map[string]any) bool { return event["id"] == demoID }); publicDemo["active"] != true {
+		t.Fatalf("public demo=%v", publicDemo)
+	}
+
+	status, _, raw = requestJSON(t, teacher, http.MethodPost, "/api/teacher/screen-demo/chat", map[string]string{"demo_id": demoID, "message": "现场测试问题"})
+	if status != http.StatusOK || !strings.Contains(raw, `"type":"demo_state"`) || !strings.Contains(raw, "测试回答") {
+		t.Fatalf("demo chat status=%d body=%s", status, raw)
+	}
+	publicDemo := waitSSEMatch(t, screen, func(event map[string]any) bool {
+		encoded, _ := json.Marshal(event["messages"])
+		return strings.Contains(string(encoded), "测试回答")
+	})
+	encoded, _ := json.Marshal(publicDemo)
+	for _, forbidden := range []string{"student_id", "conversation_id", "reasoning", "memories", "context_receipt"} {
+		if strings.Contains(string(encoded), `"`+forbidden+`"`) {
+			t.Fatalf("public demo leaked %s: %s", forbidden, encoded)
+		}
+	}
+	studentConversations, err := st.Conversations(context.Background(), "run", "2101", 10)
+	if err != nil || len(studentConversations) != 0 {
+		t.Fatalf("demo leaked into student history: %#v err=%v", studentConversations, err)
+	}
+	status, current, raw := requestJSON(t, teacher, http.MethodGet, "/api/teacher/screen-demo", nil)
+	if status != http.StatusOK || current["student_id"] != "2101" || current["demo"].(map[string]any)["running"] != false {
+		t.Fatalf("current demo status=%d body=%s", status, raw)
+	}
+	if status, stopped, raw := requestJSON(t, teacher, http.MethodDelete, "/api/teacher/screen-demo", nil); status != http.StatusOK || stopped["demo"].(map[string]any)["active"] != false {
+		t.Fatalf("stop demo status=%d body=%s", status, raw)
+	}
+}
+
 type spotlightResult struct {
 	status int
 	body   map[string]any
@@ -1108,7 +1163,7 @@ func TestShutdownClosesStreamsAndCancelsLLM(t *testing.T) {
 	if elapsed := time.Since(started); elapsed >= 2*time.Second {
 		t.Fatalf("shutdown took %v", elapsed)
 	}
-	if got := app.studentHub.Count() + app.studentMemoryHub.Count() + app.wallHub.Count() + app.screenHub.Count(); got != 0 {
+	if got := app.studentHub.Count() + app.studentMemoryHub.Count() + app.wallHub.Count() + app.screenHub.Count() + app.screenDemoHub.Count(); got != 0 {
 		t.Fatalf("shutdown left %d event subscribers", got)
 	}
 }
@@ -1627,6 +1682,30 @@ func waitSSEJSON(t *testing.T, response *streamResponse, want int) map[string]an
 		}
 		if len(events) >= want {
 			return events[want-1]
+		}
+	}
+}
+
+func waitSSEMatch(t *testing.T, response *streamResponse, matches func(map[string]any) bool) map[string]any {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		scanner := bufio.NewScanner(bytes.NewReader(response.bytes()))
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			var event map[string]any
+			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data: "))), &event) == nil && matches(event) {
+				return event
+			}
+		}
+		select {
+		case <-response.flushed:
+		case <-deadline.C:
+			t.Fatal("timed out waiting for matching SSE event")
 		}
 	}
 }

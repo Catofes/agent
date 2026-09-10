@@ -39,3 +39,13 @@ test("teacher can control classroom providers, Memory mode, and available tools"
 test("new classroom inherits the policy currently shown in the controls", () => {
   assert.match(html, /JSON\.stringify\(\{ name, \.\.\.selectedPolicy\(\) \}\)/);
 });
+
+test("teacher controls an authenticated screen demo while the screen stays read-only", () => {
+  for (const id of ["startDemo", "stopDemo", "demoControl", "demoMessages", "demoForm", "demoInput", "sendDemo"]) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(html, /\/api\/teacher\/screen-demo/);
+  assert.match(html, /\/api\/teacher\/screen-demo\/chat/);
+  assert.match(html, /NDJSONStream\.createParser/);
+  assert.doesNotMatch(html, /\/api\/screen\/chat/);
+});

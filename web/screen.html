@@ -119,6 +119,15 @@
         >
           对话展示
         </button>
+        <button
+          id="testTab"
+          class="screen-tab"
+          type="button"
+          role="tab"
+          aria-controls="testPanel"
+        >
+          测试对话
+        </button>
       </nav>
       <div class="screen-panels">
         <section
@@ -153,6 +162,20 @@
           </div>
           <div id="messages" class="content"></div>
         </section>
+        <section
+          id="testPanel"
+          class="card conversation-card demo-card screen-panel"
+          role="tabpanel"
+          aria-labelledby="testTab"
+          hidden
+        >
+          <div class="conversation-titlebar">
+            <div><span class="chat-icon">●</span><strong id="demoName">现场测试</strong></div>
+            <span id="demoStatus">等待教师端开始测试</span>
+          </div>
+          <div id="demoEmpty" class="demo-empty">教师端开始测试后，对话会实时显示在这里。</div>
+          <div id="demoMessages" class="content" hidden></div>
+        </section>
       </div>
     </main>
     <script src="/assets/vendor/katex/katex.min.js"></script>
@@ -160,18 +183,20 @@
     <script>
       const $ = (id) => document.getElementById(id),
         es = new EventSource("/api/screen/events");
-      let lastRevision = -1;
+      let lastRevision = -1,
+        lastDemoRevision = -1,
+        currentDemoID = "";
       function selectTab(name) {
-        const showConfig = name === "config";
-        $("configPanel").hidden = !showConfig;
-        $("conversationPanel").hidden = showConfig;
-        $("configTab").classList.toggle("active", showConfig);
-        $("conversationTab").classList.toggle("active", !showConfig);
-        $("configTab").setAttribute("aria-selected", String(showConfig));
-        $("conversationTab").setAttribute("aria-selected", String(!showConfig));
+        for (const tab of ["config", "conversation", "test"]) {
+          const selected = tab === name;
+          $(`${tab}Panel`).hidden = !selected;
+          $(`${tab}Tab`).classList.toggle("active", selected);
+          $(`${tab}Tab`).setAttribute("aria-selected", String(selected));
+        }
       }
       $("configTab").onclick = () => selectTab("config");
       $("conversationTab").onclick = () => selectTab("conversation");
+      $("testTab").onclick = () => selectTab("test");
       selectTab("config");
       function connection(message, error = false) {
         $("connection").textContent = message;
@@ -205,6 +230,58 @@
           recall_memory: "读取 Memory",
         }[name] || name;
       }
+      function renderMessages(target, messages, userLabel = "学生") {
+        const history = [];
+        let conversation = "",
+          processGroup = null;
+        messages.forEach((m) => {
+          if (m.conversation && m.conversation !== conversation) {
+            conversation = m.conversation;
+            processGroup = null;
+            const heading = document.createElement("div");
+            heading.className = "conversation-heading";
+            heading.textContent = conversation;
+            history.push(heading);
+          }
+          const x = document.createElement("div");
+          const role = document.createElement("strong"),
+            body = document.createElement("div"),
+            content = m.content || "发起工具调用";
+          role.className = "message-role";
+          role.textContent =
+            m.role === "user"
+              ? userLabel
+              : m.role === "assistant"
+                ? "Agent"
+                : "工具";
+          if (m.role === "assistant") MarkdownRenderer.render(body, content);
+          else body.textContent = content;
+          x.append(role, body);
+          if (m.process) {
+            if (!processGroup) {
+              const details = document.createElement("details"),
+                summary = document.createElement("summary"),
+                items = document.createElement("div");
+              details.className = "screen-process";
+              items.className = "screen-process-items";
+              details.append(summary, items);
+              history.push(details);
+              processGroup = { details, summary, items, count: 0 };
+            }
+            x.className = "screen-process-item " + m.role;
+            processGroup.count += 1;
+            processGroup.summary.textContent =
+              `思考与行动过程（${processGroup.count} 条，点击展开）`;
+            processGroup.items.append(x);
+            return;
+          }
+          processGroup = null;
+          x.className = "msg " + m.role + (m.current ? " current" : "");
+          history.push(x);
+        });
+        target.replaceChildren(...history);
+        target.scrollTop = target.scrollHeight;
+      }
       function render(d) {
         $("empty").hidden = !d.empty;
         $("screen").hidden = d.empty;
@@ -214,62 +291,26 @@
           $("skill").textContent = d.skill_md || "（未填写）";
           $("meta").textContent =
             `装备：${(d.tools || []).map(toolLabel).join("、") || "无"}　｜　最大步数：${d.max_turns}`;
-          const history = [],
-            messages = d.messages || [];
-          let conversation = "",
-            processGroup = null;
-          messages.forEach((m) => {
-            if (m.conversation && m.conversation !== conversation) {
-              conversation = m.conversation;
-              processGroup = null;
-              const heading = document.createElement("div");
-              heading.className = "conversation-heading";
-              heading.textContent = conversation;
-              history.push(heading);
-            }
-            const x = document.createElement("div");
-            const role = document.createElement("strong"),
-              body = document.createElement("div"),
-              content = m.content || "发起工具调用";
-            role.className = "message-role";
-            role.textContent =
-              m.role === "user"
-                ? "学生"
-                : m.role === "assistant"
-                  ? "Agent"
-                  : "工具";
-            if (m.role === "assistant") MarkdownRenderer.render(body, content);
-            else body.textContent = content;
-            x.append(role, body);
-            if (m.process) {
-              if (!processGroup) {
-                const details = document.createElement("details"),
-                  summary = document.createElement("summary"),
-                  items = document.createElement("div");
-                details.className = "screen-process";
-                items.className = "screen-process-items";
-                details.append(summary, items);
-                history.push(details);
-                processGroup = { details, summary, items, count: 0 };
-              }
-              x.className = "screen-process-item " + m.role;
-              processGroup.count += 1;
-              processGroup.summary.textContent =
-                `思考与行动过程（${processGroup.count} 条，点击展开）`;
-              processGroup.items.append(x);
-              return;
-            }
-            processGroup = null;
-            x.className =
-              "msg " + m.role + (m.current ? " current" : "");
-            history.push(x);
-          });
-          $("messages").replaceChildren(...history);
+          renderMessages($("messages"), d.messages || []);
           $("messages").scrollTop = 0;
         }
         connection(`已连接·${new Date().toLocaleTimeString()}`);
         if (d.spotlight_id)
           afterDOMUpdate(() => acknowledge(d.spotlight_id));
+      }
+      function renderDemo(d) {
+        const active = Boolean(d?.active);
+        $("demoEmpty").hidden = active;
+        $("demoMessages").hidden = !active;
+        $("demoName").textContent = active ? `${d.name} 的现场测试` : "现场测试";
+        $("demoStatus").textContent = active ? d.status || "等待教师输入" : "等待教师端开始测试";
+        renderMessages($("demoMessages"), active ? d.messages || [] : [], "教师提问");
+        if (active && d.id && d.id !== currentDemoID) {
+          currentDemoID = d.id;
+          selectTab("test");
+        } else if (!active) {
+          currentDemoID = "";
+        }
       }
       es.onopen = () => {
         connection("大屏已连接");
@@ -297,6 +338,18 @@
         } catch (error) {
           connection("投屏渲染失败，请查看控制台", true);
           console.error("[screen] render failed", error);
+        }
+      });
+      es.addEventListener("demo", (event) => {
+        try {
+          const data = JSON.parse(event.data),
+            revision = Number(data.revision);
+          if (Number.isFinite(revision) && revision <= lastDemoRevision) return;
+          if (Number.isFinite(revision)) lastDemoRevision = revision;
+          renderDemo(data);
+        } catch (error) {
+          connection("测试对话渲染失败，请查看控制台", true);
+          console.error("[screen] demo render failed", error);
         }
       });
     </script>

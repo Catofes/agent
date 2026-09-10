@@ -35,6 +35,27 @@ func (h *Hub[T]) Publish(v T) {
 		}
 	}
 }
+
+// PublishLatest keeps slow presentation clients converging on the newest full
+// snapshot instead of leaving an obsolete snapshot queued indefinitely.
+func (h *Hub[T]) PublishLatest(v T) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, ch := range h.subs {
+		select {
+		case ch <- v:
+		default:
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- v:
+			default:
+			}
+		}
+	}
+}
 func (h *Hub[T]) Count() int { h.mu.Lock(); defer h.mu.Unlock(); return len(h.subs) }
 
 type targetedSubscription[T any] struct {

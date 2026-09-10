@@ -32,6 +32,8 @@ const (
 	MemoryModeDisabled       = "disabled"
 	MemoryModeReviewRequired = "review_required"
 	MemoryModeAdaptive       = "adaptive"
+	ConversationKindStudent  = "student"
+	ConversationKindDemo     = "demo"
 	SkillTriggerAuto         = "auto"
 	SkillTriggerExplicit     = "explicit"
 )
@@ -94,6 +96,7 @@ type Conversation struct {
 	ID           string    `json:"id"`
 	RunID        string    `json:"-"`
 	StudentID    string    `json:"-"`
+	Kind         string    `json:"-"`
 	Title        string    `json:"title"`
 	MessageCount int       `json:"message_count"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -204,8 +207,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 13 {
-		return fmt.Errorf("database version %d is newer than supported version 13", version)
+	if version > 15 {
+		return fmt.Errorf("database version %d is newer than supported version 15", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -312,7 +315,33 @@ PRAGMA user_version = 1;`
 			return fmt.Errorf("migrate classroom provider policy: %w", err)
 		}
 	}
+	if version < 15 {
+		if err := s.migrateConversationKinds(ctx); err != nil {
+			return fmt.Errorf("migrate conversation kinds: %w", err)
+		}
+	}
 	return nil
+}
+
+func (s *Store) migrateConversationKinds(ctx context.Context) error {
+	has, err := s.tableHasColumn(ctx, "conversations", "kind")
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !has {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE conversations ADD COLUMN kind TEXT NOT NULL DEFAULT 'student' CHECK(kind IN ('student','demo'))`); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 15`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateProviderPolicy(ctx context.Context) error {
@@ -1143,9 +1172,15 @@ func (s *Store) CreateConversation(ctx context.Context, c Conversation) (Convers
 	if c.Title == "" {
 		c.Title = "新对话"
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO conversations(id,run_id,student_id,title,created_at,updated_at)
- SELECT ?,?,?,?, ?,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`,
-		c.ID, c.RunID, c.StudentID, c.Title, formatTime(now), formatTime(now), c.RunID, c.StudentID)
+	if c.Kind == "" {
+		c.Kind = ConversationKindStudent
+	}
+	if c.Kind != ConversationKindStudent && c.Kind != ConversationKindDemo {
+		return Conversation{}, errors.New("invalid conversation kind")
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT INTO conversations(id,run_id,student_id,kind,title,created_at,updated_at)
+	 SELECT ?,?,?,?,?, ?,? WHERE EXISTS(SELECT 1 FROM students WHERE run_id=? AND id=?)`,
+		c.ID, c.RunID, c.StudentID, c.Kind, c.Title, formatTime(now), formatTime(now), c.RunID, c.StudentID)
 	if err != nil {
 		return Conversation{}, err
 	}
@@ -1157,12 +1192,20 @@ func (s *Store) CreateConversation(ctx context.Context, c Conversation) (Convers
 }
 
 func (s *Store) Conversation(ctx context.Context, runID, studentID, conversationID string) (Conversation, error) {
+	return s.conversationByKind(ctx, runID, studentID, conversationID, ConversationKindStudent)
+}
+
+func (s *Store) DemoConversation(ctx context.Context, runID, studentID, conversationID string) (Conversation, error) {
+	return s.conversationByKind(ctx, runID, studentID, conversationID, ConversationKindDemo)
+}
+
+func (s *Store) conversationByKind(ctx context.Context, runID, studentID, conversationID, kind string) (Conversation, error) {
 	var c Conversation
 	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT c.id,c.run_id,c.student_id,c.title,
+	err := s.db.QueryRowContext(ctx, `SELECT c.id,c.run_id,c.student_id,c.kind,c.title,
  (SELECT count(*) FROM messages m WHERE m.run_id=c.run_id AND m.student_id=c.student_id AND m.conversation_id=c.id),
- c.created_at,c.updated_at FROM conversations c WHERE c.run_id=? AND c.student_id=? AND c.id=?`,
-		runID, studentID, conversationID).Scan(&c.ID, &c.RunID, &c.StudentID, &c.Title, &c.MessageCount, &created, &updated)
+	 c.created_at,c.updated_at FROM conversations c WHERE c.run_id=? AND c.student_id=? AND c.id=? AND c.kind=?`,
+		runID, studentID, conversationID, kind).Scan(&c.ID, &c.RunID, &c.StudentID, &c.Kind, &c.Title, &c.MessageCount, &created, &updated)
 	if err != nil {
 		return Conversation{}, err
 	}
@@ -1175,10 +1218,10 @@ func (s *Store) Conversations(ctx context.Context, runID, studentID string, limi
 	if limit < 1 || limit > 200 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.run_id,c.student_id,c.title,count(m.id),c.created_at,c.updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.run_id,c.student_id,c.kind,c.title,count(m.id),c.created_at,c.updated_at
  FROM conversations c LEFT JOIN messages m ON m.run_id=c.run_id AND m.student_id=c.student_id AND m.conversation_id=c.id
- WHERE c.run_id=? AND c.student_id=? GROUP BY c.run_id,c.student_id,c.id
- ORDER BY c.updated_at DESC,c.id DESC LIMIT ?`, runID, studentID, limit)
+	 WHERE c.run_id=? AND c.student_id=? AND c.kind=? GROUP BY c.run_id,c.student_id,c.id
+	 ORDER BY c.updated_at DESC,c.id DESC LIMIT ?`, runID, studentID, ConversationKindStudent, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1187,7 +1230,7 @@ func (s *Store) Conversations(ctx context.Context, runID, studentID string, limi
 	for rows.Next() {
 		var c Conversation
 		var created, updated string
-		if err := rows.Scan(&c.ID, &c.RunID, &c.StudentID, &c.Title, &c.MessageCount, &created, &updated); err != nil {
+		if err := rows.Scan(&c.ID, &c.RunID, &c.StudentID, &c.Kind, &c.Title, &c.MessageCount, &created, &updated); err != nil {
 			return nil, err
 		}
 		c.CreatedAt, _ = parseTime(created)
@@ -1203,7 +1246,7 @@ func (s *Store) DeleteConversation(ctx context.Context, runID, studentID, conver
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `DELETE FROM conversations WHERE run_id=? AND student_id=? AND id=?`, runID, studentID, conversationID)
+	res, err := tx.ExecContext(ctx, `DELETE FROM conversations WHERE run_id=? AND student_id=? AND id=? AND kind=?`, runID, studentID, conversationID, ConversationKindStudent)
 	if err != nil {
 		return err
 	}
@@ -1215,6 +1258,23 @@ func (s *Store) DeleteConversation(ctx context.Context, runID, studentID, conver
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM artifacts WHERE run_id=? AND student_id=? AND conversation_id=?`, runID, studentID, conversationID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DeleteDemoConversations(ctx context.Context, runID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, table := range []string{"messages", "artifacts"} {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE run_id=? AND conversation_id IN (SELECT id FROM conversations WHERE run_id=? AND kind=?)`, runID, runID, ConversationKindDemo); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM conversations WHERE run_id=? AND kind=?`, runID, ConversationKindDemo); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1344,8 +1404,9 @@ func (s *Store) StudentMessages(ctx context.Context, runID, studentID string, af
 	if limit < 1 || limit > 1000 {
 		limit = 500
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,student_id,conversation_id,turn_id,role,content,tool_calls,reasoning_content,finish_reason,context_receipt,created_at
- FROM messages WHERE run_id=? AND student_id=? AND id>? ORDER BY id LIMIT ?`, runID, studentID, afterID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT m.id,m.run_id,m.student_id,m.conversation_id,m.turn_id,m.role,m.content,m.tool_calls,m.reasoning_content,m.finish_reason,m.context_receipt,m.created_at
+	 FROM messages m JOIN conversations c ON c.id=m.conversation_id AND c.run_id=m.run_id AND c.student_id=m.student_id
+	 WHERE m.run_id=? AND m.student_id=? AND m.id>? AND c.kind=? ORDER BY m.id LIMIT ?`, runID, studentID, afterID, ConversationKindStudent, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1564,7 +1625,9 @@ func (s *Store) Wall(ctx context.Context, runID string) ([]WallStudent, error) {
  EXISTS(SELECT 1 FROM sessions se WHERE se.run_id=st.run_id AND se.student_id=st.id AND se.is_teacher=0 AND se.revoked_at IS NULL AND se.expires_at>?),
 	 COALESCE(length(trim(d.persona))>0,0),
 	 (COALESCE(length(trim(d.skill_md))>0,0) OR EXISTS(SELECT 1 FROM skills sk WHERE sk.run_id=st.run_id AND sk.student_id=st.id AND sk.enabled=1 AND trim(sk.content)<>'')),
- (SELECT count(DISTINCT turn_id) FROM messages m WHERE m.run_id=st.run_id AND m.student_id=st.id AND m.role='user'),
+ (SELECT count(DISTINCT m.turn_id) FROM messages m
+  JOIN conversations c ON c.run_id=m.run_id AND c.student_id=m.student_id AND c.id=m.conversation_id
+  WHERE m.run_id=st.run_id AND m.student_id=st.id AND m.role='user' AND c.kind='student'),
  (SELECT max(last_seen_at) FROM sessions se WHERE se.run_id=st.run_id AND se.student_id=st.id AND se.revoked_at IS NULL)
  FROM students st LEFT JOIN designs d ON d.run_id=st.run_id AND d.student_id=st.id WHERE st.run_id=? ORDER BY st.id`, formatTime(time.Now().UTC()), runID)
 	if err != nil {
