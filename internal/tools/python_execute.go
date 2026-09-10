@@ -91,7 +91,7 @@ func (p *PythonExecute) Run(ctx context.Context, code, stdin string, inputArtifa
 	}
 	timeout := p.Timeout
 	if timeout <= 0 {
-		timeout = 10 * time.Second
+		timeout = 20 * time.Second
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

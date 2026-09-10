@@ -1,17 +1,13 @@
 services:
   python-runtime:
-    image: classroom-python:latest
-    build:
-      context: ..
-      dockerfile: Dockerfile.python
+    image: "${PYTHON_RUNTIME_IMAGE:-ghcr.io/catofes/agent-python-runtime:latest}"
+    pull_policy: always
     restart: "no"
     command: ["python", "-c", "print('runtime image ready')"]
 
   runner:
-    image: classroom-python-runner:local
-    build:
-      context: ..
-      dockerfile: Dockerfile.runner
+    image: "${PYTHON_RUNNER_IMAGE:-ghcr.io/catofes/agent-python-runner:latest}"
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       python-runtime:
@@ -20,10 +16,11 @@ services:
       RUNNER_LISTEN_ADDR: ":8090"
       RUNNER_TOKEN: "${RUNNER_TOKEN:?set RUNNER_TOKEN in deploy/.env}"
       RUNNER_STORAGE_PATH: /var/lib/classroom-runner
-      RUNNER_PYTHON_IMAGE: classroom-python:latest
+      RUNNER_PYTHON_IMAGE: "${PYTHON_RUNTIME_IMAGE:-ghcr.io/catofes/agent-python-runtime:latest}"
       RUNNER_EXECUTION_TIMEOUT: 5s
       RUNNER_ARTIFACT_TTL: 24h
-      RUNNER_CONCURRENCY: 8
+      RUNNER_CONCURRENCY: "${RUNNER_CONCURRENCY:-16}"
+      RUNNER_QUEUE_CAPACITY: "${RUNNER_QUEUE_CAPACITY:-64}"
       RUNNER_MEMORY: 256m
       RUNNER_CPUS: "0.5"
       RUNNER_PIDS: 64

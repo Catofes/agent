@@ -6,6 +6,7 @@ RUN pip install --no-cache-dir \
     pandas==2.3.1 \
     matplotlib==3.10.5 \
     openpyxl==3.1.5 \
+    && python -c "import matplotlib, numpy, openpyxl, pandas" \
     && rm -rf /root/.cache
 
 ENV PYTHONUNBUFFERED=1 \

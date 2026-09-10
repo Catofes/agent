@@ -33,6 +33,7 @@ const metadataFile = "metadata.json"
 
 var safeIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 var errArtifactTooLarge = errors.New("artifact exceeds size limit")
+var errRunnerQueueFull = errors.New("runner queue is full")
 
 type Config struct {
 	ListenAddr       string
@@ -43,6 +44,7 @@ type Config struct {
 	ExecutionTimeout time.Duration
 	ArtifactTTL      time.Duration
 	Concurrency      int
+	QueueCapacity    int
 	MaxCodeBytes     int64
 	MaxStdinBytes    int64
 	MaxOutputBytes   int64
@@ -56,8 +58,8 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		ListenAddr: ":8090", StoragePath: "/var/lib/classroom-runner", DockerBinary: "docker",
-		PythonImage: "classroom-python:latest", ExecutionTimeout: 5 * time.Second,
-		ArtifactTTL: 24 * time.Hour, Concurrency: 8, MaxCodeBytes: 64 << 10,
+		PythonImage: "ghcr.io/catofes/agent-python-runtime:latest", ExecutionTimeout: 5 * time.Second,
+		ArtifactTTL: 24 * time.Hour, Concurrency: 16, QueueCapacity: 64, MaxCodeBytes: 64 << 10,
 		MaxStdinBytes: 64 << 10, MaxOutputBytes: 128 << 10, MaxFileBytes: 10 << 20,
 		MaxFiles: 10, Memory: "256m", CPUs: "0.5", PIDs: 64,
 	}
@@ -67,8 +69,8 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Token) == "" {
 		return errors.New("RUNNER_TOKEN is required")
 	}
-	if c.Concurrency < 1 || c.ExecutionTimeout <= 0 || c.ArtifactTTL <= 0 {
-		return errors.New("runner concurrency and timeouts must be positive")
+	if c.Concurrency < 1 || c.QueueCapacity < 1 || c.ExecutionTimeout <= 0 || c.ArtifactTTL <= 0 {
+		return errors.New("runner concurrency, queue capacity, and timeouts must be positive")
 	}
 	if c.MaxCodeBytes < 1 || c.MaxStdinBytes < 0 || c.MaxOutputBytes < 1 || c.MaxFileBytes < 1 || c.MaxFiles < 1 {
 		return errors.New("runner size limits must be positive")
@@ -86,6 +88,7 @@ type Service struct {
 	config    Config
 	logger    *slog.Logger
 	semaphore chan struct{}
+	waiting   chan struct{}
 	dockerMu  sync.Mutex
 }
 
@@ -101,7 +104,11 @@ func New(config Config, logger *slog.Logger) (*Service, error) {
 			return nil, fmt.Errorf("create runner storage: %w", err)
 		}
 	}
-	s := &Service{config: config, logger: logger, semaphore: make(chan struct{}, config.Concurrency)}
+	s := &Service{
+		config: config, logger: logger,
+		semaphore: make(chan struct{}, config.Concurrency),
+		waiting:   make(chan struct{}, config.QueueCapacity),
+	}
 	s.cleanupExpired()
 	s.cleanupContainers(context.Background())
 	return s, nil
@@ -110,7 +117,12 @@ func New(config Config, logger *slog.Logger) (*Service, error) {
 func (s *Service) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.Recoverer)
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, map[string]any{"ok": true}) })
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true, "running": len(s.semaphore), "queued": len(s.waiting),
+			"concurrency": cap(s.semaphore), "queue_capacity": cap(s.waiting),
+		})
+	})
 	r.Group(func(r chi.Router) {
 		r.Use(s.authenticate)
 		r.Post("/v1/artifacts", s.uploadArtifact)
@@ -207,21 +219,48 @@ func (s *Service) execute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "request id, code, or stdin is invalid")
 		return
 	}
-	select {
-	case s.semaphore <- struct{}{}:
-		defer func() { <-s.semaphore }()
-	default:
+	queued, queueWait, err := s.acquireExecutionSlot(r.Context())
+	if errors.Is(err, errRunnerQueueFull) {
 		w.Header().Set("Retry-After", "1")
-		writeError(w, http.StatusTooManyRequests, "RUNNER_BUSY", "runner is busy")
+		writeError(w, http.StatusTooManyRequests, "RUNNER_BUSY", "runner queue is full")
 		return
 	}
+	if err != nil {
+		writeError(w, http.StatusRequestTimeout, "REQUEST_CANCELLED", "execution request was cancelled while queued")
+		return
+	}
+	defer func() { <-s.semaphore }()
 	response, err := s.runPython(r.Context(), request)
 	if err != nil {
 		s.logger.Warn("python execution failed", "request_id", request.RequestID, "error", err)
 		writeError(w, http.StatusBadGateway, "EXECUTION_FAILED", "python execution failed")
 		return
 	}
+	response.Queued = queued
+	response.QueueWaitMS = queueWait.Milliseconds()
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Service) acquireExecutionSlot(ctx context.Context) (bool, time.Duration, error) {
+	select {
+	case s.semaphore <- struct{}{}:
+		return false, 0, nil
+	default:
+	}
+
+	queuedAt := time.Now()
+	select {
+	case s.waiting <- struct{}{}:
+		defer func() { <-s.waiting }()
+	default:
+		return false, 0, errRunnerQueueFull
+	}
+	select {
+	case s.semaphore <- struct{}{}:
+		return true, time.Since(queuedAt), nil
+	case <-ctx.Done():
+		return true, time.Since(queuedAt), ctx.Err()
+	}
 }
 
 func (s *Service) runPython(parent context.Context, request runnerapi.ExecuteRequest) (response runnerapi.ExecuteResponse, returnErr error) {

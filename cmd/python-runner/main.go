@@ -25,6 +25,7 @@ func main() {
 	config.ExecutionTimeout = envDuration("RUNNER_EXECUTION_TIMEOUT", config.ExecutionTimeout)
 	config.ArtifactTTL = envDuration("RUNNER_ARTIFACT_TTL", config.ArtifactTTL)
 	config.Concurrency = envInt("RUNNER_CONCURRENCY", config.Concurrency)
+	config.QueueCapacity = envInt("RUNNER_QUEUE_CAPACITY", config.QueueCapacity)
 	config.MaxCodeBytes = envInt64("RUNNER_MAX_CODE_BYTES", config.MaxCodeBytes)
 	config.MaxStdinBytes = envInt64("RUNNER_MAX_STDIN_BYTES", config.MaxStdinBytes)
 	config.MaxOutputBytes = envInt64("RUNNER_MAX_OUTPUT_BYTES", config.MaxOutputBytes)
@@ -38,7 +39,7 @@ func main() {
 		logger.Error("invalid runner configuration", "error", err)
 		os.Exit(2)
 	}
-	logger.Info("python runner started", "listen", config.ListenAddr, "storage", config.StoragePath, "concurrency", config.Concurrency)
+	logger.Info("python runner started", "listen", config.ListenAddr, "storage", config.StoragePath, "concurrency", config.Concurrency, "queue_capacity", config.QueueCapacity)
 	server := &http.Server{Addr: config.ListenAddr, Handler: service.Routes(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

@@ -21,6 +21,8 @@ test("student Python lab supports manual execution, files, cancellation and expl
     assert.match(html, new RegExp(`id=["']${id}["']`));
   }
   assert.match(html, /fetch\("\/api\/python\/run"/);
+  assert.match(html, /正在等待 Runner 调度/);
+  assert.match(html, /queue_wait_ms/);
   assert.match(html, /fetch\("\/api\/artifacts"/);
   assert.match(html, /signal: pythonController\.signal/);
   assert.match(html, /ev\.artifacts\?\.length/);

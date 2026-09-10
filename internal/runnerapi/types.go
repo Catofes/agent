@@ -25,6 +25,8 @@ type ExecuteResponse struct {
 	Stdout      string     `json:"stdout"`
 	Stderr      string     `json:"stderr"`
 	DurationMS  int64      `json:"duration_ms"`
+	Queued      bool       `json:"queued,omitempty"`
+	QueueWaitMS int64      `json:"queue_wait_ms,omitempty"`
 	Truncated   bool       `json:"truncated"`
 	Artifacts   []Artifact `json:"artifacts,omitempty"`
 }

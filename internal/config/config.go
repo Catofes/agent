@@ -78,7 +78,7 @@ func Load(version string) (Config, error) {
 	flag.StringVar(&c.ZhipuSearchEngine, "zhipu-search-engine", env("ZHIPU_SEARCH_ENGINE", "search_std"), "Zhipu search engine: search_std, search_pro, search_pro_sogou, or search_pro_quark")
 	flag.StringVar(&c.RunnerURL, "runner-url", os.Getenv("RUNNER_URL"), "internal Python runner base URL")
 	flag.StringVar(&c.RunnerToken, "runner-token", os.Getenv("RUNNER_TOKEN"), "internal Python runner bearer token")
-	flag.DurationVar(&c.RunnerTimeout, "runner-timeout", envDuration("RUNNER_TIMEOUT", 10*time.Second), "timeout for one Python runner request")
+	flag.DurationVar(&c.RunnerTimeout, "runner-timeout", envDuration("RUNNER_TIMEOUT", 20*time.Second), "timeout for one Python runner request, including queue wait")
 	flag.IntVar(&c.MaxPythonCodeChars, "max-python-code-chars", envInt("MAX_PYTHON_CODE_CHARS", 12000), "Python source character limit")
 	flag.Int64Var(&c.MaxArtifactBytes, "max-artifact-bytes", envInt64("MAX_ARTIFACT_BYTES", 10<<20), "maximum uploaded artifact size")
 	flag.StringVar(&c.AdminPassword, "admin-password", os.Getenv("ADMIN_PASSWORD"), "teacher password")

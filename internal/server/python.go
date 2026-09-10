@@ -166,6 +166,7 @@ func (s *Server) runPython(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"execution_id": response.ExecutionID, "status": response.Status, "exit_code": response.ExitCode,
 		"stdout": response.Stdout, "stderr": response.Stderr, "duration_ms": response.DurationMS,
+		"queued": response.Queued, "queue_wait_ms": response.QueueWaitMS,
 		"truncated": response.Truncated, "artifacts": artifacts,
 	})
 }

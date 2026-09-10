@@ -131,7 +131,7 @@ func validConfig() Config {
 		MaxMemoryChars:       400,
 		MaxMemoryTokens:      1_200,
 		MemoryExtractTimeout: 20 * time.Second,
-		RunnerTimeout:        10 * time.Second,
+		RunnerTimeout:        20 * time.Second,
 		MaxPythonCodeChars:   12_000,
 		MaxArtifactBytes:     10 << 20,
 	}

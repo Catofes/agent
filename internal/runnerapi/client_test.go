@@ -34,7 +34,7 @@ func TestClientExecutionAndArtifactRoundTrip(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Code != "print(1)" {
 				t.Fatalf("request=%#v err=%v", request, err)
 			}
-			_ = json.NewEncoder(w).Encode(ExecuteResponse{ExecutionID: "exec_1", Status: "completed", Stdout: "1\n"})
+			_ = json.NewEncoder(w).Encode(ExecuteResponse{ExecutionID: "exec_1", Status: "completed", Stdout: "1\n", Queued: true, QueueWaitMS: 125})
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/artifacts":
 			file, header, err := r.FormFile("file")
 			if err != nil || header.Filename != "数据.csv" {
@@ -56,7 +56,7 @@ func TestClientExecutionAndArtifactRoundTrip(t *testing.T) {
 
 	client := NewClient("http://runner.test", "secret", inMemoryClient(handler))
 	result, err := client.Execute(context.Background(), ExecuteRequest{RequestID: "req_1", Code: "print(1)"})
-	if err != nil || result.Stdout != "1\n" {
+	if err != nil || result.Stdout != "1\n" || !result.Queued || result.QueueWaitMS != 125 {
 		t.Fatalf("execute=%#v err=%v", result, err)
 	}
 	artifact, err := client.Upload(context.Background(), "数据.csv", strings.NewReader("a,b\n1,2\n"))

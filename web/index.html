@@ -866,18 +866,19 @@
         $("pythonResult").classList.add("hidden");
         applyLock();
         try {
-          const uploaded = await uploadPythonFiles(),
-            response = await fetch("/api/python/run", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                conversation_id: activeConversation,
-                code,
-                stdin: $("pythonStdin").value,
-                input_artifact_ids: [...new Set([...selected, ...uploaded])],
-              }),
-              signal: pythonController.signal,
+          const uploaded = await uploadPythonFiles();
+          $("pythonStatus").textContent = "已提交，正在等待 Runner 调度…";
+          const response = await fetch("/api/python/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              conversation_id: activeConversation,
+              code,
+              stdin: $("pythonStdin").value,
+              input_artifact_ids: [...new Set([...selected, ...uploaded])],
             }),
+            signal: pythonController.signal,
+          }),
             data = await response.json().catch(() => ({}));
           if (!response.ok) throw new Error(data.error?.message || "Python 运行失败");
           lastPythonResult = { code, ...data };
@@ -885,7 +886,8 @@
           if (data.stdout) sections.push("stdout:\n" + data.stdout);
           if (data.stderr) sections.push("stderr:\n" + data.stderr);
           $("pythonOutput").textContent = sections.join("\n\n") || "（没有标准输出）";
-          $("pythonMeta").textContent = `${data.status} · 退出码 ${data.exit_code} · ${data.duration_ms} ms${data.truncated ? " · 输出已截断" : ""}`;
+          const queueMeta = data.queued ? ` · 排队 ${data.queue_wait_ms} ms` : "";
+          $("pythonMeta").textContent = `${data.status} · 退出码 ${data.exit_code} · ${data.duration_ms} ms${queueMeta}${data.truncated ? " · 输出已截断" : ""}`;
           $("pythonResult").classList.remove("hidden");
           $("pythonStatus").textContent = data.status === "completed" ? "运行完成" : "运行结束";
           mergeArtifacts(data.artifacts);

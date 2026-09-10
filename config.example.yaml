@@ -16,7 +16,7 @@ zhipu_search_api_key: "${ZHIPU_SEARCH_API_KEY}" # provider=zhipu 时必填
 zhipu_search_engine: "search_std" # search_std、search_pro、search_pro_sogou 或 search_pro_quark
 runner_url: "" # 例如 http://10.16.100.20:8090；留空时不开放 Python
 runner_token: "${RUNNER_TOKEN}"
-runner_timeout: "10s"
+runner_timeout: "20s"
 max_python_code_chars: 12000
 max_artifact_bytes: 10485760
 admin_password: "${ADMIN_PASSWORD}"

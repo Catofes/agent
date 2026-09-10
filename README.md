@@ -104,11 +104,13 @@ Python 能力默认不注册，不影响原有课堂功能。临时公开课推�
 cd deploy
 cp .env.example .env
 # 编辑 .env；文件中只需配置一行 RUNNER_TOKEN=...
-docker compose up -d --build
+docker compose up -d
 curl http://127.0.0.1:8090/healthz
 ```
 
-之后在 `deploy/` 中直接运行 `docker compose up -d` 即可。需要按当前源码重新构建镜像时使用 `docker compose up -d --build`。Compose 会先准备固定的 `classroom-python:latest` 运行镜像，再启动 Runner，不需要手动选择 profile 或传 `-f`。
+之后在 `deploy/` 中直接运行 `docker compose up -d` 即可；Compose 每次都会从 GHCR 拉取最新的 `ghcr.io/catofes/agent-python-runner:latest` 和 `ghcr.io/catofes/agent-python-runtime:latest`，部署机不再编译 Go Runner，也不再安装 Python 科学计算包。Python Runtime 当前固定包含 `numpy`、`pandas`、`matplotlib` 和 `openpyxl`，发布工作流会为 Runner 和 Runtime 同时生成 `linux/amd64` 与 `linux/arm64` 镜像。
+
+正式部署建议在 `deploy/.env` 里额外设置 `PYTHON_RUNNER_IMAGE` 和 `PYTHON_RUNTIME_IMAGE`，将两者锁定到与 Agent 相同的版本标签或审核后的 digest；未设置时默认使用 `latest`。手工更新可执行 `docker compose pull && docker compose up -d`。
 
 `deploy/.env` 已加入 `.gitignore`，不会提交；仓库只保留不含真实密钥的 `deploy/.env.example`。不要为两台机器分别生成 Token：Runner 和课堂 Agent 的 `RUNNER_TOKEN` 必须逐字一致，否则执行请求会返回 `401 Unauthorized`。
 
@@ -117,14 +119,16 @@ curl http://127.0.0.1:8090/healthz
 ```dotenv
 RUNNER_URL='http://10.16.100.20:8090'
 RUNNER_TOKEN='与 deploy/.env 完全相同的值'
-RUNNER_TIMEOUT='10s'
+RUNNER_TIMEOUT='20s'
 MAX_PYTHON_CODE_CHARS='12000'
 MAX_ARTIFACT_BYTES='10485760'
 ```
 
 老师还需在课堂能力中开放“Python 执行”，学生才会看到实验台并可为自己的 Agent 装备该工具。学生手动运行不经过 LLM；上传文件与运行产物留在 Runner 的 `/var/lib/classroom-runner`，Agent 的 SQLite 只保存归属及摘要，下载始终经过 Agent 鉴权代理。产物默认保留 24 小时。
 
-这套 Docker-socket 方案意味着 Runner 事实上拥有执行机的 root 级控制权，因此执行机必须专用、可重装，不得与 Agent、数据库或其他重要服务混部。防火墙只允许 Agent IP 访问 8090；不要把 Runner 暴露到公网。正式部署还应把 `classroom-python:latest` 改为审核后镜像的 digest，并监控 `/var/lib/classroom-runner` 磁盘占用。当前 MVP 有单次文件、文件数、输出、CPU、内存、PID、并发和时间限制，但尚未实现每生配额与全盘高水位熔断。
+Runner 默认允许 16 个 Python 容器同时执行，并允许另外 64 个请求在有界队列中等待；可通过 `RUNNER_CONCURRENCY` 和 `RUNNER_QUEUE_CAPACITY` 调整。排队请求仍受 Agent 的 `RUNNER_TIMEOUT` 总超时约束，默认 20 秒。队列满时 Runner 返回 `429 RUNNER_BUSY`，不会无限堆积请求；`/healthz` 会报告当前 `running`、`queued`、`concurrency` 和 `queue_capacity`。
+
+这套 Docker-socket 方案意味着 Runner 事实上拥有执行机的 root 级控制权，因此执行机必须专用、可重装，不得与 Agent、数据库或其他重要服务混部。防火墙只允许 Agent IP 访问 8090；不要把 Runner 暴露到公网。正式部署应通过 `PYTHON_RUNTIME_IMAGE` 固化审核后的镜像 digest，并监控 `/var/lib/classroom-runner` 磁盘占用。当前 MVP 有单次文件、文件数、输出、CPU、内存、PID、并发和时间限制，但尚未实现每生配额与全盘高水位熔断。
 
 学生单条消息默认最多 12000 个 Unicode 字符，可通过 `MAX_INPUT_CHARS` 调整。输入框支持多行编辑：`Enter` 换行，`Ctrl+Enter`（macOS 为 `⌘+Enter`）发送。当前对话最多向模型组装 500 条已存消息；模型最终可接受的总上下文仍由所选模型决定。
 
@@ -152,7 +156,7 @@ docker run --rm \
 
 镜像不包含 `.env`、真实学生名单、SQLite 数据库、日志或 Git 历史。直接运行镜像而不挂载 `/data` 时会使用内置的示例名单，容器删除后数据不会保留。
 
-推送 `v*` 标签会触发 GitHub Release：先对完整 Git 历史执行 Gitleaks 密钥扫描，再运行测试，生成 amd64/arm64 二进制与校验文件，并发布对应的 GHCR 多架构镜像。任一密钥扫描或测试步骤失败都不会创建 Release 或推送镜像。
+推送 `v*` 标签会触发 GitHub Release：先对完整 Git 历史执行 Gitleaks 密钥扫描，再运行测试，生成 amd64/arm64 二进制与校验文件，并发布 Agent、Python Runner 与 Python Runtime 三个 GHCR 多架构镜像。三个镜像使用同一版本标签、提交 SHA 标签和 `latest`；任一密钥扫描或测试步骤失败都不会创建 Release 或推送镜像。
 
 ## 生产部署
 

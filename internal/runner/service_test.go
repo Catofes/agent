@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -81,6 +82,137 @@ func TestSafeFileNameAndLimitBuffer(t *testing.T) {
 	buffer := &limitBuffer{limit: 4}
 	if n, err := buffer.Write([]byte("abcdef")); err != nil || n != 6 || buffer.String() != "abcd" || !buffer.truncated {
 		t.Fatalf("buffer=%q n=%d truncated=%v err=%v", buffer.String(), n, buffer.truncated, err)
+	}
+}
+
+func TestExecutionQueueIsBoundedAndReleasesCancelledWaiters(t *testing.T) {
+	config := DefaultConfig()
+	config.Token = "secret"
+	config.StoragePath = filepath.Join(t.TempDir(), "storage")
+	config.DockerBinary = "/bin/false"
+	config.Concurrency = 1
+	config.QueueCapacity = 2
+	service, err := New(config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if queued, waited, err := service.acquireExecutionSlot(context.Background()); err != nil || queued || waited != 0 {
+		t.Fatalf("first slot queued=%v waited=%v err=%v", queued, waited, err)
+	}
+	type result struct {
+		queued bool
+		waited time.Duration
+		err    error
+	}
+	waiter := func(ctx context.Context) <-chan result {
+		resultCh := make(chan result, 1)
+		go func() {
+			queued, waited, err := service.acquireExecutionSlot(ctx)
+			resultCh <- result{queued: queued, waited: waited, err: err}
+		}()
+		return resultCh
+	}
+	firstWaiter := waiter(context.Background())
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	secondWaiter := waiter(cancelledCtx)
+	deadline := time.Now().Add(time.Second)
+	for len(service.waiting) != 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(service.waiting) != 2 {
+		t.Fatalf("waiting=%d want 2", len(service.waiting))
+	}
+	if _, _, err := service.acquireExecutionSlot(context.Background()); !errors.Is(err, errRunnerQueueFull) {
+		t.Fatalf("full queue error=%v", err)
+	}
+
+	cancel()
+	cancelled := <-secondWaiter
+	if !cancelled.queued || !errors.Is(cancelled.err, context.Canceled) {
+		t.Fatalf("cancelled waiter=%#v", cancelled)
+	}
+	if len(service.waiting) != 1 {
+		t.Fatalf("waiting after cancel=%d want 1", len(service.waiting))
+	}
+
+	<-service.semaphore
+	acquired := <-firstWaiter
+	if !acquired.queued || acquired.err != nil {
+		t.Fatalf("queued waiter=%#v", acquired)
+	}
+	<-service.semaphore
+}
+
+func TestHealthReportsExecutionCapacity(t *testing.T) {
+	config := DefaultConfig()
+	config.Token = "secret"
+	config.StoragePath = filepath.Join(t.TempDir(), "storage")
+	config.DockerBinary = "/bin/false"
+	config.Concurrency = 3
+	config.QueueCapacity = 7
+	service, err := New(config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	service.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	var status map[string]any
+	if err = json.NewDecoder(recorder.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusOK || status["concurrency"] != float64(3) || status["queue_capacity"] != float64(7) || status["running"] != float64(0) || status["queued"] != float64(0) {
+		t.Fatalf("status=%d body=%v", recorder.Code, status)
+	}
+}
+
+func TestFortySimultaneousExecutionsFitDefaultCapacity(t *testing.T) {
+	config := DefaultConfig()
+	config.Token = "secret"
+	config.StoragePath = filepath.Join(t.TempDir(), "storage")
+	config.DockerBinary = "/bin/false"
+	service, err := New(config, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const requests = 40
+	start := make(chan struct{})
+	release := make(chan struct{})
+	results := make(chan error, requests)
+	queuedResults := make(chan bool, requests)
+	for range requests {
+		go func() {
+			<-start
+			queued, _, err := service.acquireExecutionSlot(context.Background())
+			if err == nil {
+				<-release
+				<-service.semaphore
+			}
+			queuedResults <- queued
+			results <- err
+		}()
+	}
+	close(start)
+	deadline := time.Now().Add(time.Second)
+	for (len(service.semaphore) != config.Concurrency || len(service.waiting) != requests-config.Concurrency) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if running, queued := len(service.semaphore), len(service.waiting); running != 16 || queued != 24 {
+		t.Fatalf("running=%d queued=%d want 16/24", running, queued)
+	}
+	close(release)
+	queued := 0
+	for range requests {
+		if err := <-results; err != nil {
+			t.Fatalf("execution rejected: %v", err)
+		}
+		if <-queuedResults {
+			queued++
+		}
+	}
+	if queued != 24 {
+		t.Fatalf("queued executions=%d want 24", queued)
 	}
 }
 
