@@ -210,8 +210,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 16 {
-		return fmt.Errorf("database version %d is newer than supported version 16", version)
+	if version > 17 {
+		return fmt.Errorf("database version %d is newer than supported version 17", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -328,7 +328,46 @@ PRAGMA user_version = 1;`
 			return fmt.Errorf("migrate DeepSeek search channel: %w", err)
 		}
 	}
+	if version < 17 {
+		if err := s.migrateStudentRosterState(ctx); err != nil {
+			return fmt.Errorf("migrate student roster state: %w", err)
+		}
+	}
 	return nil
+}
+
+func (s *Store) migrateStudentRosterState(ctx context.Context) error {
+	columns := []struct {
+		name string
+		sql  string
+	}{
+		{"active", `ALTER TABLE students ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))`},
+		{"account_kind", `ALTER TABLE students ADD COLUMN account_kind TEXT NOT NULL DEFAULT 'roster' CHECK(account_kind IN ('roster','test'))`},
+	}
+	missing := make([]string, 0, len(columns))
+	for _, column := range columns {
+		has, err := s.tableHasColumn(ctx, "students", column.name)
+		if err != nil {
+			return err
+		}
+		if !has {
+			missing = append(missing, column.sql)
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, query := range missing {
+		if _, err = tx.ExecContext(ctx, query); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 17`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateDeepSeekSearchChannel(ctx context.Context) error {
@@ -867,9 +906,19 @@ func (s *Store) CreateRunWithPolicy(ctx context.Context, id, name, sourceRunID s
 		return Run{}, err
 	}
 	if sourceRunID != "" {
-		_, err = tx.ExecContext(ctx, `INSERT INTO students(run_id,id,name,created_at) SELECT ?,id,name,? FROM students WHERE run_id=?`, id, ts, sourceRunID)
+		_, err = tx.ExecContext(ctx, `INSERT INTO students(run_id,id,name,created_at,active,account_kind)
+		 SELECT ?,id,name,?,1,'roster' FROM students WHERE run_id=? AND active=1 AND account_kind='roster'`, id, ts, sourceRunID)
 		if err != nil {
 			return Run{}, err
+		}
+		// Accounts prefixed with A are durable workspaces. Move all of their
+		// run-scoped state, including sessions, into the new active run.
+		for _, table := range []string{"sessions", "designs", "skills", "conversations", "messages", "usage", "memory_settings", "memories", "artifacts"} {
+			if _, err = tx.ExecContext(ctx, `UPDATE `+table+` SET run_id=? WHERE run_id=? AND student_id IN (
+			 SELECT id FROM students WHERE run_id=? AND active=1 AND account_kind='roster' AND id GLOB 'A*'
+			)`, id, sourceRunID, sourceRunID); err != nil {
+				return Run{}, err
+			}
 		}
 	}
 	if err = tx.Commit(); err != nil {
@@ -1012,6 +1061,9 @@ func (s *Store) ImportStudentsCSV(ctx context.Context, runID, path string) (int,
 		if id == "" || name == "" {
 			return 0, fmt.Errorf("CSV line %d: id and name are required", line)
 		}
+		if id == "test" {
+			return 0, fmt.Errorf("CSV line %d: id %q is reserved for temporary accounts", line, id)
+		}
 		if seen[id] {
 			return 0, fmt.Errorf("CSV line %d: duplicate id %q", line, id)
 		}
@@ -1024,11 +1076,20 @@ func (s *Store) ImportStudentsCSV(ctx context.Context, runID, path string) (int,
 	}
 	defer tx.Rollback()
 	now := formatTime(time.Now().UTC())
+	if _, err = tx.ExecContext(ctx, `UPDATE students SET active=0 WHERE run_id=?`, runID); err != nil {
+		return 0, err
+	}
 	for _, e := range entries {
-		_, err = tx.ExecContext(ctx, `INSERT INTO students(run_id,id,name,created_at) VALUES(?,?,?,?) ON CONFLICT(run_id,id) DO UPDATE SET name=excluded.name`, runID, e.id, e.name, now)
+		_, err = tx.ExecContext(ctx, `INSERT INTO students(run_id,id,name,created_at,active,account_kind) VALUES(?,?,?,?,1,'roster')
+		 ON CONFLICT(run_id,id) DO UPDATE SET name=excluded.name,active=1,account_kind='roster'`, runID, e.id, e.name, now)
 		if err != nil {
 			return 0, err
 		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE sessions SET revoked_at=?
+	 WHERE run_id=? AND is_teacher=0 AND revoked_at IS NULL
+	 AND NOT EXISTS(SELECT 1 FROM students st WHERE st.run_id=sessions.run_id AND st.id=sessions.student_id AND st.active=1)`, now, runID); err != nil {
+		return 0, err
 	}
 	if err = tx.Commit(); err != nil {
 		return 0, err
@@ -1039,12 +1100,21 @@ func (s *Store) ImportStudentsCSV(ctx context.Context, runID, path string) (int,
 func (s *Store) Student(ctx context.Context, runID, id string) (Student, error) {
 	var st Student
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT run_id,id,name,created_at FROM students WHERE run_id=? AND id=?`, runID, id).Scan(&st.RunID, &st.ID, &st.Name, &created)
+	err := s.db.QueryRowContext(ctx, `SELECT run_id,id,name,created_at FROM students WHERE run_id=? AND id=? AND active=1`, runID, id).Scan(&st.RunID, &st.ID, &st.Name, &created)
 	if err != nil {
 		return Student{}, err
 	}
 	st.CreatedAt, err = parseTime(created)
 	return st, err
+}
+
+func (s *Store) CreateTestStudent(ctx context.Context, runID, id string) (Student, error) {
+	now := time.Now().UTC()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO students(run_id,id,name,created_at,active,account_kind) VALUES(?,?,?,?,1,'test')`, runID, id, "测试账号", formatTime(now))
+	if err != nil {
+		return Student{}, err
+	}
+	return Student{RunID: runID, ID: id, Name: "测试账号", CreatedAt: now}, nil
 }
 
 func (s *Store) CreateSession(ctx context.Context, sess Session) error {
@@ -1690,7 +1760,7 @@ func (s *Store) Wall(ctx context.Context, runID string) ([]WallStudent, error) {
 	 FROM students st
 	 LEFT JOIN designs d ON d.run_id=st.run_id AND d.student_id=st.id
 	 LEFT JOIN usage u ON u.run_id=st.run_id AND u.student_id=st.id
-	 WHERE st.run_id=? ORDER BY st.id`, formatTime(time.Now().UTC()), runID)
+	 WHERE st.run_id=? AND st.active=1 ORDER BY st.id`, formatTime(time.Now().UTC()), runID)
 	if err != nil {
 		return nil, err
 	}

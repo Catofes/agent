@@ -357,6 +357,37 @@ func TestStudentLoginDesignChatAndReplacement(t *testing.T) {
 	}
 }
 
+func TestTestLoginsCreateIndependentTemporaryAccounts(t *testing.T) {
+	handler, st := testServer(t)
+	first, second := newClient(handler), newClient(handler)
+	status, firstLogin, _ := requestJSON(t, first, http.MethodPost, "/api/login", map[string]string{"id": "test"})
+	if status != http.StatusOK {
+		t.Fatalf("first test login status=%d body=%v", status, firstLogin)
+	}
+	status, secondLogin, _ := requestJSON(t, second, http.MethodPost, "/api/login", map[string]string{"id": "test"})
+	if status != http.StatusOK {
+		t.Fatalf("second test login status=%d body=%v", status, secondLogin)
+	}
+	firstID := firstLogin["student"].(map[string]any)["id"].(string)
+	secondID := secondLogin["student"].(map[string]any)["id"].(string)
+	if firstID == secondID || !strings.HasPrefix(firstID, "test_") || !strings.HasPrefix(secondID, "test_") {
+		t.Fatalf("temporary ids are not independent: %q %q", firstID, secondID)
+	}
+	for i, client := range []*testClient{first, second} {
+		if status, _, _ = requestJSON(t, client, http.MethodGet, "/api/me", nil); status != http.StatusOK {
+			t.Fatalf("test client %d was invalidated: status=%d", i, status)
+		}
+	}
+	run, err := st.ActiveRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wall, err := st.Wall(context.Background(), run.ID)
+	if err != nil || len(wall) != 4 {
+		t.Fatalf("wall=%#v err=%v", wall, err)
+	}
+}
+
 func TestStudentMessageHistoryIncludesPersistedReasoning(t *testing.T) {
 	handler, st := testServer(t)
 	student := newClient(handler)

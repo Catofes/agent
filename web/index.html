@@ -1715,6 +1715,11 @@
         const es = new EventSource("/api/events");
         es.addEventListener("classroom", async (e) => {
           const d = JSON.parse(e.data);
+          if (d.type === "run_ended") {
+            es.close();
+            location.reload();
+            return;
+          }
           if (d.type === "usage_reset") {
             await refreshTokenQuota().catch(() => {});
             return;

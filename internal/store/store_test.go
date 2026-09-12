@@ -337,6 +337,98 @@ func TestImportCSVIsAtomic(t *testing.T) {
 	}
 }
 
+func TestImportCSVReplacesActiveRosterAndRevokesRemovedStudent(t *testing.T) {
+	ctx := context.Background()
+	st, csvPath := testStore(t)
+	run, err := st.EnsureActiveRun(ctx, "run", "课堂")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, csvPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.CreateSession(ctx, Session{TokenHash: "removed-session", RunID: run.ID, StudentID: "2101", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(t.TempDir(), "replacement.csv")
+	if err = os.WriteFile(replacement, []byte("id,name\n2102,李四改名\n2103,王五\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if n, importErr := st.ImportStudentsCSV(ctx, run.ID, replacement); importErr != nil || n != 2 {
+		t.Fatalf("import=%d err=%v", n, importErr)
+	}
+	if _, err = st.Student(ctx, run.ID, "2101"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed student remains active: %v", err)
+	}
+	updated, err := st.Student(ctx, run.ID, "2102")
+	if err != nil || updated.Name != "李四改名" {
+		t.Fatalf("updated student=%#v err=%v", updated, err)
+	}
+	wall, err := st.Wall(ctx, run.ID)
+	if err != nil || len(wall) != 2 || wall[0].ID != "2102" || wall[1].ID != "2103" {
+		t.Fatalf("wall=%#v err=%v", wall, err)
+	}
+	sess, err := st.Session(ctx, "removed-session")
+	if err != nil || sess.RevokedAt == nil {
+		t.Fatalf("removed student session=%#v err=%v", sess, err)
+	}
+}
+
+func TestCreateRunPreservesFixedAccountsOnly(t *testing.T) {
+	ctx := context.Background()
+	st, _ := testStore(t)
+	run, err := st.EnsureActiveRun(ctx, "run_one", "第一场")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roster := filepath.Join(t.TempDir(), "fixed.csv")
+	if err = os.WriteFile(roster, []byte("id,name\nA01,听课老师\n2101,张三\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, roster); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"A01", "2101"} {
+		if _, err = st.SaveDesign(ctx, Design{RunID: run.ID, StudentID: id, Persona: "保留-" + id, Tools: []string{}, MaxTurns: 3}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conversation, err := st.CreateConversation(ctx, Conversation{ID: "fixed-conversation", RunID: run.ID, StudentID: "A01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.AddMessage(ctx, Message{RunID: run.ID, StudentID: "A01", ConversationID: conversation.ID, TurnID: "turn", Role: "user", Content: "保留消息"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.CreateSession(ctx, Session{TokenHash: "fixed-session", RunID: run.ID, StudentID: "A01", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.CreateTestStudent(ctx, run.ID, "test_once"); err != nil {
+		t.Fatal(err)
+	}
+	run2, err := st.CreateRun(ctx, "run_two", "第二场", run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixedDesign, err := st.Design(ctx, run2.ID, "A01")
+	if err != nil || fixedDesign.Persona != "保留-A01" {
+		t.Fatalf("fixed design=%#v err=%v", fixedDesign, err)
+	}
+	if _, err = st.Conversation(ctx, run2.ID, "A01", conversation.ID); err != nil {
+		t.Fatalf("fixed conversation was reset: %v", err)
+	}
+	if _, err = st.Design(ctx, run2.ID, "2101"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ordinary design crossed run: %v", err)
+	}
+	if _, err = st.Student(ctx, run2.ID, "test_once"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("test account crossed run: %v", err)
+	}
+	sess, err := st.Session(ctx, "fixed-session")
+	if err != nil || sess.RunID != run2.ID || sess.RevokedAt != nil {
+		t.Fatalf("fixed session=%#v err=%v", sess, err)
+	}
+}
+
 func TestVersionOneMessagesMigrateIntoLegacyConversation(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -540,7 +632,7 @@ func TestVersionTwelveAddsPresetPolicyAndRemovesCalculator(t *testing.T) {
 		t.Fatalf("design=%#v err=%v", design, err)
 	}
 	var version int
-	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 16 {
+	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 17 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 }

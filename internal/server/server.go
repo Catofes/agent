@@ -308,15 +308,24 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有可用课堂场次")
 		return
 	}
-	st, err := s.Store.Student(r.Context(), run.ID, in.ID)
-	if err != nil {
-		writeError(w, 401, "INVALID_LOGIN", "学号或校验信息不正确")
-		return
-	}
-	initial := strings.TrimSpace(in.NameInitial)
-	if (s.Config.RequireNameInitial && initial == "") || (initial != "" && !strings.HasPrefix(st.Name, initial)) {
-		writeError(w, 401, "INVALID_LOGIN", "学号或校验信息不正确")
-		return
+	var st store.Student
+	if in.ID == "test" {
+		st, err = s.Store.CreateTestStudent(r.Context(), run.ID, newID("test_"))
+		if err != nil {
+			writeError(w, 500, "INTERNAL_ERROR", "无法创建测试账号")
+			return
+		}
+	} else {
+		st, err = s.Store.Student(r.Context(), run.ID, in.ID)
+		if err != nil {
+			writeError(w, 401, "INVALID_LOGIN", "学号或校验信息不正确")
+			return
+		}
+		initial := strings.TrimSpace(in.NameInitial)
+		if (s.Config.RequireNameInitial && initial == "") || (initial != "" && !strings.HasPrefix(st.Name, initial)) {
+			writeError(w, 401, "INVALID_LOGIN", "学号或校验信息不正确")
+			return
+		}
 	}
 	raw, hash, err := newToken()
 	if err != nil {
