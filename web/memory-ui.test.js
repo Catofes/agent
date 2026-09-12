@@ -23,6 +23,7 @@ test("student workbench exposes the complete Memory confirmation workflow", () =
   assert.match(html, /memory_status/);
   assert.match(html, /memory_recalled/);
   assert.match(html, /recall_memory:\s*["']读取 Memory["']/);
+  assert.match(html, /save_memory:\s*["']写入 Memory["']/);
   assert.match(html, /撤销这条/);
   assert.match(html, /encodeURIComponent\(first\.id\)/);
   assert.doesNotMatch(html, /setTimeout\(\(\) => loadMemory/);

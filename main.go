@@ -81,7 +81,7 @@ func main() {
 	}
 	engine.TokenBudget = cfg.StudentTokenBudget
 	engine.MaxToolCalls = cfg.MaxToolCalls
-	engine.MaxToolCallsByName = map[string]int{"web_search": 10, "web_fetch": 10, "recall_memory": 5, "python_execute": 5}
+	engine.MaxToolCallsByName = map[string]int{"web_search": 10, "web_fetch": 10, "recall_memory": 5, "save_memory": 5, "python_execute": 5}
 	engine.MaxOutputChars = cfg.MaxOutputChars
 	engine.MaxReasoningChars = cfg.MaxReasoningChars
 	engine.MemoryExtractor = agent.LLMMemoryExtractor{Client: client, Model: cfg.DeepSeekModel}

@@ -460,7 +460,7 @@ func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
 		"enabled": state.Enabled,
 		"items":   state.Items,
 		"usage":   map[string]int{"items": len(state.Items), "estimated_tokens": tokens},
-		"limits":  map[string]int{"items": s.Config.MaxMemoryItems, "chars_per_item": s.Config.MaxMemoryChars, "estimated_tokens": s.Config.MaxMemoryTokens},
+		"limits":  map[string]int{"items": s.Config.MaxMemoryItems, "chars_per_item": s.Config.MaxMemoryChars, "prompt_tokens": s.Config.MaxMemoryTokens},
 		"scope":   "current_run",
 		"mode":    policy.MemoryMode,
 	})
@@ -527,21 +527,14 @@ func (s *Server) updateMemory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取 Memory 失败")
 		return
 	}
-	tokens := memoryTokenEstimate(in.Content)
 	found := false
 	for _, item := range items {
 		if item.ID == id {
 			found = true
-			continue
 		}
-		tokens += memoryTokenEstimate(item.Content)
 	}
 	if !found {
 		writeError(w, 404, "MEMORY_NOT_FOUND", "未找到该条 Memory")
-		return
-	}
-	if tokens > s.Config.MaxMemoryTokens {
-		writeError(w, 400, "MEMORY_LIMIT_EXCEEDED", "Memory 总 token 估算已超过上限，请先缩短或删除其他条目")
 		return
 	}
 	updated, err := s.Store.UpdateMemory(r.Context(), p.Session.RunID, p.Session.StudentID, id, in.Content, in.Status)

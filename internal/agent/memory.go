@@ -173,19 +173,16 @@ func (e *Engine) scheduleMemoryExtraction(req Request, answer string, extractor 
 			return
 		}
 		existing := make(map[string]bool, len(items))
-		totalTokens := 0
 		for _, item := range items {
 			existing[strings.ToLower(strings.TrimSpace(item.Content))] = true
-			totalTokens += estimateTokens(item.Content)
 		}
 		created := make([]store.Memory, 0, len(candidates))
 		for _, content := range candidates {
 			content = strings.TrimSpace(content)
-			if content == "" || utf8.RuneCountInString(content) > e.MaxMemoryChars || existing[strings.ToLower(content)] {
+			if content == "" || utf8.RuneCountInString(content) > e.MaxMemoryChars || containsSensitiveMemory(content) || existing[strings.ToLower(content)] {
 				continue
 			}
-			candidateTokens := estimateTokens(content)
-			if len(items) >= e.MaxMemoryItems || totalTokens+candidateTokens > e.MaxMemoryTokens {
+			if len(items) >= e.MaxMemoryItems {
 				break
 			}
 			status := "candidate"
@@ -205,7 +202,6 @@ func (e *Engine) scheduleMemoryExtraction(req Request, answer string, extractor 
 			items = append(items, stored)
 			created = append(created, stored)
 			existing[strings.ToLower(content)] = true
-			totalTokens += candidateTokens
 		}
 		if len(created) == 0 {
 			notifyMemoryUpdate(req, MemoryUpdate{Status: "no_change"})
@@ -232,6 +228,31 @@ func newMemoryID() string {
 func estimateTokens(value string) int {
 	// A conservative tokenizer-independent estimate suitable for a hard prompt budget.
 	return (len([]byte(value)) + 2) / 3
+}
+
+func containsSensitiveMemory(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"密码", "口令", "密钥", "api key", "apikey", "access token", "身份证", "护照",
+		"银行卡", "手机号", "电话号码", "联系电话", "电子邮箱", "email", "e-mail",
+		"家庭住址", "详细住址", "门牌号", "病史", "疾病", "诊断", "过敏史",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	digitRun := 0
+	for _, r := range lower {
+		if unicode.IsDigit(r) {
+			digitRun++
+			if digitRun >= 6 {
+				return true
+			}
+		} else {
+			digitRun = 0
+		}
+	}
+	return strings.Contains(lower, "@") && strings.Contains(lower, ".")
 }
 
 func memoryTerms(value string) map[string]bool {

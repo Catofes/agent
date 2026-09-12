@@ -35,7 +35,7 @@ min_max_turns: 1
 max_max_turns: 60
 max_tool_calls: 30
 max_reasoning_chars: 12000
-max_memory_items: 30
+max_memory_items: 100
 max_memory_chars: 400
 max_memory_tokens: 1200
 memory_extract_timeout: "20s"

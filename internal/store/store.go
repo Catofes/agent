@@ -1689,8 +1689,32 @@ func (s *Store) addMemory(ctx context.Context, m Memory, settingRevision string,
 }
 
 func (s *Store) UpdateMemory(ctx context.Context, runID, studentID, id, content, status string) (Memory, error) {
+	return s.updateMemory(ctx, runID, studentID, id, content, status, "", "", "", 0, "")
+}
+
+// UpdateMemoryIfSettings updates an item only while both the student's Memory
+// switch and the classroom Memory policy still match the checked revisions.
+func (s *Store) UpdateMemoryIfSettings(ctx context.Context, runID, studentID, id, content, status, sourceConversationID, sourceTurnID, settingRevision string, policyRevision int64, memoryMode string) (Memory, error) {
+	return s.updateMemory(ctx, runID, studentID, id, content, status, sourceConversationID, sourceTurnID, settingRevision, policyRevision, memoryMode)
+}
+
+func (s *Store) updateMemory(ctx context.Context, runID, studentID, id, content, status, sourceConversationID, sourceTurnID, settingRevision string, policyRevision int64, memoryMode string) (Memory, error) {
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE memories SET content=?,status=?,updated_at=? WHERE run_id=? AND student_id=? AND id=?`, content, status, formatTime(now), runID, studentID, id)
+	query := `UPDATE memories SET content=?,status=?,updated_at=? WHERE run_id=? AND student_id=? AND id=?`
+	args := []any{content, status, formatTime(now), runID, studentID, id}
+	if sourceConversationID != "" || sourceTurnID != "" {
+		query = `UPDATE memories SET content=?,status=?,source_conversation_id=?,source_turn_id=?,updated_at=? WHERE run_id=? AND student_id=? AND id=?`
+		args = []any{content, status, sourceConversationID, sourceTurnID, formatTime(now), runID, studentID, id}
+	}
+	if settingRevision != "" {
+		query += ` AND EXISTS(SELECT 1 FROM memory_settings WHERE run_id=? AND student_id=? AND enabled=1 AND updated_at=?)`
+		args = append(args, runID, studentID, settingRevision)
+	}
+	if policyRevision > 0 {
+		query += ` AND EXISTS(SELECT 1 FROM run_policies WHERE run_id=? AND revision=? AND memory_mode=? AND memory_mode<>'disabled')`
+		args = append(args, runID, policyRevision, memoryMode)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return Memory{}, err
 	}

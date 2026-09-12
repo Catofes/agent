@@ -185,7 +185,7 @@ func testServerWithRoster(t *testing.T, client agent.Client, studentCount int) (
 	if _, err = st.ImportStudentsCSV(context.Background(), run.ID, csvPath); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{AdminPassword: "teacher-secret", AnonymousHMACKey: "hmac-secret", SessionTTL: time.Hour, LLMTimeout: time.Second, LLMConcurrency: 4, StudentTokenBudget: 1000, DefaultMaxTurns: 5, MinMaxTurns: 1, MaxMaxTurns: 8, MaxToolCalls: 4, MaxPersonaChars: 100, MaxSkillChars: 1000, MaxInputChars: 100, MaxOutputChars: 1000, MaxMemoryItems: 30, MaxMemoryChars: 400, MaxMemoryTokens: 1200}
+	cfg := config.Config{AdminPassword: "teacher-secret", AnonymousHMACKey: "hmac-secret", SessionTTL: time.Hour, LLMTimeout: time.Second, LLMConcurrency: 4, StudentTokenBudget: 1000, DefaultMaxTurns: 5, MinMaxTurns: 1, MaxMaxTurns: 8, MaxToolCalls: 4, MaxPersonaChars: 100, MaxSkillChars: 1000, MaxInputChars: 100, MaxOutputChars: 1000, MaxMemoryItems: 100, MaxMemoryChars: 400, MaxMemoryTokens: 1200}
 	engine := agent.NewEngine(st, client, tools.NewRegistry(serverTestTool{}, tools.HostedWebSearch{}), "fake", "hmac-secret", time.Second, 4)
 	engine.RegisterProvider("qwen", agent.ModelProvider{Client: client, Model: "qwen3.8-flash"})
 	engine.RegisterProvider("bailian-deepseek", agent.ModelProvider{Client: client, Model: "deepseek-v4-flash-0731", HostedWebSearch: true})
@@ -518,8 +518,14 @@ func TestStudentMemoryCRUDLimitsAndPrivacyIsolation(t *testing.T) {
 		}
 	}
 	status, budgetBody, _ := requestJSON(t, first, http.MethodPatch, "/api/memory/mem_private", map[string]string{"content": "额外内容", "status": "confirmed"})
-	if status != http.StatusBadRequest {
-		t.Fatalf("total token limit status=%d body=%#v", status, budgetBody)
+	if status != http.StatusOK || budgetBody["content"] != "额外内容" {
+		t.Fatalf("stored Memory should not be capped by prompt budget: status=%d body=%#v", status, budgetBody)
+	}
+	status, listed, _ = requestJSON(t, first, http.MethodGet, "/api/memory", nil)
+	limits, _ := listed["limits"].(map[string]any)
+	usage, _ := listed["usage"].(map[string]any)
+	if status != http.StatusOK || limits["prompt_tokens"] != float64(1200) || usage["estimated_tokens"].(float64) <= limits["prompt_tokens"].(float64) {
+		t.Fatalf("prompt budget should be reported separately from stored usage: status=%d body=%#v", status, listed)
 	}
 	status, _, _ = requestJSON(t, second, http.MethodPost, "/api/login", map[string]string{"id": "2102"})
 	if status != http.StatusOK {

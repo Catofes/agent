@@ -169,7 +169,7 @@ func validConfig() Config {
 		MaxInputChars:        4_000,
 		MaxOutputChars:       16_000,
 		MaxReasoningChars:    12_000,
-		MaxMemoryItems:       30,
+		MaxMemoryItems:       100,
 		MaxMemoryChars:       400,
 		MaxMemoryTokens:      1_200,
 		MemoryExtractTimeout: 20 * time.Second,

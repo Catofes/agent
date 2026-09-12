@@ -100,7 +100,7 @@ DEEPSEEK_API_KEY='...' make smoke-real
 - `qwen`：千问模型改用百炼 Responses API 的内置 `web_search`，返回模型生成的检索词和来源 URL；需要同时配置 `QWEN_API_KEY`，并且只能与千问模型组合。`web_fetch` 仍是受教师策略控制的独立本地工具。
 - `bailian-deepseek`：由阿里云百炼提供推理服务的 DeepSeek 模型改用百炼 Responses API，并启用其内置 `web_search` 与 `web_extractor`；需要同时配置 `BAILIAN_DEEPSEEK_API_KEY` 和带业务空间 ID 的 `BAILIAN_DEEPSEEK_BASE_URL`，只能与“DeepSeek（阿里云百炼）”模型组合。它与 `deepseek`（DeepSeek 官方接口）是两个独立服务。
 
-所有搜索模式都沿用教师的课堂 Tool 开关和学生装备状态。每次对话默认最多执行 30 个工具，其中 `web_search`、`web_fetch` 各最多 10 次，`python_execute`、`recall_memory` 各最多 5 次；模型迭代数仍由学生设计里的最大步数独立限制。`web_fetch` 是独立的本地网页读取工具；若不希望课堂服务器直接访问搜索结果网址，应由教师关闭它。
+所有搜索模式都沿用教师的课堂 Tool 开关和学生装备状态。每次对话默认最多执行 30 个工具，其中 `web_search`、`web_fetch` 各最多 10 次，`python_execute`、`recall_memory`、`save_memory` 各最多 5 次；模型迭代数仍由学生设计里的最大步数独立限制。`web_fetch` 是独立的本地网页读取工具；若不希望课堂服务器直接访问搜索结果网址，应由教师关闭它。
 
 每名学生在每个课堂场次中的模型用量默认上限为 5000 万 token，可通过 `STUDENT_TOKEN_BUDGET` 调整。学生工作台显示本场剩余额度，并在每次回答后刷新；教师状态墙显示每名学生的累计用量，学生详情显示输入、输出、上限和占比，并可单独重置当前场次的计量。教师重置后学生端会自动同步，且不会删除对话、设计或 Memory。
 
@@ -182,4 +182,4 @@ Nginx HTTPS 配置和流式检查步骤见 [HTTPS 反向代理部署](doc/HTTPS�
 
 ## 当前边界
 
-Memory 对每个学生仍默认关闭，老师可以按场次选择关闭、确认后记忆或自然记忆，并分别控制本场 Skill 和 Tool。关闭 Skill 后，学生端隐藏 Skill 编辑入口，已有 Skill 保留但不可修改、不会进入模型上下文或投屏。Memory 只在同一课堂场次内跨对话生效；除回合开始时的相关筛选外，任务或已加载 Skill 还可以通过受限的 `recall_memory` 补充召回当前学生已确认的事实。MVP 边界见 [Memory MVP 设计](doc/MemoryMVP设计.md)，演进状态见 [Memory V2 设计与实施计划](doc/MemoryV2设计与实施计划.md)。联网搜索作为主对话工具执行：智谱直接返回结构化结果，DeepSeek 可由教师选择搜索通道，千问通过百炼 Responses API 执行内置搜索；搜索后仍可调用本地 `web_fetch` 核对原文。zip 导出、随机点名、优秀池、绘图和多智能体演示仍在 [todo.md](todo.md) 的后续版本清单中。
+Memory 对每个学生仍默认关闭，老师可以按场次选择关闭、确认后记忆或自然记忆，并分别控制本场 Skill 和 Tool。关闭 Skill 后，学生端隐藏 Skill 编辑入口，已有 Skill 保留但不可修改、不会进入模型上下文或投屏。Memory 只在同一课堂场次内跨对话生效；除回合开始时的相关筛选外，任务或已加载 Skill 可以通过受限的 `recall_memory` 补充召回，也可以用 `save_memory` 立即提出新增或更新。确认后记忆模式写为候选，自然记忆模式直接生效；两者都重新检查课堂策略和学生开关。默认最多保存 100 条、每条 400 字，每轮实际注入模型的 Memory 仍限制在约 1200 tokens。MVP 边界见 [Memory MVP 设计](doc/MemoryMVP设计.md)，演进状态见 [Memory V2 设计与实施计划](doc/MemoryV2设计与实施计划.md)。联网搜索作为主对话工具执行：智谱直接返回结构化结果，DeepSeek 可由教师选择搜索通道，千问通过百炼 Responses API 执行内置搜索；搜索后仍可调用本地 `web_fetch` 核对原文。zip 导出、随机点名、优秀池、绘图和多智能体演示仍在 [todo.md](todo.md) 的后续版本清单中。

@@ -816,8 +816,8 @@ func TestDisabledMemoryOmitsPromptContextAndRecallTool(t *testing.T) {
 		}
 	}
 	for _, definition := range fake.requests[0].Tools {
-		if definition.Function.Name == "recall_memory" {
-			t.Fatal("recall_memory was exposed while Memory was disabled for the request")
+		if definition.Function.Name == "recall_memory" || definition.Function.Name == "save_memory" {
+			t.Fatalf("%s was exposed while Memory was disabled for the request", definition.Function.Name)
 		}
 	}
 }
@@ -845,6 +845,48 @@ func TestRecallMemoryUsesConceptMatchAndRequiresMemoryToRemainEnabled(t *testing
 	}
 	if _, _, err := engine.recallMemory(ctx, Request{RunID: run.ID, StudentID: "2101"}, `{"query":"学生所在城市"}`); err == nil {
 		t.Fatal("recall succeeded after Memory was disabled")
+	}
+}
+
+func TestSaveMemoryAddsAndUpdatesUnderCurrentPolicy(t *testing.T) {
+	ctx := context.Background()
+	st, run := newEngineTestStore(t)
+	if err := st.SetMemoryEnabled(ctx, run.ID, "2101", true); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine(st, &fakeClient{}, tools.NewRegistry(), "model", "secret", time.Second, 1)
+	engine.MaxMemoryTokens = 1 // Prompt budget must not limit stored Memory.
+
+	added, result, err := engine.saveMemory(ctx, Request{
+		RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn",
+	}, `{"operation":"add","content":"学生希望数学讲解多用图示"}`)
+	if err != nil || added.Status != "candidate" || !strings.Contains(result.ModelText, "等待学生确认") {
+		t.Fatalf("review add=%#v result=%#v err=%v", added, result, err)
+	}
+
+	policy, err := st.SetRunPolicy(ctx, run.ID, store.RunPolicy{MemoryMode: store.MemoryModeAdaptive, AllowedTools: []string{"calculator"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, result, err := engine.saveMemory(ctx, Request{
+		RunID: run.ID, StudentID: "2101", ConversationID: "conv", TurnID: "turn_two", PolicyRevision: policy.Revision,
+	}, `{"operation":"update","memory_id":"`+added.ID+`","content":"学生希望理科讲解多用图示"}`)
+	if err != nil || updated.ID != added.ID || updated.Status != "confirmed" || !strings.Contains(result.ModelText, "立即生效") {
+		t.Fatalf("adaptive update=%#v result=%#v err=%v", updated, result, err)
+	}
+
+	items, err := st.Memories(ctx, run.ID, "2101", "")
+	if err != nil || len(items) != 1 || items[0].Content != "学生希望理科讲解多用图示" {
+		t.Fatalf("stored items=%#v err=%v", items, err)
+	}
+	if _, _, err := engine.saveMemory(ctx, Request{RunID: run.ID, StudentID: "2101"}, `{"operation":"add","content":"学生的手机号是13800138000"}`); err == nil || !strings.Contains(err.Error(), "敏感信息") {
+		t.Fatalf("sensitive Memory should be rejected: %v", err)
+	}
+	if err := st.SetMemoryEnabled(ctx, run.ID, "2101", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := engine.saveMemory(ctx, Request{RunID: run.ID, StudentID: "2101"}, `{"operation":"add","content":"不应写入"}`); err == nil {
+		t.Fatal("save succeeded after Memory was disabled")
 	}
 }
 

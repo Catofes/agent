@@ -583,6 +583,7 @@
           python_execute: "Python 执行",
           load_skill: "加载 Skill",
           recall_memory: "读取 Memory",
+          save_memory: "写入 Memory",
         }[name] || name;
       }
       function markDirty() {
@@ -1146,7 +1147,7 @@
           limits = memoryState.limits || {};
         $("memoryUsage").textContent = disabledByTeacher
           ? "老师未在本场次开放 Memory；已有内容仍可查看和删除。"
-          : `${usage.items || 0}/${limits.items || 30} 条，约 ${usage.estimated_tokens || 0}/${limits.estimated_tokens || 1200} tokens；单条最多 ${limits.chars_per_item || 400} 字。`;
+          : `${usage.items || 0}/${limits.items || 100} 条，已保存约 ${usage.estimated_tokens || 0} tokens；单条最多 ${limits.chars_per_item || 400} 字，每轮最多读取约 ${limits.prompt_tokens || 1200} tokens。`;
         const list = $("memoryList");
         list.replaceChildren();
         if (!memoryState.items.length) {
