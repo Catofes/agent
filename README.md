@@ -120,7 +120,7 @@ docker compose up -d
 curl http://127.0.0.1:8090/healthz
 ```
 
-之后在 `deploy/` 中直接运行 `docker compose up -d` 即可；Compose 每次都会从 GHCR 拉取最新的 `ghcr.io/catofes/agent-python-runner:latest` 和 `ghcr.io/catofes/agent-python-runtime:latest`，部署机不再编译 Go Runner，也不再安装 Python 科学计算包。Python Runtime 当前固定包含 `numpy`、`pandas`、`matplotlib` 和 `openpyxl`，发布工作流会为 Runner 和 Runtime 同时生成 `linux/amd64` 与 `linux/arm64` 镜像。
+之后在 `deploy/` 中直接运行 `docker compose up -d` 即可；Compose 每次都会从 GHCR 拉取最新的 `ghcr.io/catofes/agent-python-runner:latest` 和 `ghcr.io/catofes/agent-python-runtime:latest`，部署机不再编译 Go Runner，也不再安装 Python 科学计算包。Python Runtime 固定包含 Noto CJK 中文字体，以及 `numpy`、`pandas`、`matplotlib`、`openpyxl`、`scipy`、`sympy`、`seaborn`、`Pillow`、`scikit-learn`、`networkx` 和 `xlsxwriter`；镜像构建时会实际生成一张含中文标题、坐标轴和图例的 PNG 作为自检。发布工作流会为 Runner 和 Runtime 同时生成 `linux/amd64` 与 `linux/arm64` 镜像。
 
 正式部署建议在 `deploy/.env` 里额外设置 `PYTHON_RUNNER_IMAGE` 和 `PYTHON_RUNTIME_IMAGE`，将两者锁定到与 Agent 相同的版本标签或审核后的 digest；未设置时默认使用 `latest`。手工更新可执行 `docker compose pull && docker compose up -d`。
 

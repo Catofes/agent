@@ -1,15 +1,41 @@
+FROM debian:bookworm-slim AS fonts
+
+# 只从 Debian 字体包提取绘图所需的无衬线中文字体，避免把整套 CJK/Serif 字体带入运行镜像。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
 FROM python:3.13-slim-bookworm
 
-# 第一版固定提供常用的数据处理、绘图和表格包；课堂期间不允许 pip install。
+# 固定提供中文字体和常用教学计算包；课堂期间不允许 apt/pip install。
+COPY --from=fonts /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+COPY --from=fonts /usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc /usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc
+
 RUN pip install --no-cache-dir \
     numpy==2.3.2 \
     pandas==2.3.1 \
     matplotlib==3.10.5 \
     openpyxl==3.1.5 \
-    && python -c "import matplotlib, numpy, openpyxl, pandas" \
+    scipy==1.18.1 \
+    sympy==1.14.0 \
+    seaborn==0.13.2 \
+    pillow==12.3.0 \
+    scikit-learn==1.9.1 \
+    networkx==3.6.1 \
+    xlsxwriter==3.2.9 \
     && rm -rf /root/.cache
 
 ENV PYTHONUNBUFFERED=1 \
-    MPLBACKEND=Agg
+    MPLBACKEND=Agg \
+    MPLCONFIGDIR=/tmp/matplotlib
+
+COPY docker/matplotlibrc /usr/local/share/classroom/matplotlibrc
+COPY docker/python-runtime-entrypoint.sh /usr/local/bin/python-runtime-entrypoint
+COPY docker/python-runtime-smoke.py /tmp/python-runtime-smoke.py
+RUN chmod 0755 /usr/local/bin/python-runtime-entrypoint \
+    && python-runtime-entrypoint python /tmp/python-runtime-smoke.py \
+    && rm /tmp/python-runtime-smoke.py /tmp/python-runtime-chinese.png
 
 WORKDIR /workspace
+ENTRYPOINT ["python-runtime-entrypoint"]
