@@ -41,7 +41,6 @@ type Config struct {
 	AdminPassword                  string
 	AnonymousHMACKey               string
 	CookieSecure                   bool
-	RequireNameInitial             bool
 	SessionTTL                     time.Duration
 	LLMTimeout                     time.Duration
 	LLMConcurrency                 int
@@ -96,7 +95,6 @@ func Load(version string) (Config, error) {
 	flag.StringVar(&c.AdminPassword, "admin-password", os.Getenv("ADMIN_PASSWORD"), "teacher password")
 	flag.StringVar(&c.AnonymousHMACKey, "anonymous-hmac-key", os.Getenv("ANONYMOUS_HMAC_KEY"), "HMAC key for anonymous provider IDs")
 	flag.BoolVar(&c.CookieSecure, "cookie-secure", envBool("COOKIE_SECURE", false), "mark cookies Secure")
-	flag.BoolVar(&c.RequireNameInitial, "require-name-initial", envBool("REQUIRE_NAME_INITIAL", false), "require the first character of the student name at login")
 	flag.DurationVar(&c.SessionTTL, "session-ttl", envDuration("SESSION_TTL", 12*time.Hour), "session lifetime")
 	flag.DurationVar(&c.LLMTimeout, "llm-timeout", envDuration("LLM_TIMEOUT", 180*time.Second), "timeout for one model call")
 	flag.IntVar(&c.LLMConcurrency, "llm-concurrency", envInt("LLM_CONCURRENCY", 40), "maximum concurrent model calls")

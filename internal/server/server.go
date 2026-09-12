@@ -293,14 +293,14 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ID          string `json:"id"`
-		NameInitial string `json:"name_initial"`
+		NameInitial string `json:"name_initial"` // Accepted but ignored for older clients.
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
 	in.ID = strings.TrimSpace(in.ID)
-	if in.ID == "" || runeLen(in.ID) > maxStudentIDChars || runeLen(strings.TrimSpace(in.NameInitial)) > 8 {
-		writeError(w, 401, "INVALID_LOGIN", "学号或校验信息不正确")
+	if in.ID == "" || runeLen(in.ID) > maxStudentIDChars {
+		writeError(w, 401, "INVALID_LOGIN", "学号不正确")
 		return
 	}
 	run, err := s.Store.ActiveRun(r.Context())
@@ -309,7 +309,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var st store.Student
-	if in.ID == "test" {
+	if strings.EqualFold(in.ID, "test") {
 		st, err = s.Store.CreateTestStudent(r.Context(), run.ID, newID("test_"))
 		if err != nil {
 			writeError(w, 500, "INTERNAL_ERROR", "无法创建测试账号")
@@ -318,12 +318,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	} else {
 		st, err = s.Store.Student(r.Context(), run.ID, in.ID)
 		if err != nil {
-			writeError(w, 401, "INVALID_LOGIN", "学号或校验信息不正确")
-			return
-		}
-		initial := strings.TrimSpace(in.NameInitial)
-		if (s.Config.RequireNameInitial && initial == "") || (initial != "" && !strings.HasPrefix(st.Name, initial)) {
-			writeError(w, 401, "INVALID_LOGIN", "学号或校验信息不正确")
+			writeError(w, 401, "INVALID_LOGIN", "学号不正确")
 			return
 		}
 	}

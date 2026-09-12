@@ -359,7 +359,6 @@ func smokeConfig(opt options) config.Config {
 		MemoryExtractTimeout: 20 * time.Second,
 		DeepSeekModel:        opt.model,
 		DeepSeekBaseURL:      opt.baseURL,
-		RequireNameInitial:   false,
 		CookieSecure:         false,
 		InitialRunName:       "50 人冒烟测试",
 	}

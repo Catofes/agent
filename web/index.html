@@ -311,10 +311,6 @@
             <label for="studentId">学号</label
             ><input id="studentId" required autocomplete="username" />
           </div>
-          <div class="field">
-            <label for="initial">姓名首字（老师要求时填写）</label
-            ><input id="initial" maxlength="2" />
-          </div>
           <button>进入工作台</button>
           <p id="loginError" class="status"></p>
         </form>
@@ -616,7 +612,6 @@
             method: "POST",
             body: JSON.stringify({
               id: $("studentId").value,
-              name_initial: $("initial").value,
             }),
           });
           student = d.student;

@@ -335,6 +335,11 @@ func TestImportCSVIsAtomic(t *testing.T) {
 	if _, err = st.Student(ctx, run.ID, "1"); err == nil {
 		t.Fatal("partial import occurred")
 	}
+	caseDuplicate := filepath.Join(t.TempDir(), "case-duplicate.csv")
+	_ = os.WriteFile(caseDuplicate, []byte("id,name\nA01,甲\na01,乙\n"), 0o600)
+	if _, err = st.ImportStudentsCSV(ctx, run.ID, caseDuplicate); err == nil {
+		t.Fatal("expected case-insensitive duplicate error")
+	}
 }
 
 func TestImportCSVReplacesActiveRosterAndRevokesRemovedStudent(t *testing.T) {

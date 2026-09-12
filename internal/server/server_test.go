@@ -357,6 +357,31 @@ func TestStudentLoginDesignChatAndReplacement(t *testing.T) {
 	}
 }
 
+func TestStudentLoginIgnoresNameInitialAndIDCase(t *testing.T) {
+	handler, st := testServer(t)
+	run, err := st.ActiveRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	roster := filepath.Join(t.TempDir(), "case-insensitive.csv")
+	if err = os.WriteFile(roster, []byte("id,name\nA01,听课老师\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.ImportStudentsCSV(context.Background(), run.ID, roster); err != nil {
+		t.Fatal(err)
+	}
+	student := newClient(handler)
+	status, login, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{
+		"id": "a01", "name_initial": "完全不匹配",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("login status=%d body=%v", status, login)
+	}
+	if id := login["student"].(map[string]any)["id"]; id != "A01" {
+		t.Fatalf("canonical student id=%v", id)
+	}
+}
+
 func TestTestLoginsCreateIndependentTemporaryAccounts(t *testing.T) {
 	handler, st := testServer(t)
 	first, second := newClient(handler), newClient(handler)
@@ -364,7 +389,7 @@ func TestTestLoginsCreateIndependentTemporaryAccounts(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("first test login status=%d body=%v", status, firstLogin)
 	}
-	status, secondLogin, _ := requestJSON(t, second, http.MethodPost, "/api/login", map[string]string{"id": "test"})
+	status, secondLogin, _ := requestJSON(t, second, http.MethodPost, "/api/login", map[string]string{"id": "TEST"})
 	if status != http.StatusOK {
 		t.Fatalf("second test login status=%d body=%v", status, secondLogin)
 	}

@@ -915,7 +915,7 @@ func (s *Store) CreateRunWithPolicy(ctx context.Context, id, name, sourceRunID s
 		// run-scoped state, including sessions, into the new active run.
 		for _, table := range []string{"sessions", "designs", "skills", "conversations", "messages", "usage", "memory_settings", "memories", "artifacts"} {
 			if _, err = tx.ExecContext(ctx, `UPDATE `+table+` SET run_id=? WHERE run_id=? AND student_id IN (
-			 SELECT id FROM students WHERE run_id=? AND active=1 AND account_kind='roster' AND id GLOB 'A*'
+			 SELECT id FROM students WHERE run_id=? AND active=1 AND account_kind='roster' AND substr(id,1,1) IN ('A','a')
 			)`, id, sourceRunID, sourceRunID); err != nil {
 				return Run{}, err
 			}
@@ -1061,13 +1061,14 @@ func (s *Store) ImportStudentsCSV(ctx context.Context, runID, path string) (int,
 		if id == "" || name == "" {
 			return 0, fmt.Errorf("CSV line %d: id and name are required", line)
 		}
-		if id == "test" {
+		if strings.EqualFold(id, "test") {
 			return 0, fmt.Errorf("CSV line %d: id %q is reserved for temporary accounts", line, id)
 		}
-		if seen[id] {
+		key := strings.ToUpper(id)
+		if seen[key] {
 			return 0, fmt.Errorf("CSV line %d: duplicate id %q", line, id)
 		}
-		seen[id] = true
+		seen[key] = true
 		entries = append(entries, entry{id, name})
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1100,7 +1101,7 @@ func (s *Store) ImportStudentsCSV(ctx context.Context, runID, path string) (int,
 func (s *Store) Student(ctx context.Context, runID, id string) (Student, error) {
 	var st Student
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT run_id,id,name,created_at FROM students WHERE run_id=? AND id=? AND active=1`, runID, id).Scan(&st.RunID, &st.ID, &st.Name, &created)
+	err := s.db.QueryRowContext(ctx, `SELECT run_id,id,name,created_at FROM students WHERE run_id=? AND id=? COLLATE NOCASE AND active=1`, runID, id).Scan(&st.RunID, &st.ID, &st.Name, &created)
 	if err != nil {
 		return Student{}, err
 	}
