@@ -16,6 +16,7 @@ id,name
 
 ```dotenv
 DEEPSEEK_API_KEY='替换为真实 Key'
+DEEPSEEK_MODEL='deepseek-flash'
 # 可选：配置后教师可以在课堂中切换到 Qwen，无需重启服务
 QWEN_API_KEY='替换为百炼 Key'
 QWEN_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'

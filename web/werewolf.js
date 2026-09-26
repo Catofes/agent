@@ -173,6 +173,11 @@
       const running = game.status === "running";
       $("startGame").dataset.running = String(running);
       $("stopGame").classList.toggle("hidden", !running);
+      if (!running && $("actionStatus").textContent === `对局 ${game.id} 已开始。`) {
+        $("actionStatus").textContent = game.status === "complete"
+          ? `本局已结束：${game.winner === "wolves" ? "狼人获胜" : game.winner === "villagers" ? "好人获胜" : "平局"}。`
+          : `本局已${game.status === "failed" ? "出错" : "停止"}。`;
+      }
       updateSelection();
     }
   }
