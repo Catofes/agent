@@ -55,17 +55,18 @@ const (
 )
 
 type classroomEvent struct {
-	Type          string            `json:"type"`
-	Locked        bool              `json:"locked"`
-	RunID         string            `json:"run_id,omitempty"`
-	MemoryMode    string            `json:"memory_mode,omitempty"`
-	SkillsEnabled bool              `json:"skills_enabled"`
-	PresetSkills  []string          `json:"preset_skills"`
-	AllowedTools  []string          `json:"allowed_tools,omitempty"`
-	Revision      int64             `json:"revision,omitempty"`
-	MemoryStatus  string            `json:"memory_status,omitempty"`
-	MemoryItems   []memoryEventItem `json:"memory_items,omitempty"`
-	Target        string            `json:"-"`
+	Type            string            `json:"type"`
+	Locked          bool              `json:"locked"`
+	RunID           string            `json:"run_id,omitempty"`
+	MemoryMode      string            `json:"memory_mode,omitempty"`
+	SkillsEnabled   bool              `json:"skills_enabled"`
+	WerewolfEnabled bool              `json:"werewolf_enabled"`
+	PresetSkills    []string          `json:"preset_skills"`
+	AllowedTools    []string          `json:"allowed_tools,omitempty"`
+	Revision        int64             `json:"revision,omitempty"`
+	MemoryStatus    string            `json:"memory_status,omitempty"`
+	MemoryItems     []memoryEventItem `json:"memory_items,omitempty"`
+	Target          string            `json:"-"`
 }
 
 type memoryEventItem struct {
@@ -129,6 +130,7 @@ type Server struct {
 	Config                          config.Config
 	Store                           *store.Store
 	Agent                           *agent.Engine
+	WerewolfClient                  agent.Client
 	Runner                          *runnerapi.Client
 	AvailableSearchProviders        []string
 	AvailableDeepSeekSearchChannels []string
@@ -143,6 +145,9 @@ type Server struct {
 	screenMu                        sync.RWMutex
 	demoMu                          sync.RWMutex
 	controlMu                       sync.RWMutex
+	werewolfMu                      sync.Mutex
+	werewolfCancel                  context.CancelFunc
+	werewolfGameID                  string
 	screen                          screenState
 	screenAck                       chan struct{}
 	screenRevision                  uint64
@@ -189,6 +194,8 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/healthz", s.health)
 	r.Get("/", s.page("index.html"))
 	r.Get("/teacher", s.page("teacher.html"))
+	r.Get("/werewolf", s.page("werewolf.html"))
+	r.Get("/teacher/werewolf", s.page("teacher-werewolf.html"))
 	r.Get("/screen", s.page("screen.html"))
 	r.Handle("/assets/*", http.StripPrefix("/assets/", http.FileServer(http.FS(s.WebFS))))
 	r.Route("/api", func(r chi.Router) {
@@ -223,6 +230,10 @@ func (s *Server) Routes() http.Handler {
 				r.Delete("/memory", s.clearMemory)
 				r.Post("/chat", s.chat)
 				r.Get("/events", s.studentEvents)
+				r.Get("/werewolf/prompts", s.getWerewolfPrompts)
+				r.Put("/werewolf/prompts", s.saveWerewolfPrompts)
+				r.Get("/werewolf/current", s.studentWerewolfCurrent)
+				r.Get("/werewolf/games/{id}/events", s.studentWerewolfEvents)
 			})
 			r.Route("/teacher", func(r chi.Router) {
 				r.Use(s.requireTeacher)
@@ -239,6 +250,11 @@ func (s *Server) Routes() http.Handler {
 				r.Get("/screen-demo", s.getScreenDemo)
 				r.Post("/screen-demo", s.startScreenDemo)
 				r.Post("/screen-demo/chat", s.chatScreenDemo)
+				r.Get("/werewolf/roster", s.teacherWerewolfRoster)
+				r.Get("/werewolf/current", s.teacherWerewolfCurrent)
+				r.Get("/werewolf/games/{id}/events", s.teacherWerewolfEvents)
+				r.Post("/werewolf/games", s.startWerewolfGame)
+				r.Post("/werewolf/games/{id}/stop", s.stopWerewolfGame)
 				r.Delete("/screen-demo", s.stopScreenDemo)
 			})
 		})

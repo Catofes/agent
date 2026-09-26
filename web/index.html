@@ -323,6 +323,7 @@
             <div id="tokenQuota" class="quota-status" aria-live="polite"></div>
           </div>
           <div class="row">
+            <button id="werewolfLink" class="secondary hidden" type="button" onclick="location.href='/werewolf'">🐺 狼人杀协作</button>
             <button id="save">保存设计</button
             ><button id="logout" class="secondary" type="button">退出</button>
           </div>
@@ -1644,6 +1645,7 @@
       }
       function renderCapabilities(changed = false) {
         if (!capabilities) return;
+        $("werewolfLink").classList.toggle("hidden", !capabilities.werewolf_enabled);
         renderTokenQuota();
         const available = new Set(capabilities.available_tools || []),
           allowed = new Set(capabilities.allowed_tools || []),
@@ -1729,6 +1731,7 @@
               ...(capabilities || { available_tools: ["web_fetch"] }),
               memory_mode: d.memory_mode,
               skills_enabled: d.skills_enabled,
+              werewolf_enabled: d.werewolf_enabled,
               preset_skills: d.preset_skills || [],
               allowed_tools: d.allowed_tools || [],
               revision: d.revision,

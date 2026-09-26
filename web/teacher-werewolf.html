@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>狼人杀课堂控制台</title>
+  <link rel="stylesheet" href="/assets/werewolf.css" />
+</head>
+<body data-mode="teacher">
+  <main class="shell">
+    <header class="hero">
+      <div><a href="/teacher" class="back">← 返回教师管理台</a><p class="eyebrow">课堂控制台 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>选择 6 名学生 Agent，观察主持人如何将 Prompt、私密信息、发言和投票传递给每位 Agent。</p></div>
+      <div class="hero-note">固定六人局 · 最多四轮 · 使用 DeepSeek 官方 API</div>
+    </header>
+    <p id="status" class="status" role="status">正在读取课堂状态…</p>
+    <section id="teacherControls" class="card hidden">
+      <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。标记“已写 Prompt”的学生已经保存了角色策略；未写的学生使用默认 Prompt。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
+      <p id="teacherDisabled" class="notice hidden">狼人杀环节尚未开启。请在<a href="/teacher">课堂能力</a>中打开开关并保存。</p>
+      <div id="roster" class="roster"></div>
+      <div class="actions"><button id="startGame" type="button">开始一局狼人杀</button><button id="stopGame" class="secondary hidden" type="button">结束当前对局</button><span id="actionStatus" class="status" role="status"></span></div>
+    </section>
+    <section id="gameCard" class="card hidden">
+      <div class="section-heading"><div><p class="eyebrow">主持人视角</p><h2>当前对局</h2><p id="gameMeta">尚无对局。</p></div><span id="gameBadge" class="badge">待开局</span></div>
+      <div id="roleNotice" class="role-notice"></div>
+      <div id="players" class="players"></div>
+      <div class="timeline-heading"><h3>Prompt 交流流程</h3><p>展开每一步可查看送给 Agent 的完整 Prompt 与 Agent 的原始回复。私密夜间消息不会送给其他学生。</p></div>
+      <div id="timeline" class="timeline" aria-live="polite"></div>
+    </section>
+  </main>
+  <script src="/assets/werewolf.js"></script>
+</body>
+</html>

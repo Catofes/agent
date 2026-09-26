@@ -258,6 +258,7 @@
             <div id="actionStatus" role="status"></div>
           </div>
           <div class="row">
+            <button id="werewolfBoard" class="secondary" type="button" onclick="location.href='/teacher/werewolf'">🐺 狼人杀</button>
             <button id="lock">全体锁定</button
             ><button id="newRun">新建场次</button
             ><button id="logout" class="secondary">退出</button>
@@ -303,6 +304,13 @@
             <section class="policy-section" aria-labelledby="toolSettingsTitle">
               <h3 id="toolSettingsTitle">工具</h3>
               <div id="policyTools" class="policy-tools"></div>
+            </section>
+            <section class="policy-section" aria-labelledby="werewolfSettingsTitle">
+              <div class="policy-section-head">
+                <h3 id="werewolfSettingsTitle">多 Agent · 狼人杀</h3>
+                <label class="policy-switch"><input id="policyWerewolfEnabled" type="checkbox" />允许学生编辑 Prompt 并观看对局</label>
+              </div>
+              <p class="status">开启后可从右上角进入狼人杀板块，选择 6 名学生 Agent 开局。对局使用服务器的 DeepSeek 官方 API。</p>
             </section>
             <div class="policy-actions">
               <button id="savePolicy" type="button">保存课堂设置</button>
@@ -485,6 +493,7 @@
           deepseek_search_channel: $("policyDeepSeekSearchChannel").value,
           memory_mode: $("policyMemoryMode").value,
           skills_enabled: $("policySkillsEnabled").checked,
+          werewolf_enabled: $("policyWerewolfEnabled").checked,
           preset_skills: [...$("policyPresets").querySelectorAll("input:checked")].map(
             (input) => input.value,
           ),
@@ -590,6 +599,7 @@
             wallState.policy.deepseek_search_channel || "anthropic";
           $("policyMemoryMode").value = wallState.policy.memory_mode;
           $("policySkillsEnabled").checked = wallState.policy.skills_enabled !== false;
+          $("policyWerewolfEnabled").checked = wallState.policy.werewolf_enabled === true;
           const enabled = new Set(wallState.policy.allowed_tools || []);
           $("policyTools")
             .querySelectorAll("input")
@@ -619,6 +629,7 @@
         $("policyDeepSeekSearchChannel").disabled = policyBusy || !deepSeekSearchSelected;
         $("policyMemoryMode").disabled = policyBusy;
         $("policySkillsEnabled").disabled = policyBusy;
+        $("policyWerewolfEnabled").disabled = policyBusy;
         $("policyTools")
           .querySelectorAll("input")
           .forEach((input) => (input.disabled = policyBusy));
@@ -639,6 +650,7 @@
       }
       $("policyMemoryMode").onchange = markPolicyDirty;
       $("policySkillsEnabled").onchange = markPolicyDirty;
+      $("policyWerewolfEnabled").onchange = markPolicyDirty;
       $("policyModelProvider").onchange = () => {
         const model = $("policyModelProvider").value;
         const search = $("policySearchProvider").value;
@@ -665,7 +677,7 @@
             method: "PUT",
             body: JSON.stringify(requested),
           });
-          for (const key of ["model_provider", "search_provider", "deepseek_search_channel", "memory_mode", "skills_enabled"]) {
+          for (const key of ["model_provider", "search_provider", "deepseek_search_channel", "memory_mode", "skills_enabled", "werewolf_enabled"]) {
             if (policy[key] !== requested[key]) throw new Error(`服务器返回的 ${key} 与所选设置不一致`);
           }
           if (Number(policy.revision || 0) <= previousRevision) {

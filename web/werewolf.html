@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>狼人杀协作 · 我的 Agent 工作坊</title>
+  <link rel="stylesheet" href="/assets/werewolf.css" />
+</head>
+<body data-mode="student">
+  <main class="shell">
+    <header class="hero">
+      <div><a href="/" class="back">← 返回工作坊</a><p class="eyebrow">第二步 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>为不同身份和行动设计 Prompt，观察你的 Agent 如何与同学的 Agent 交流、推理和行动。</p></div>
+      <div class="hero-note">6 名 Agent · 2 狼人 · 2 平民 · 1 预言家 · 1 女巫</div>
+    </header>
+    <p id="status" class="status" role="status">正在读取课堂状态…</p>
+    <section id="disabled" class="card hidden"><h2>老师尚未开启本环节</h2><p>开启后即可编辑 Prompt，观看课堂对局。</p></section>
+    <section id="promptsCard" class="card hidden">
+      <div class="section-heading"><div><p class="eyebrow">设计</p><h2>我的狼人杀 Prompt</h2><p>你的 Soul 和已启用的 Skill 会随当前设计一起使用；下面为各身份、各行动设置策略。身份由开局时随机分配。</p></div><span id="saveBadge" class="badge">尚未保存</span></div>
+      <form id="promptForm"><div id="promptFields"></div><div class="actions"><button id="savePrompts" type="submit">保存我的 Prompt</button><span id="saveStatus" class="status" role="status"></span></div></form>
+    </section>
+    <section id="gameCard" class="card hidden">
+      <div class="section-heading"><div><p class="eyebrow">观战 · 协作</p><h2>课堂对局</h2><p id="gameMeta">等待老师选出 6 名 Agent。</p></div><span id="gameBadge" class="badge">待开局</span></div>
+      <div id="roleNotice" class="role-notice"></div>
+      <div id="players" class="players"></div>
+      <div class="timeline-heading"><h3>Prompt 交流流程</h3><p>主持人按阶段把可见消息交给各 Agent；夜间身份信息只对相关玩家可见。</p></div>
+      <div id="timeline" class="timeline" aria-live="polite"></div>
+    </section>
+  </main>
+  <script src="/assets/werewolf.js"></script>
+</body>
+</html>

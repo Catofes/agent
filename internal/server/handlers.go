@@ -57,6 +57,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"memory_mode":           policy.MemoryMode,
 		"skills_enabled":        policy.SkillsEnabled,
+		"werewolf_enabled":      policy.WerewolfEnabled,
 		"preset_skills":         policy.PresetSkills,
 		"allowed_tools":         policy.AllowedTools,
 		"available_tools":       availableTools,
@@ -827,7 +828,7 @@ func (s *Server) studentEvents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	sendSSE(w, "classroom", classroomEvent{Type: "classroom", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	sendSSE(w, "classroom", classroomEvent{Type: "classroom", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, WerewolfEnabled: policy.WerewolfEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	flusher.Flush()
 	tick := time.NewTicker(20 * time.Second)
 	defer tick.Stop()
@@ -1000,6 +1001,7 @@ func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		MemoryMode            string    `json:"memory_mode"`
 		SkillsEnabled         *bool     `json:"skills_enabled"`
+		WerewolfEnabled       *bool     `json:"werewolf_enabled"`
 		PresetSkills          *[]string `json:"preset_skills"`
 		AllowedTools          []string  `json:"allowed_tools"`
 		ModelProvider         string    `json:"model_provider"`
@@ -1024,6 +1026,10 @@ func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 	skillsEnabled := currentPolicy.SkillsEnabled
 	if in.SkillsEnabled != nil {
 		skillsEnabled = *in.SkillsEnabled
+	}
+	werewolfEnabled := currentPolicy.WerewolfEnabled
+	if in.WerewolfEnabled != nil {
+		werewolfEnabled = *in.WerewolfEnabled
 	}
 	presetSkills := currentPolicy.PresetSkills
 	if in.PresetSkills != nil {
@@ -1054,12 +1060,15 @@ func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 	if !s.validateProviderSelection(w, in.ModelProvider, in.SearchProvider, in.DeepSeekSearchChannel) {
 		return
 	}
-	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: skillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider, DeepSeekSearchChannel: in.DeepSeekSearchChannel})
+	policy, err := s.Store.SetRunPolicy(r.Context(), run.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: skillsEnabled, WerewolfEnabled: werewolfEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider, DeepSeekSearchChannel: in.DeepSeekSearchChannel})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "更新课堂能力失败")
 		return
 	}
-	s.studentHub.Publish(classroomEvent{Type: "classroom_policy", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	if !policy.WerewolfEnabled && currentPolicy.WerewolfEnabled {
+		s.cancelCurrentWerewolf(run.ID, "stopped", "教师关闭了狼人杀环节")
+	}
+	s.studentHub.Publish(classroomEvent{Type: "classroom_policy", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, WerewolfEnabled: policy.WerewolfEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	s.wallHub.Publish(struct{}{})
 	s.Logger.Info("classroom policy changed", "run_id", run.ID, "memory_mode", policy.MemoryMode, "skills_enabled", policy.SkillsEnabled, "preset_skills", policy.PresetSkills, "allowed_tools", policy.AllowedTools, "model_provider", policy.ModelProvider, "search_provider", policy.SearchProvider, "deepseek_search_channel", policy.DeepSeekSearchChannel, "revision", policy.Revision)
 	writeJSON(w, 200, policy)
@@ -1166,7 +1175,7 @@ func (s *Server) lock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy, _ := s.Store.RunPolicy(r.Context(), run.ID)
-	s.studentHub.Publish(classroomEvent{Type: "classroom", Locked: in.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
+	s.studentHub.Publish(classroomEvent{Type: "classroom", Locked: in.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, WerewolfEnabled: policy.WerewolfEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
 	s.wallHub.Publish(struct{}{})
 	s.Logger.Info("classroom lock changed", "run_id", run.ID, "locked", in.Locked)
 	writeJSON(w, 200, map[string]bool{"locked": in.Locked})
@@ -1177,6 +1186,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		Name                  string    `json:"name"`
 		MemoryMode            string    `json:"memory_mode"`
 		SkillsEnabled         *bool     `json:"skills_enabled"`
+		WerewolfEnabled       *bool     `json:"werewolf_enabled"`
 		PresetSkills          *[]string `json:"preset_skills"`
 		AllowedTools          []string  `json:"allowed_tools"`
 		ModelProvider         string    `json:"model_provider"`
@@ -1195,6 +1205,9 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	defer s.controlMu.Unlock()
 	old, _ := s.Store.ActiveRun(r.Context())
 	oldPolicy, _ := s.Store.RunPolicy(r.Context(), old.ID)
+	if in.WerewolfEnabled == nil {
+		in.WerewolfEnabled = &oldPolicy.WerewolfEnabled
+	}
 	if in.MemoryMode == "" {
 		in.MemoryMode = oldPolicy.MemoryMode
 		if in.SkillsEnabled == nil {
@@ -1241,11 +1254,12 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	if !s.validateProviderSelection(w, in.ModelProvider, in.SearchProvider, in.DeepSeekSearchChannel) {
 		return
 	}
-	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: *in.SkillsEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider, DeepSeekSearchChannel: in.DeepSeekSearchChannel})
+	created, err := s.Store.CreateRunWithPolicy(r.Context(), newID("run_"), in.Name, old.ID, store.RunPolicy{MemoryMode: in.MemoryMode, SkillsEnabled: *in.SkillsEnabled, WerewolfEnabled: *in.WerewolfEnabled, PresetSkills: cleanPresets, AllowedTools: cleanTools, ModelProvider: in.ModelProvider, SearchProvider: in.SearchProvider, DeepSeekSearchChannel: in.DeepSeekSearchChannel})
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "新建场次失败")
 		return
 	}
+	s.cancelCurrentWerewolf(old.ID, "stopped", "课堂场次已结束")
 	s.studentHub.Publish(classroomEvent{Type: "run_ended", RunID: old.ID})
 	s.wallHub.Publish(struct{}{})
 	s.screenMu.Lock()
