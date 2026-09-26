@@ -13,6 +13,14 @@
       <div class="hero-note">固定六人局 · 最多四轮 · 使用 DeepSeek 官方 API</div>
     </header>
     <p id="status" class="status" role="status">正在读取课堂状态…</p>
+    <section id="tournamentCard" class="card hidden">
+      <div class="section-heading"><div><p class="eyebrow">全班比赛</p><h2>每位学生的 Agent 打 20 局</h2><p>从当前课堂名单自动排成六人局，逐局运行并累计积分。比赛开始时固定各 Agent 的设计；进行中的这一局会显示在下方。</p></div><span id="tournamentBadge" class="badge">尚未开赛</span></div>
+      <p id="tournamentProgress" class="status">等待开赛。</p>
+      <label class="tournament-option"><input id="allowSystem" type="checkbox" checked /><span>人数无法刚好排满六人局时，允许系统 Agent 补位。系统 Agent 不计入积分榜。</span></label>
+      <div class="actions"><button id="startTournament" type="button">开始全班比赛</button><button id="pauseTournament" class="secondary hidden" type="button">暂停比赛</button><button id="resumeTournament" class="secondary hidden" type="button">继续比赛</button><span id="tournamentActionStatus" class="status" role="status"></span></div>
+      <div class="score-heading"><h3>积分榜</h3><p>狼人胜：狼人 +6、其他人 −3；好人胜：狼人 −6、其他人 +3；平局 0 分。并列按胜局数排序。</p></div>
+      <div class="score-scroll"><table class="score-table"><thead><tr><th>排名</th><th>学生</th><th>场次</th><th>胜 / 负 / 平</th><th>积分</th></tr></thead><tbody id="standings"></tbody></table></div>
+    </section>
     <section id="teacherControls" class="card hidden">
       <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。标记“已写 Prompt”的学生已经保存了角色策略；未写的学生使用默认 Prompt。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
       <p id="teacherDisabled" class="notice hidden">狼人杀环节尚未开启。请在<a href="/teacher">课堂能力</a>中打开开关并保存。</p>

@@ -13,6 +13,7 @@
     ["出局", [["last_words", "遗言"]]],
   ];
   let me = null, currentGameID = "", cursor = 0, polling = false, rosterSignature = "", selected = new Set();
+  let currentTournamentID = "", tournamentRunning = false, tournamentActionBusy = false, rosterCount = 0;
 
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
@@ -63,6 +64,7 @@
 
   function renderRoster(students) {
     rosterSignature = JSON.stringify(students);
+    rosterCount = students.length;
     const root = $("roster");
     root.replaceChildren();
     students.forEach((student) => {
@@ -94,7 +96,47 @@
   function updateSelection() {
     $("selectedCount").textContent = `已选 ${selected.size}/6`;
     $("roster").querySelectorAll("label").forEach((label) => label.classList.toggle("selected", label.querySelector("input").checked));
-    $("startGame").disabled = selected.size !== 6 || $("teacherDisabled").classList.contains("hidden") === false || $("startGame").dataset.running === "true";
+    $("startGame").disabled = selected.size !== 6 || $("teacherDisabled").classList.contains("hidden") === false || $("startGame").dataset.running === "true" || tournamentRunning;
+  }
+
+  function renderTournament(data) {
+    const tournament = data.tournament;
+    const enabled = data.enabled;
+    $("tournamentCard").classList.toggle("hidden", !teacher && !enabled);
+    currentTournamentID = tournament?.id || "";
+    tournamentRunning = tournament?.status === "running";
+    const labels = { running: "进行中", complete: "已完成", stopped: "已暂停", failed: "需检查", interrupted: "已中断" };
+    $("tournamentBadge").textContent = tournament ? labels[tournament.status] || tournament.status : "尚未开赛";
+    $("tournamentProgress").textContent = tournament
+      ? `已完成 ${tournament.completed_matches} / ${tournament.total_matches} 场六人局；每人目标 ${tournament.target_games} 局。${tournament.error || ""}`
+      : teacher ? `当前名单 ${rosterCount} 人；每人 20 局。` : "等待老师开始比赛。";
+    const standings = $("standings");
+    standings.replaceChildren();
+    if (!data.standings?.length) {
+      const row = document.createElement("tr"), cell = node("td", "开赛后显示所有参赛学生的得分。", "score-empty");
+      cell.colSpan = 5;
+      row.append(cell);
+      standings.append(row);
+    } else {
+      data.standings.forEach((item, index) => {
+        const row = document.createElement("tr");
+        row.classList.toggle("self", item.student_id === me?.student?.id);
+        row.append(node("td", String(index + 1)), node("td", `${item.student_id} · ${item.name}`),
+          node("td", `${item.played} / ${tournament.target_games}`),
+          node("td", `${item.wins} / ${item.losses} / ${item.draws}`),
+          node("td", String(item.points)));
+        standings.append(row);
+      });
+    }
+    if (teacher) {
+      $("startTournament").disabled = !enabled || tournamentRunning || tournamentActionBusy || rosterCount < 6;
+      $("allowSystem").disabled = tournamentRunning || tournamentActionBusy;
+      $("pauseTournament").classList.toggle("hidden", !tournamentRunning);
+      $("resumeTournament").classList.toggle("hidden", !tournament || !["stopped", "failed", "interrupted"].includes(tournament.status));
+      $("resumeTournament").disabled = tournamentActionBusy || !enabled;
+      $("stopGame").classList.toggle("hidden", tournamentRunning || $("startGame").dataset.running !== "true");
+      updateSelection();
+    }
   }
 
   function renderGame(game) {
@@ -105,6 +147,11 @@
       $("players").replaceChildren();
       $("roleNotice").textContent = teacher ? "角色开局后随机分配。" : "你可以先修改 Prompt，或者等待老师开局。";
       $("timeline").replaceChildren(node("div", "开局后将在这里显示主持人和各 Agent 的消息传递。", "timeline-empty"));
+      if (teacher) {
+        $("startGame").dataset.running = "false";
+        $("stopGame").classList.add("hidden");
+        updateSelection();
+      }
       return;
     }
     const status = { running: "进行中", complete: "已结束", stopped: "已停止", failed: "出错", interrupted: "已中断" }[game.status] || game.status;
@@ -183,6 +230,8 @@
         appendEvents(result.events || []);
         cursor = result.next || cursor;
       }
+      const tournament = await api(`${prefix}/tournament`);
+      renderTournament(tournament);
       $("status").textContent = data.enabled ? "课堂狼人杀已开启，页面会自动更新。" : teacher ? "狼人杀尚未开启。" : "老师尚未开启狼人杀环节。";
     } catch (error) {
       $("status").textContent = `暂时无法读取：${error.message}。请确认已登录${teacher ? "教师管理台" : "学生工作台"}。`;
@@ -223,6 +272,52 @@
       }
     };
   } else {
+    $("startTournament").onclick = async () => {
+      if (rosterCount < 6 || tournamentRunning || tournamentActionBusy) return;
+      const matches = Math.ceil(rosterCount * 20 / 6);
+      const fillers = matches * 6 - rosterCount * 20;
+      const systemAllowed = $("allowSystem").checked;
+      if (fillers && !systemAllowed) {
+        $("tournamentActionStatus").textContent = `当前人数需要 ${fillers} 个系统补位席位，请勾选补位后开赛。`;
+        return;
+      }
+      if (!confirm(`将为 ${rosterCount} 名学生安排每人 20 局，共 ${matches} 场六人局${fillers ? `，其中 ${fillers} 个席位由系统 Agent 补齐` : ""}。每局会多次调用 DeepSeek，可能持续较长时间并消耗 API 额度。确认开赛？`)) return;
+      tournamentActionBusy = true;
+      $("startTournament").disabled = true;
+      $("tournamentActionStatus").textContent = "正在排赛并保存 Agent 设计…";
+      try {
+        await api("/api/teacher/werewolf/tournament", { method: "POST", body: JSON.stringify({ allow_system: systemAllowed }) });
+        $("tournamentActionStatus").textContent = "比赛已开始，积分榜会自动更新。";
+        await refresh();
+      } catch (error) {
+        $("tournamentActionStatus").textContent = `开赛失败：${error.message}`;
+      } finally {
+        tournamentActionBusy = false;
+        $("startTournament").disabled = tournamentRunning || rosterCount < 6 || !$("teacherDisabled").classList.contains("hidden");
+      }
+    };
+    $("pauseTournament").onclick = async () => {
+      if (!currentTournamentID || !confirm("暂停比赛？已完成的场次和积分会保留，稍后可以继续。")) return;
+      tournamentActionBusy = true;
+      try {
+        await api(`/api/teacher/werewolf/tournament/${encodeURIComponent(currentTournamentID)}/stop`, { method: "POST" });
+        $("tournamentActionStatus").textContent = "比赛已暂停，已完成的场次和积分已保留。";
+        await refresh();
+      } catch (error) {
+        $("tournamentActionStatus").textContent = `暂停失败：${error.message}`;
+      } finally { tournamentActionBusy = false; }
+    };
+    $("resumeTournament").onclick = async () => {
+      if (!currentTournamentID || tournamentActionBusy) return;
+      tournamentActionBusy = true;
+      try {
+        await api(`/api/teacher/werewolf/tournament/${encodeURIComponent(currentTournamentID)}/resume`, { method: "POST" });
+        $("tournamentActionStatus").textContent = "比赛已继续。";
+        await refresh();
+      } catch (error) {
+        $("tournamentActionStatus").textContent = `继续失败：${error.message}`;
+      } finally { tournamentActionBusy = false; }
+    };
     $("startGame").onclick = async () => {
       if (selected.size !== 6) return;
       $("startGame").disabled = true;

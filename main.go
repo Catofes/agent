@@ -48,6 +48,10 @@ func main() {
 		logger.Error("interrupt unfinished werewolf games", "error", err)
 		os.Exit(1)
 	}
+	if err = st.InterruptWerewolfTournaments(context.Background()); err != nil {
+		logger.Error("interrupt unfinished werewolf tournaments", "error", err)
+		os.Exit(1)
+	}
 	run, err := st.EnsureActiveRun(context.Background(), newRunID(), cfg.InitialRunName)
 	if err != nil {
 		logger.Error("ensure active run", "error", err)

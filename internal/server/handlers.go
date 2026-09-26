@@ -1066,6 +1066,7 @@ func (s *Server) setTeacherPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !policy.WerewolfEnabled && currentPolicy.WerewolfEnabled {
+		s.cancelCurrentTournament(run.ID, "stopped", "教师关闭了狼人杀环节")
 		s.cancelCurrentWerewolf(run.ID, "stopped", "教师关闭了狼人杀环节")
 	}
 	s.studentHub.Publish(classroomEvent{Type: "classroom_policy", Locked: run.Locked, RunID: run.ID, MemoryMode: policy.MemoryMode, SkillsEnabled: policy.SkillsEnabled, WerewolfEnabled: policy.WerewolfEnabled, PresetSkills: policy.PresetSkills, AllowedTools: policy.AllowedTools, Revision: policy.Revision})
@@ -1259,6 +1260,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "新建场次失败")
 		return
 	}
+	s.cancelCurrentTournament(old.ID, "stopped", "课堂场次已结束")
 	s.cancelCurrentWerewolf(old.ID, "stopped", "课堂场次已结束")
 	s.studentHub.Publish(classroomEvent{Type: "run_ended", RunID: old.ID})
 	s.wallHub.Publish(struct{}{})

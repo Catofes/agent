@@ -637,7 +637,7 @@ func TestVersionTwelveAddsPresetPolicyAndRemovesCalculator(t *testing.T) {
 		t.Fatalf("design=%#v err=%v", design, err)
 	}
 	var version int
-	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 18 {
+	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 19 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 }

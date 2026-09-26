@@ -18,6 +18,11 @@
       <div class="section-heading"><div><p class="eyebrow">设计</p><h2>我的狼人杀 Prompt</h2><p>你的 Soul 和已启用的 Skill 会随当前设计一起使用；下面为各身份、各行动设置策略。身份由开局时随机分配。</p></div><span id="saveBadge" class="badge">尚未保存</span></div>
       <form id="promptForm"><div id="promptFields"></div><div class="actions"><button id="savePrompts" type="submit">保存我的 Prompt</button><span id="saveStatus" class="status" role="status"></span></div></form>
     </section>
+    <section id="tournamentCard" class="card hidden">
+      <div class="section-heading"><div><p class="eyebrow">全班比赛</p><h2>20 局积分榜</h2><p>每位同学的 Agent 参加 20 局。老师开始比赛后，这里会显示进度和所有人的得分。</p></div><span id="tournamentBadge" class="badge">尚未开赛</span></div>
+      <p id="tournamentProgress" class="status">等待老师开始比赛。</p>
+      <div class="score-scroll"><table class="score-table"><thead><tr><th>排名</th><th>学生</th><th>场次</th><th>胜 / 负 / 平</th><th>积分</th></tr></thead><tbody id="standings"></tbody></table></div>
+    </section>
     <section id="gameCard" class="card hidden">
       <div class="section-heading"><div><p class="eyebrow">观战 · 协作</p><h2>课堂对局</h2><p id="gameMeta">等待老师选出 6 名 Agent。</p></div><span id="gameBadge" class="badge">待开局</span></div>
       <div id="roleNotice" class="role-notice"></div>

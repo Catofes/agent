@@ -78,6 +78,7 @@ type werewolfPlayer struct {
 	Name      string          `json:"name"`
 	Seat      int             `json:"seat"`
 	Role      string          `json:"role"`
+	System    bool            `json:"system,omitempty"`
 	Alive     bool            `json:"alive"`
 	Persona   string          `json:"persona"`
 	Skills    string          `json:"skills"`
@@ -86,6 +87,7 @@ type werewolfPlayer struct {
 
 type werewolfState struct {
 	Players      []werewolfPlayer `json:"players"`
+	Tournament   bool             `json:"tournament,omitempty"`
 	Round        int              `json:"round"`
 	Phase        string           `json:"phase"`
 	AntidoteUsed bool             `json:"antidote_used"`
@@ -353,60 +355,15 @@ func (s *Server) startWerewolfGame(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "MODEL_UNAVAILABLE", "请先配置真实的 DeepSeek API Key")
 		return
 	}
-	seen := map[string]bool{}
-	players := make([]werewolfPlayer, 0, 6)
-	for i, id := range in.StudentIDs {
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] || strings.EqualFold(id, "test") {
-			writeError(w, 400, "INVALID_PLAYERS", "学生名单重复或包含测试账号")
-			return
-		}
-		seen[id] = true
-		student, studentErr := s.Store.Student(r.Context(), run.ID, id)
-		if studentErr != nil {
-			writeError(w, 400, "INVALID_PLAYERS", "名单中有当前场次不存在的学生")
-			return
-		}
-		design, designErr := s.Store.Design(r.Context(), run.ID, id)
-		if designErr != nil && !errors.Is(designErr, sql.ErrNoRows) {
-			writeError(w, 500, "DATABASE_ERROR", "读取学生设计失败")
-			return
-		}
-		raw, _, promptErr := s.Store.WerewolfPrompts(r.Context(), run.ID, id)
-		if promptErr != nil {
-			writeError(w, 500, "DATABASE_ERROR", "读取学生 Prompt 失败")
-			return
-		}
-		var prompts werewolfPrompts
-		if raw != "" && json.Unmarshal([]byte(raw), &prompts) != nil {
-			writeError(w, 500, "DATABASE_ERROR", "学生 Prompt 数据损坏")
-			return
-		}
-		skills, _ := s.Store.Skills(r.Context(), run.ID, id)
-		skillText := ""
-		if policy.SkillsEnabled {
-			skillText = formatSkillsForDisplay(skills)
-		}
-		if utf8.RuneCountInString(skillText) > 1600 {
-			skillText = string([]rune(skillText)[:1600])
-		}
-		players = append(players, werewolfPlayer{StudentID: id, Name: student.Name, Seat: i + 1,
-			Alive: true, Persona: design.Persona, Skills: skillText, Prompts: normalizeWerewolfPrompts(prompts)})
+	if tournament, tournamentErr := s.Store.LatestWerewolfTournament(r.Context(), run.ID); tournamentErr == nil && tournament.Status == "running" {
+		writeError(w, 409, "TOURNAMENT_RUNNING", "班级比赛正在进行，请先结束比赛")
+		return
 	}
-	roles := []string{"wolf", "wolf", "villager", "villager", "seer", "witch"}
-	for i := len(roles) - 1; i > 0; i-- {
-		index, randomErr := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
-		if randomErr != nil {
-			writeError(w, 500, "RANDOM_ERROR", "分配身份失败")
-			return
-		}
-		j := int(index.Int64())
-		roles[i], roles[j] = roles[j], roles[i]
+	state, err := s.newWerewolfState(r.Context(), run.ID, policy, in.StudentIDs, false)
+	if err != nil {
+		writeError(w, 400, "INVALID_PLAYERS", err.Error())
+		return
 	}
-	for i := range players {
-		players[i].Role = roles[i]
-	}
-	state := werewolfState{Players: players, Round: 1, Phase: "night", NightDeaths: []int{}}
 	raw, _ := json.Marshal(state)
 	game, err := s.Store.CreateWerewolfGame(r.Context(), newID("wolf_"), run.ID, string(raw))
 	if err != nil {
@@ -422,10 +379,92 @@ func (s *Server) startWerewolfGame(w http.ResponseWriter, r *http.Request) {
 	s.werewolfCurrent(w, r, run.ID, "", true)
 }
 
+func (s *Server) newWerewolfState(ctx context.Context, runID string, policy store.RunPolicy, ids []string, allowSystem bool) (werewolfState, error) {
+	if len(ids) != 6 {
+		return werewolfState{}, errors.New("每局需要 6 名 Agent")
+	}
+	seen := map[string]bool{}
+	players := make([]werewolfPlayer, 0, 6)
+	for i, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] || strings.EqualFold(id, "test") {
+			return werewolfState{}, errors.New("学生名单重复或包含测试账号")
+		}
+		seen[id] = true
+		if strings.HasPrefix(id, "bot:") {
+			if !allowSystem {
+				return werewolfState{}, errors.New("不能手动选择系统补位 Agent")
+			}
+			players = append(players, werewolfPlayer{StudentID: id, Name: "系统补位 Agent", Seat: i + 1,
+				System: true, Alive: true, Persona: "遵守主持人规则，按公开与本人私密信息参与游戏。", Prompts: defaultWerewolfPrompts()})
+			continue
+		}
+		player, err := s.werewolfPlayerSnapshot(ctx, runID, policy, id)
+		if err != nil {
+			return werewolfState{}, err
+		}
+		player.Seat = i + 1
+		players = append(players, player)
+	}
+	return makeWerewolfState(players)
+}
+
+func (s *Server) werewolfPlayerSnapshot(ctx context.Context, runID string, policy store.RunPolicy, id string) (werewolfPlayer, error) {
+	student, err := s.Store.Student(ctx, runID, id)
+	if err != nil {
+		return werewolfPlayer{}, errors.New("名单中有当前场次不存在的学生")
+	}
+	design, err := s.Store.Design(ctx, runID, id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return werewolfPlayer{}, err
+	}
+	raw, _, err := s.Store.WerewolfPrompts(ctx, runID, id)
+	if err != nil {
+		return werewolfPlayer{}, err
+	}
+	var prompts werewolfPrompts
+	if raw != "" && json.Unmarshal([]byte(raw), &prompts) != nil {
+		return werewolfPlayer{}, errors.New("学生 Prompt 数据损坏")
+	}
+	skills, _ := s.Store.Skills(ctx, runID, id)
+	skillText := ""
+	if policy.SkillsEnabled {
+		skillText = formatSkillsForDisplay(skills)
+	}
+	if utf8.RuneCountInString(skillText) > 1600 {
+		skillText = string([]rune(skillText)[:1600])
+	}
+	return werewolfPlayer{StudentID: id, Name: student.Name, Alive: true,
+		Persona: design.Persona, Skills: skillText, Prompts: normalizeWerewolfPrompts(prompts)}, nil
+}
+
+func makeWerewolfState(players []werewolfPlayer) (werewolfState, error) {
+	if len(players) != 6 {
+		return werewolfState{}, errors.New("每局需要 6 名 Agent")
+	}
+	roles := []string{"wolf", "wolf", "villager", "villager", "seer", "witch"}
+	for i := len(roles) - 1; i > 0; i-- {
+		index, randomErr := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if randomErr != nil {
+			return werewolfState{}, randomErr
+		}
+		j := int(index.Int64())
+		roles[i], roles[j] = roles[j], roles[i]
+	}
+	for i := range players {
+		players[i].Role = roles[i]
+	}
+	return werewolfState{Players: players, Round: 1, Phase: "night", NightDeaths: []int{}}, nil
+}
+
 func (s *Server) stopWerewolfGame(w http.ResponseWriter, r *http.Request) {
 	run, err := s.Store.ActiveRun(r.Context())
 	if err != nil {
 		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
+		return
+	}
+	if tournament, tournamentErr := s.Store.LatestWerewolfTournament(r.Context(), run.ID); tournamentErr == nil && tournament.Status == "running" {
+		writeError(w, 409, "TOURNAMENT_RUNNING", "请使用比赛控制区停止整场比赛")
 		return
 	}
 	game, err := s.Store.WerewolfGame(r.Context(), run.ID, chi.URLParam(r, "id"))

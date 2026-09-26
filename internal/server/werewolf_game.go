@@ -215,12 +215,14 @@ func (s *Server) askWerewolf(ctx context.Context, game store.WerewolfGame, state
 	if err := s.checkWerewolfActive(ctx, game); err != nil {
 		return "", err
 	}
-	usage, err := s.Store.Usage(ctx, game.RunID, player.StudentID)
-	if err != nil {
-		return "", err
-	}
-	if usage.TokensIn+usage.TokensOut >= s.Agent.TokenBudget {
-		return "", fmt.Errorf("%d 号 Agent 的本场 token 额度已用完", player.Seat)
+	if !player.System && !state.Tournament {
+		usage, err := s.Store.Usage(ctx, game.RunID, player.StudentID)
+		if err != nil {
+			return "", err
+		}
+		if usage.TokensIn+usage.TokensOut >= s.Agent.TokenBudget {
+			return "", fmt.Errorf("%d 号 Agent 的本场 token 额度已用完", player.Seat)
+		}
 	}
 	events, err := s.Store.WerewolfEvents(ctx, game.RunID, game.ID, 0)
 	if err != nil {
@@ -262,10 +264,12 @@ func (s *Server) askWerewolf(ctx context.Context, game store.WerewolfGame, state
 		unknown = 1
 	}
 	cost := float64(completion.TokensIn)*s.Config.InputPricePerM/1_000_000 + float64(completion.TokensOut)*s.Config.OutputPricePerM/1_000_000
-	if err = s.Store.AddUsage(context.Background(), game.RunID, player.StudentID, completion.TokensIn, completion.TokensOut, unknown, cost); err != nil {
-		return "", err
+	if !player.System && !state.Tournament {
+		if err = s.Store.AddUsage(context.Background(), game.RunID, player.StudentID, completion.TokensIn, completion.TokensOut, unknown, cost); err != nil {
+			return "", err
+		}
+		s.wallHub.Publish(struct{}{})
 	}
-	s.wallHub.Publish(struct{}{})
 	text := fmt.Sprintf("%d 号：%s", player.Seat, response)
 	if action == "speak" || action == "discuss" || action == "last_words" {
 		text = fmt.Sprintf("%d 号：%s", player.Seat, shortWerewolfText(response, 240))

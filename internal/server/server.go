@@ -148,6 +148,10 @@ type Server struct {
 	werewolfMu                      sync.Mutex
 	werewolfCancel                  context.CancelFunc
 	werewolfGameID                  string
+	tournamentMu                    sync.Mutex
+	tournamentCancel                context.CancelFunc
+	tournamentID                    string
+	tournamentWorkerSerial          uint64
 	screen                          screenState
 	screenAck                       chan struct{}
 	screenRevision                  uint64
@@ -234,6 +238,7 @@ func (s *Server) Routes() http.Handler {
 				r.Put("/werewolf/prompts", s.saveWerewolfPrompts)
 				r.Get("/werewolf/current", s.studentWerewolfCurrent)
 				r.Get("/werewolf/games/{id}/events", s.studentWerewolfEvents)
+				r.Get("/werewolf/tournament", s.studentWerewolfTournament)
 			})
 			r.Route("/teacher", func(r chi.Router) {
 				r.Use(s.requireTeacher)
@@ -255,6 +260,10 @@ func (s *Server) Routes() http.Handler {
 				r.Get("/werewolf/games/{id}/events", s.teacherWerewolfEvents)
 				r.Post("/werewolf/games", s.startWerewolfGame)
 				r.Post("/werewolf/games/{id}/stop", s.stopWerewolfGame)
+				r.Get("/werewolf/tournament", s.teacherWerewolfTournament)
+				r.Post("/werewolf/tournament", s.startWerewolfTournament)
+				r.Post("/werewolf/tournament/{id}/stop", s.stopWerewolfTournament)
+				r.Post("/werewolf/tournament/{id}/resume", s.resumeWerewolfTournament)
 				r.Delete("/screen-demo", s.stopScreenDemo)
 			})
 		})
