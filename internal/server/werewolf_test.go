@@ -238,3 +238,30 @@ func TestWerewolfRunningRolesStayPrivateAndTeacherCanStop(t *testing.T) {
 	}
 	app.Shutdown()
 }
+
+func TestWerewolfRosterExcludesTemporaryAccounts(t *testing.T) {
+	app, st := testServerWithRoster(t, directClient{}, 6)
+	defer app.Shutdown()
+	ctx := context.Background()
+	run, _ := st.ActiveRun(ctx)
+	if _, err := st.CreateTestStudent(ctx, run.ID, "test_temporary"); err != nil {
+		t.Fatal(err)
+	}
+	teacher := newClient(app.Routes())
+	if code, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"}); code != 200 {
+		t.Fatalf("login=%d", code)
+	}
+	code, body, raw := requestJSON(t, teacher, http.MethodGet, "/api/teacher/werewolf/roster", nil)
+	if code != 200 || len(body["students"].([]any)) != 6 {
+		t.Fatalf("roster=%d %s", code, raw)
+	}
+	for _, item := range body["students"].([]any) {
+		if item.(map[string]any)["id"] == "test_temporary" {
+			t.Fatal("temporary account included in tournament headcount")
+		}
+	}
+	policy, _ := st.RunPolicy(ctx, run.ID)
+	if _, err := app.newWerewolfState(ctx, run.ID, policy, []string{"2101", "2102", "2103", "2104", "2105", "test_temporary"}, false); err == nil {
+		t.Fatal("temporary account accepted in a single game")
+	}
+}

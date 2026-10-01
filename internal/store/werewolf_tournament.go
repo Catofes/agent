@@ -187,7 +187,8 @@ func (s *Store) CompleteWerewolfTournamentMatch(ctx context.Context, runID, id s
 	if status != "complete" {
 		return errors.New("match game is not complete")
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE werewolf_tournaments SET next_match=next_match+1,updated_at=?
+	res, err := tx.ExecContext(ctx, `UPDATE werewolf_tournaments SET next_match=next_match+1,
+ status=CASE WHEN next_match+1=total_matches THEN 'complete' ELSE status END,updated_at=?
  WHERE id=? AND run_id=? AND status='running' AND next_match=? AND EXISTS(
  SELECT 1 FROM werewolf_tournament_matches WHERE tournament_id=? AND match_index=? AND game_id=?)`,
 		formatTime(time.Now().UTC()), id, runID, index, id, index, gameID)

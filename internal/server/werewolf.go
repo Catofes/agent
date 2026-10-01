@@ -200,8 +200,20 @@ func (s *Server) teacherWerewolfRoster(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "DATABASE_ERROR", "读取 Prompt 状态失败")
 		return
 	}
+	roster, err := s.Store.RosterStudents(r.Context(), run.ID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取参赛名单失败")
+		return
+	}
+	eligible := make(map[string]bool, len(roster))
+	for _, student := range roster {
+		eligible[student.ID] = true
+	}
 	items := make([]map[string]any, 0, len(students))
 	for _, student := range students {
+		if !eligible[student.ID] {
+			continue
+		}
 		items = append(items, map[string]any{"id": student.ID, "name": student.Name,
 			"has_persona": student.HasPersona, "prompts_saved": ready[student.ID]})
 	}
@@ -383,6 +395,14 @@ func (s *Server) newWerewolfState(ctx context.Context, runID string, policy stor
 	if len(ids) != 6 {
 		return werewolfState{}, errors.New("每局需要 6 名 Agent")
 	}
+	roster, err := s.Store.RosterStudents(ctx, runID)
+	if err != nil {
+		return werewolfState{}, err
+	}
+	eligible := make(map[string]bool, len(roster))
+	for _, student := range roster {
+		eligible[student.ID] = true
+	}
 	seen := map[string]bool{}
 	players := make([]werewolfPlayer, 0, 6)
 	for i, id := range ids {
@@ -398,6 +418,9 @@ func (s *Server) newWerewolfState(ctx context.Context, runID string, policy stor
 			players = append(players, werewolfPlayer{StudentID: id, Name: "系统补位 Agent", Seat: i + 1,
 				System: true, Alive: true, Persona: "遵守主持人规则，按公开与本人私密信息参与游戏。", Prompts: defaultWerewolfPrompts()})
 			continue
+		}
+		if !eligible[id] {
+			return werewolfState{}, errors.New("请选择当前名单中的学生，不能使用临时测试账号")
 		}
 		player, err := s.werewolfPlayerSnapshot(ctx, runID, policy, id)
 		if err != nil {
@@ -458,6 +481,8 @@ func makeWerewolfState(players []werewolfPlayer) (werewolfState, error) {
 }
 
 func (s *Server) stopWerewolfGame(w http.ResponseWriter, r *http.Request) {
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
 	run, err := s.Store.ActiveRun(r.Context())
 	if err != nil {
 		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
