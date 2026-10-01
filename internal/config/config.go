@@ -70,7 +70,7 @@ func Load(version string) (Config, error) {
 	flag.StringVar(&c.DatabasePath, "db", env("DATABASE_PATH", "data/app.db"), "SQLite database path")
 	flag.StringVar(&c.StudentsCSV, "students", env("STUDENTS_CSV", "data/students.csv"), "students CSV path")
 	flag.StringVar(&c.DeepSeekBaseURL, "deepseek-base-url", env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), "DeepSeek API base URL")
-	flag.StringVar(&c.DeepSeekModel, "deepseek-model", env("DEEPSEEK_MODEL", "deepseek-v4-flash"), "DeepSeek model name")
+	flag.StringVar(&c.DeepSeekModel, "deepseek-model", env("DEEPSEEK_MODEL", "deepseek-flash"), "DeepSeek model name")
 	flag.StringVar(&c.DeepSeekAPIKey, "deepseek-api-key", os.Getenv("DEEPSEEK_API_KEY"), "DeepSeek API key")
 	flag.StringVar(&c.QwenBaseURL, "qwen-base-url", env("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"), "Qwen OpenAI-compatible API base URL")
 	flag.StringVar(&c.QwenModel, "qwen-model", env("QWEN_MODEL", "qwen3.8-flash"), "Qwen model name")

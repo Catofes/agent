@@ -44,6 +44,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer st.Close()
+	if err = st.InterruptWerewolfGames(context.Background()); err != nil {
+		logger.Error("interrupt unfinished werewolf games", "error", err)
+		os.Exit(1)
+	}
+	if err = st.InterruptWerewolfTournaments(context.Background()); err != nil {
+		logger.Error("interrupt unfinished werewolf tournaments", "error", err)
+		os.Exit(1)
+	}
 	run, err := st.EnsureActiveRun(context.Background(), newRunID(), cfg.InitialRunName)
 	if err != nil {
 		logger.Error("ensure active run", "error", err)
@@ -98,6 +106,7 @@ func main() {
 		os.Exit(1)
 	}
 	app := server.New(cfg, st, engine, webFS, templateFS, logger)
+	app.WerewolfClient = client
 	app.AvailableSearchProviders = []string{"disabled", "deepseek"}
 	app.AvailableDeepSeekSearchChannels = []string{tools.DeepSeekSearchAnthropic, tools.DeepSeekSearchResponses}
 	if strings.TrimSpace(cfg.ZhipuSearchAPIKey) != "" {
