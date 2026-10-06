@@ -9,8 +9,12 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -123,6 +127,89 @@ func (s *Server) werewolfTournament(w http.ResponseWriter, r *http.Request, runI
 	writeJSON(w, 200, map[string]any{"enabled": policy.WerewolfEnabled, "tournament": tournament, "standings": standings})
 }
 
+func (s *Server) teacherWerewolfTournamentMatches(w http.ResponseWriter, r *http.Request) {
+	run, err := s.Store.ActiveRun(r.Context())
+	if err != nil {
+		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	tournament, err := s.Store.WerewolfTournament(r.Context(), run.ID, id)
+	if err != nil {
+		writeError(w, 404, "TOURNAMENT_NOT_FOUND", "未找到这场比赛")
+		return
+	}
+	var plan werewolfTournamentPlan
+	if err = json.Unmarshal([]byte(tournament.ScheduleJSON), &plan); err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "比赛计划损坏")
+		return
+	}
+	matches, err := s.Store.WerewolfTournamentMatches(r.Context(), run.ID, id)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取对局记录失败")
+		return
+	}
+	for i := range matches {
+		for _, studentID := range plan.Matches[matches[i].Index] {
+			if player, ok := plan.Agents[studentID]; ok {
+				matches[i].Players = append(matches[i].Players, store.TournamentPlayer{ID: studentID, Name: player.Name})
+			} else {
+				matches[i].Players = append(matches[i].Players, store.TournamentPlayer{ID: studentID, Name: "系统 Agent"})
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{"matches": matches})
+}
+
+func (s *Server) teacherWerewolfTournamentMatch(w http.ResponseWriter, r *http.Request) {
+	run, err := s.Store.ActiveRun(r.Context())
+	if err != nil {
+		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	tournament, err := s.Store.WerewolfTournament(r.Context(), run.ID, id)
+	if err != nil {
+		writeError(w, 404, "TOURNAMENT_NOT_FOUND", "未找到这场比赛")
+		return
+	}
+	index, err := strconv.Atoi(chi.URLParam(r, "index"))
+	if err != nil || index < 0 || index >= tournament.TotalMatches {
+		writeError(w, 400, "INVALID_MATCH", "场次编号无效")
+		return
+	}
+	gameID, err := s.Store.WerewolfTournamentMatchGame(r.Context(), id, index)
+	if err != nil {
+		writeError(w, 404, "MATCH_NOT_FOUND", "本场尚未开局")
+		return
+	}
+	game, err := s.Store.WerewolfGame(r.Context(), run.ID, gameID)
+	if err != nil || game.TournamentID != id {
+		writeError(w, 404, "MATCH_NOT_FOUND", "未找到本场记录")
+		return
+	}
+	state, err := decodeWerewolfState(game)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "对局数据损坏")
+		return
+	}
+	events, err := s.Store.WerewolfEvents(r.Context(), run.ID, gameID, 0)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取交流记录失败")
+		return
+	}
+	items := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		items = append(items, werewolfEventItem(event, state, true))
+	}
+	players := make([]map[string]any, 0, len(state.Players))
+	for _, player := range state.Players {
+		players = append(players, map[string]any{"seat": player.Seat, "name": player.Name, "role": player.Role, "alive": player.Alive, "system": player.System})
+	}
+	writeJSON(w, 200, map[string]any{"game": map[string]any{"id": game.ID, "status": game.Status, "round": state.Round,
+		"phase": state.Phase, "winner": game.Winner, "error": game.Error, "players": players}, "events": items})
+}
+
 func (s *Server) startWerewolfTournament(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		AllowSystem bool `json:"allow_system"`
@@ -146,8 +233,11 @@ func (s *Server) startWerewolfTournament(w http.ResponseWriter, r *http.Request)
 		writeError(w, 409, "MODEL_UNAVAILABLE", "请先配置真实的 DeepSeek API Key")
 		return
 	}
-	if game, gameErr := s.Store.LatestWerewolfGame(r.Context(), run.ID); gameErr == nil && game.Status == "running" {
-		writeError(w, 409, "GAME_IN_PROGRESS", "请先结束当前单局对战")
+	if _, gameErr := s.Store.RunningWerewolfInteractiveGame(r.Context(), run.ID); gameErr == nil {
+		writeError(w, 409, "GAME_IN_PROGRESS", "请先结束当前演示或单局对战")
+		return
+	} else if !errors.Is(gameErr, sql.ErrNoRows) {
+		writeError(w, 500, "DATABASE_ERROR", "读取当前对局失败")
 		return
 	}
 	students, err := s.Store.RosterStudents(r.Context(), run.ID)
@@ -207,8 +297,11 @@ func (s *Server) resumeWerewolfTournament(w http.ResponseWriter, r *http.Request
 		writeError(w, 409, "CANNOT_RESUME", "这场比赛无法继续")
 		return
 	}
-	if game, gameErr := s.Store.LatestWerewolfGame(r.Context(), run.ID); gameErr == nil && game.Status == "running" {
-		writeError(w, 409, "GAME_IN_PROGRESS", "请先结束当前单局对战")
+	if _, gameErr := s.Store.RunningWerewolfInteractiveGame(r.Context(), run.ID); gameErr == nil {
+		writeError(w, 409, "GAME_IN_PROGRESS", "请先结束当前演示或单局对战")
+		return
+	} else if !errors.Is(gameErr, sql.ErrNoRows) {
+		writeError(w, 500, "DATABASE_ERROR", "读取当前对局失败")
 		return
 	}
 	if err = s.Store.SetWerewolfTournamentStatus(r.Context(), run.ID, id, tournament.Status, "running", ""); err != nil {
@@ -234,8 +327,10 @@ func (s *Server) stopWerewolfTournament(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 404, "TOURNAMENT_NOT_RUNNING", "比赛未在进行")
 		return
 	}
-	s.cancelCurrentTournament(run.ID, "stopped", "教师暂停了比赛")
-	s.cancelCurrentWerewolf(run.ID, "stopped", "教师暂停了比赛")
+	if err := s.cancelCurrentTournament(run.ID, "stopped", "教师暂停了比赛"); err != nil {
+		writeError(w, 503, "DATABASE_BUSY", "比赛暂停未能保存，请重试")
+		return
+	}
 	s.werewolfTournament(w, r, run.ID, true)
 }
 
@@ -250,17 +345,42 @@ func (s *Server) startTournamentWorker(tournament store.WerewolfTournament) {
 	go s.runWerewolfTournament(ctx, tournament, serial)
 }
 
-func (s *Server) cancelCurrentTournament(runID, status, message string) {
+func (s *Server) cancelCurrentTournament(runID, status, message string) error {
 	tournament, err := s.Store.LatestWerewolfTournament(context.Background(), runID)
-	if err != nil || tournament.Status != "running" {
-		return
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if tournament.Status != "running" {
+		return nil
 	}
 	s.tournamentMu.Lock()
 	if s.tournamentID == tournament.ID && s.tournamentCancel != nil {
 		s.tournamentCancel()
 	}
 	s.tournamentMu.Unlock()
-	_ = s.Store.SetWerewolfTournamentStatus(context.Background(), runID, tournament.ID, "running", status, message)
+	if err := retryTournamentWrite(func() error {
+		return s.Store.SetWerewolfTournamentStatus(context.Background(), runID, tournament.ID, "running", status, message)
+	}); err != nil {
+		return err
+	}
+	return retryTournamentWrite(func() error {
+		return s.Store.StopWerewolfTournamentGames(context.Background(), runID, tournament.ID, message)
+	})
+}
+
+func retryTournamentWrite(write func() error) error {
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		err = write()
+		if err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") && !strings.Contains(err.Error(), "database is locked") {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
+	}
+	return err
 }
 
 func (s *Server) clearTournamentWorker(id string, serial uint64) {
@@ -279,73 +399,121 @@ func (s *Server) runWerewolfTournament(ctx context.Context, tournament store.Wer
 		s.failTournament(tournament, err)
 		return
 	}
-	for index := tournament.NextMatch; index < len(plan.Matches); index++ {
-		if err := s.checkTournamentActive(ctx, tournament); err != nil {
-			return
-		}
-		gameID, err := s.Store.WerewolfTournamentMatchGame(ctx, tournament.ID, index)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			s.failTournament(tournament, err)
-			return
-		}
-		var game store.WerewolfGame
-		if gameID != "" {
-			game, err = s.Store.WerewolfGame(ctx, tournament.RunID, gameID)
-			if err != nil {
-				s.failTournament(tournament, err)
-				return
-			}
-		}
-		if game.Status != "complete" {
-			state, stateErr := stateForTournamentMatch(plan, plan.Matches[index])
-			if stateErr != nil {
-				s.failTournament(tournament, stateErr)
-				return
-			}
-			raw, _ := json.Marshal(state)
-			game, err = s.Store.CreateWerewolfGame(ctx, newID("wolf_"), tournament.RunID, string(raw))
-			if err != nil {
-				s.failTournament(tournament, err)
-				return
-			}
-			if err = s.Store.LinkWerewolfTournamentGame(ctx, tournament.ID, index, game.ID); err != nil {
-				_ = s.Store.UpdateWerewolfGame(context.Background(), tournament.RunID, game.ID, "stopped", game.StateJSON, "", "比赛记录写入失败")
-				s.failTournament(tournament, err)
-				return
-			}
-			matchCtx, matchCancel := context.WithCancel(ctx)
-			s.werewolfMu.Lock()
-			s.werewolfCancel = matchCancel
-			s.werewolfGameID = game.ID
-			s.werewolfMu.Unlock()
-			s.runWerewolfGame(matchCtx, game, state)
-			matchCancel()
-			game, err = s.Store.WerewolfGame(context.Background(), tournament.RunID, game.ID)
-			if err != nil {
-				s.failTournament(tournament, err)
-				return
-			}
-		}
-		if game.Status != "complete" {
-			if ctx.Err() == nil {
-				s.failTournament(tournament, fmt.Errorf("第 %d 局状态为 %s：%s", index+1, game.Status, game.Error))
-			}
-			return
-		}
-		state, err := decodeWerewolfState(game)
-		if err != nil {
-			s.failTournament(tournament, err)
-			return
-		}
-		results := scoreTournamentMatch(state, game.Winner)
-		if err = s.Store.CompleteWerewolfTournamentMatch(context.Background(), tournament.RunID, tournament.ID, index, game.ID, results); err != nil {
-			if ctx.Err() == nil {
-				s.failTournament(tournament, err)
-			}
-			return
+	completed, err := s.Store.WerewolfTournamentScoredMatches(ctx, tournament.ID)
+	if err != nil {
+		s.failTournament(tournament, err)
+		return
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int, len(plan.Matches))
+	for index := range plan.Matches {
+		if !completed[index] {
+			jobs <- index
 		}
 	}
-	_ = s.Store.SetWerewolfTournamentStatus(context.Background(), tournament.RunID, tournament.ID, "running", "complete", "")
+	close(jobs)
+	workerCount := tournamentWorkerCount(len(jobs))
+	var workers sync.WaitGroup
+	firstError := make(chan error, 1)
+	for i := 0; i < workerCount; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				if workerCtx.Err() != nil {
+					return
+				}
+				if err := s.runWerewolfTournamentMatch(workerCtx, tournament, plan, index); err != nil {
+					if workerCtx.Err() == nil {
+						select {
+						case firstError <- fmt.Errorf("第 %d 局：%w", index+1, err):
+						default:
+						}
+					}
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	select {
+	case err := <-firstError:
+		s.failTournament(tournament, err)
+		_ = s.Store.StopWerewolfTournamentGames(context.Background(), tournament.RunID, tournament.ID, "比赛中断；可继续未完成场次")
+		return
+	default:
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	current, err := s.Store.WerewolfTournament(context.Background(), tournament.RunID, tournament.ID)
+	if err == nil && current.Status == "running" && current.NextMatch == current.TotalMatches {
+		_ = s.Store.SetWerewolfTournamentStatus(context.Background(), tournament.RunID, tournament.ID, "running", "complete", "")
+	}
+}
+
+func tournamentWorkerCount(pending int) int {
+	count := 32
+	if configured, err := strconv.Atoi(os.Getenv("WEREWOLF_TOURNAMENT_WORKERS")); err == nil && configured > 0 {
+		count = configured
+	}
+	if count > 64 {
+		count = 64
+	}
+	if count > pending {
+		count = pending
+	}
+	return count
+}
+
+func (s *Server) runWerewolfTournamentMatch(ctx context.Context, tournament store.WerewolfTournament, plan werewolfTournamentPlan, index int) error {
+	if err := s.checkTournamentActive(ctx, tournament); err != nil {
+		return err
+	}
+	gameID, err := s.Store.WerewolfTournamentMatchGame(ctx, tournament.ID, index)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var game store.WerewolfGame
+	if gameID != "" {
+		game, err = s.Store.WerewolfGame(ctx, tournament.RunID, gameID)
+		if err != nil {
+			return err
+		}
+	}
+	if game.Status != "complete" {
+		state, stateErr := stateForTournamentMatch(plan, plan.Matches[index])
+		if stateErr != nil {
+			return stateErr
+		}
+		raw, _ := json.Marshal(state)
+		game, err = s.Store.CreateWerewolfTournamentGame(ctx, newID("wolf_"), tournament.RunID, tournament.ID, string(raw))
+		if err != nil {
+			return err
+		}
+		if err = s.Store.LinkWerewolfTournamentGame(ctx, tournament.ID, index, game.ID); err != nil {
+			_ = s.Store.UpdateWerewolfGame(context.Background(), tournament.RunID, game.ID, "stopped", game.StateJSON, "", "比赛记录写入失败")
+			return err
+		}
+		s.runWerewolfGame(ctx, game, state)
+		game, err = s.Store.WerewolfGame(context.Background(), tournament.RunID, game.ID)
+		if err != nil {
+			return err
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if game.Status != "complete" {
+		return fmt.Errorf("状态为 %s：%s", game.Status, game.Error)
+	}
+	state, err := decodeWerewolfState(game)
+	if err != nil {
+		return err
+	}
+	return s.Store.CompleteWerewolfTournamentMatch(ctx, tournament.RunID, tournament.ID, index, game.ID, scoreTournamentMatch(state, game.Winner))
 }
 
 func stateForTournamentMatch(plan werewolfTournamentPlan, ids []string) (werewolfState, error) {

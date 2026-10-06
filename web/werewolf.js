@@ -14,6 +14,8 @@
   let me = null, currentGameID = "", cursor = 0, polling = false, rosterSignature = "", selected = new Set();
   let currentTournamentID = "", tournamentRunning = false, tournamentActionBusy = false, rosterCount = 0;
   let manager = false, classroomEnabled = false, demoGameID = "", demoCursor = 0, demoBusy = false;
+  let demoPlayback = null, livePlayback = null, replayPlayback = null, matchListKey = "";
+  let demoGame = null, teacherGame = null;
   let musicContext = null, musicTimer = null, musicStep = 0;
 
   async function api(path, options = {}) {
@@ -171,6 +173,7 @@
   }
 
   function renderGame(game) {
+    if (teacher) teacherGame = game;
     $("gameCard").classList.remove("hidden");
     if (!game) {
       $("gameMeta").textContent = "等待老师选出 6 名 Agent。";
@@ -210,7 +213,29 @@
           : `本局已${game.status === "failed" ? "出错" : "停止"}。`;
       }
       updateSelection();
+      updateTeacherStage();
     }
+  }
+
+  function updateTeacherStage() {
+    if (!teacherGame || !livePlayback) return;
+    const step = livePlayback.snapshot();
+    const revealed = step.event?.type === "result";
+    if (revealed) {
+      $("gameBadge").textContent = "已结束";
+      $("gameMeta").textContent = `第 ${teacherGame.round} 轮 · 结局 · ${teacherGame.winner === "wolves" ? "狼人获胜" : teacherGame.winner === "villagers" ? "好人获胜" : "平局"}`;
+    } else {
+      $("gameBadge").textContent = "逐步展示";
+      $("gameMeta").textContent = step.event
+        ? `已展示 ${step.index} / ${step.total} 步 · ${phases[step.event.phase] || step.event.phase}`
+        : "点击“下一步”开始展示交流流程。";
+    }
+    $("players").querySelectorAll(".player").forEach((card, index) => {
+      const player = teacherGame.players?.[index];
+      if (!player) return;
+      card.classList.toggle("dead", revealed && !player.alive);
+      card.querySelector("small").textContent = revealed ? (player.alive ? "存活" : "出局") : "身份已分配";
+    });
   }
 
   function appendEvents(events, timelineID = "timeline", isDemo = false) {
@@ -247,6 +272,58 @@
     if (isDemo && events.length) timeline.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
+  function createPlayback(prefix, timelineID, statusID, live = false) {
+    const state = { events: [], index: 0, playing: false, timer: null };
+    const paint = () => {
+      const timeline = $(timelineID);
+      timeline.replaceChildren();
+      if (state.index) appendEvents(state.events.slice(0, state.index), timelineID, false);
+      else timeline.append(node("div", state.events.length ? "点击“下一步”查看第一条消息。" : "等待对局消息…", "timeline-empty"));
+      $(statusID).textContent = `${state.index} / ${state.events.length} 步`;
+      $(`${prefix}PlayPause`).textContent = state.playing ? "❚❚ 暂停" : "▶ 播放";
+      $(`${prefix}Prev`).disabled = state.index === 0;
+      $(`${prefix}Restart`).disabled = state.index === 0;
+      $(`${prefix}Next`).disabled = state.index >= state.events.length;
+      if (prefix === "demo") $("demoProgress").textContent = `${state.index} / ${state.events.length} 步`;
+      if (prefix === "demo") updateDemoStage();
+      if (prefix === "live") updateTeacherStage();
+      if (state.index) timeline.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+    const pause = () => { state.playing = false; clearInterval(state.timer); state.timer = null; paint(); };
+    const next = () => {
+      if (state.index < state.events.length) { state.index++; paint(); }
+      else if (!live) pause();
+    };
+    $(`${prefix}Restart`).onclick = () => { pause(); state.index = 0; paint(); };
+    $(`${prefix}Prev`).onclick = () => { pause(); state.index = Math.max(0, state.index - 1); paint(); };
+    $(`${prefix}Next`).onclick = () => { pause(); next(); };
+    $(`${prefix}PlayPause`).onclick = () => {
+      if (state.playing) { pause(); return; }
+      if (!live && state.index >= state.events.length) state.index = 0;
+      state.playing = true;
+      paint();
+      state.timer = setInterval(next, 1500);
+    };
+    paint();
+    return {
+      reset(events = []) { pause(); state.events = events; state.index = 0; paint(); },
+      add(events) {
+        if (!events?.length) return;
+        state.events.push(...events);
+        if (state.playing || state.index === 0) paint();
+        else {
+          $(statusID).textContent = `${state.index} / ${state.events.length} 步`;
+          $(`${prefix}Next`).disabled = false;
+          if (prefix === "demo") $("demoProgress").textContent = `${state.index} / ${state.events.length} 步`;
+          if (prefix === "demo") updateDemoStage();
+          if (prefix === "live") updateTeacherStage();
+        }
+      },
+      close() { pause(); },
+      snapshot() { return { index: state.index, total: state.events.length, event: state.events[state.index - 1] || null }; },
+    };
+  }
+
   function renderControl(enabled) {
     classroomEnabled = enabled;
     if (!manager || teacher) return;
@@ -256,20 +333,30 @@
   }
 
   function renderDemo(game) {
+    demoGame = game;
     $("demoCard").classList.remove("hidden");
     $("demoStage").classList.toggle("hidden", !game);
     $("demoBadge").textContent = game ? ({ running: "进行中", complete: "已结束", stopped: "已停止", failed: "出错", interrupted: "已中断" }[game.status] || game.status) : "待演示";
     $("startDemo").disabled = demoBusy || game?.status === "running";
     $("stopDemo").classList.toggle("hidden", game?.status !== "running");
     if (!game) return;
-    $("demoPhase").textContent = `第 ${game.round} 轮 · ${phases[game.phase] || game.phase}`;
-    $("demoMeta").textContent = game.winner ? ({ wolves: "狼人阵营获胜", villagers: "好人阵营获胜", draw: "本局平局" }[game.winner] || game.winner) : game.error || "主持人正在按流程发出请求";
+    updateDemoStage();
+  }
+
+  function updateDemoStage() {
+    if (!demoGame || !demoPlayback) return;
+    const step = demoPlayback.snapshot();
+    const revealed = step.event?.type === "result";
+    $("demoPhase").textContent = step.event ? `当前展示 · ${phases[step.event.phase] || step.event.phase}` : "等待第一步";
+    $("demoMeta").textContent = revealed
+      ? ({ wolves: "狼人阵营获胜", villagers: "好人阵营获胜", draw: "本局平局" }[demoGame.winner] || demoGame.winner)
+      : step.event ? `当前第 ${step.index} 步；共已生成 ${step.total} 步` : "点击“下一步”开始展示 Agent 交流";
     const players = $("demoPlayers");
     players.replaceChildren();
-    (game.players || []).forEach((player) => {
-      const card = node("div", "", `demo-player ${player.mine ? "mine" : ""} ${player.alive ? "" : "dead"}`);
+    (demoGame.players || []).forEach((player) => {
+      const card = node("div", "", `demo-player ${player.mine ? "mine" : ""} ${revealed && !player.alive ? "dead" : ""}`);
       card.append(node("small", `${player.seat} 号 · ${player.mine ? "我的 Agent" : player.name}`), node("strong", roles[player.role] || player.role),
-        node("span", player.alive ? "存活" : "出局"));
+        node("span", revealed ? (player.alive ? "存活" : "出局") : "身份已分配"));
       players.append(card);
     });
   }
@@ -282,14 +369,13 @@
     if ((game?.id || "") !== demoGameID) {
       demoGameID = game?.id || "";
       demoCursor = 0;
-      $("demoTimeline").replaceChildren(node("div", "等待主持人发出第一条消息…", "timeline-empty"));
+      demoPlayback?.reset();
     }
     if (demoGameID) {
       const result = await api(`/api/werewolf/demo/events?after=${demoCursor}`);
-      appendEvents(result.events || [], "demoTimeline", true);
+      demoPlayback?.add(result.events || []);
       demoCursor = result.next || demoCursor;
-      $("demoProgress").textContent = `${$("demoTimeline").querySelectorAll(".event").length} 步`;
-      if (game?.status === "complete") $("demoStatus").textContent = "演示完成。可切换身份或修改 Soul / Skill 后再次演示。";
+      if (game?.status === "complete") $("demoStatus").textContent = "对局记录已生成，可从头逐步播放；也可修改 Soul / Skill 后再次演示。";
       if (game?.status === "failed") $("demoStatus").textContent = game.error || "演示未完成，请检查模型配置。";
     }
   }
@@ -317,15 +403,25 @@
       if (gameID !== currentGameID) {
         currentGameID = gameID;
         cursor = 0;
-        $("timeline").replaceChildren();
+        if (teacher) livePlayback?.reset();
+        else $("timeline").replaceChildren();
       }
       if (gameID) {
         const result = await api(`${prefix}/games/${encodeURIComponent(gameID)}/events?after=${cursor}`);
-        appendEvents(result.events || []);
+        if (teacher) livePlayback?.add(result.events || []);
+        else appendEvents(result.events || []);
         cursor = result.next || cursor;
       }
       const tournament = await api(`${prefix}/tournament`);
       renderTournament(tournament);
+      if (teacher && currentTournamentID) {
+        const key = `${currentTournamentID}:${tournament.tournament.completed_matches}:${tournament.tournament.status}`;
+        if (key !== matchListKey) {
+          const records = await api(`/api/teacher/werewolf/tournament/${encodeURIComponent(currentTournamentID)}/matches`);
+          renderMatchList(records.matches || []);
+          matchListKey = key;
+        }
+      }
       if (manager && !teacher) await refreshDemo();
       $("status").textContent = data.enabled ? "课堂狼人杀已开启，页面会自动更新。" : teacher ? "狼人杀尚未开启。" : "老师尚未开启狼人杀环节。";
       if (manager && !data.enabled) $("status").textContent = "学生端暂未开放；你仍可设置 Agent 并做现场演示。";
@@ -341,6 +437,8 @@
       me = await api("/api/me");
       manager = me.werewolf_manager === true;
       if (teacher) {
+        livePlayback = createPlayback("live", "timeline", "livePlaybackStatus", true);
+        replayPlayback = createPlayback("replay", "replayTimeline", "replayPlaybackStatus");
         if (manager) {
           $("teacherBack").href = "/werewolf";
           $("teacherBack").textContent = "← 返回我的狼人杀工作台";
@@ -351,6 +449,7 @@
         const roster = await api("/api/teacher/werewolf/roster");
         renderRoster(roster.students || []);
       } else if (manager) {
+        demoPlayback = createPlayback("demo", "demoTimeline", "demoPlaybackStatus", true);
         $("managerCard").classList.remove("hidden");
         $("demoCard").classList.remove("hidden");
       }
@@ -359,6 +458,42 @@
     } catch (error) {
       $("status").textContent = `请先返回${teacher ? "教师管理台或 A01/A02 工作台" : "学生工作台"}登录：${error.message}`;
     }
+  }
+
+  function renderMatchList(matches) {
+    const root = $("matchList");
+    root.replaceChildren();
+    const completed = matches.filter((item) => item.status === "complete");
+    if (!completed.length) { root.append(node("p", "尚无已完成的对局。")); return; }
+    completed.forEach((item) => {
+      const button = node("button", "", "match-item");
+      button.type = "button";
+      const winner = { wolves: "狼人胜", villagers: "好人胜", draw: "平局" }[item.winner] || "已完成";
+      button.append(node("strong", `第 ${item.index + 1} 场 · ${winner}`),
+        node("small", (item.players || []).map((player) => player.name).join("、")));
+      button.onclick = () => openReplay(item.index);
+      root.append(button);
+    });
+  }
+
+  async function openReplay(index) {
+    try {
+      const data = await api(`/api/teacher/werewolf/tournament/${encodeURIComponent(currentTournamentID)}/matches/${index}`);
+      const game = data.game;
+      $("replayTitle").textContent = `第 ${index + 1} 场 · ${game.winner === "wolves" ? "狼人获胜" : game.winner === "villagers" ? "好人获胜" : "平局"}`;
+      $("replayMeta").textContent = `第 ${game.round} 轮 · ${phases[game.phase] || game.phase} · ${data.events.length} 步交流`;
+      const players = $("replayPlayers");
+      players.replaceChildren();
+      (game.players || []).forEach((player) => {
+        const card = node("div", "", `player${player.alive ? "" : " dead"}`);
+        card.append(node("strong", `${player.seat} 号 · ${player.name}`), node("small", player.alive ? "存活" : "出局"),
+          node("span", roles[player.role] || player.role, `role ${player.role}`));
+        players.append(card);
+      });
+      replayPlayback.reset(data.events || []);
+      $("replayCard").classList.remove("hidden");
+      $("replayCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) { $("tournamentActionStatus").textContent = `读取回放失败：${error.message}`; }
   }
 
   async function savePromptDesign() {
@@ -441,7 +576,7 @@
       try {
         await savePromptDesign();
         await api("/api/werewolf/demo", { method: "POST", body: JSON.stringify({ role: $("demoRole").value }) });
-        $("demoStatus").textContent = "演示已开始。展开卡片可查看本步使用的 Soul、Skill 与完整提示。";
+        $("demoStatus").textContent = "演示已开始。点击“下一步”逐条讲解，或点击“播放”自动展示。";
         await refreshDemo();
       } catch (error) {
         $("demoStatus").textContent = `演示未开始：${error.message}`;
@@ -457,6 +592,7 @@
     $("demoMusic").onclick = toggleMusic;
     window.addEventListener("pagehide", () => { if (musicTimer) clearInterval(musicTimer); musicContext?.close(); });
   } else {
+    $("closeReplay").onclick = () => { replayPlayback?.close(); $("replayCard").classList.add("hidden"); };
     $("startTournament").onclick = async () => {
       if (rosterCount < 6 || tournamentRunning || tournamentActionBusy) return;
       const matches = Math.ceil(rosterCount * 20 / 6);

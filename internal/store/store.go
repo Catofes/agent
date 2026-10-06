@@ -212,8 +212,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 20 {
-		return fmt.Errorf("database version %d is newer than supported version 20", version)
+	if version > 21 {
+		return fmt.Errorf("database version %d is newer than supported version 21", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -348,6 +348,11 @@ PRAGMA user_version = 1;`
 	if version < 20 {
 		if err := s.migrateWerewolfDemo(ctx); err != nil {
 			return fmt.Errorf("migrate werewolf demo: %w", err)
+		}
+	}
+	if version < 21 {
+		if err := s.migrateWerewolfParallel(ctx); err != nil {
+			return fmt.Errorf("migrate parallel werewolf tournament: %w", err)
 		}
 	}
 	return nil

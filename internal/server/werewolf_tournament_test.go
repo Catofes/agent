@@ -180,7 +180,8 @@ func TestWerewolfTournamentPauseAndResumeKeepsProgress(t *testing.T) {
 	id := started["tournament"].(map[string]any)["id"].(string)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		if game, err := st.LatestWerewolfGame(context.Background(), run.ID); err == nil && game.Status == "running" {
+		matches, _ := st.WerewolfTournamentMatches(context.Background(), run.ID, id)
+		if len(matches) > 0 && matches[0].Status == "running" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -228,6 +229,55 @@ func TestWerewolfTournamentPauseAndResumeKeepsProgress(t *testing.T) {
 			t.Fatalf("resumed tournament timed out after %d matches", current.NextMatch)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	app.Shutdown()
+}
+
+func TestWerewolfTournamentFortyStudentsCanReplaySavedMatch(t *testing.T) {
+	app, st := testServerWithRoster(t, directClient{}, 40)
+	app.WerewolfClient = &scriptedWerewolfClient{}
+	teacher := newClient(app.Routes())
+	if code, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"}); code != 200 {
+		t.Fatalf("login=%d", code)
+	}
+	run, _ := st.ActiveRun(context.Background())
+	policy, _ := st.RunPolicy(context.Background(), run.ID)
+	policy.WerewolfEnabled = true
+	if _, err := st.SetRunPolicy(context.Background(), run.ID, policy); err != nil {
+		t.Fatal(err)
+	}
+	code, started, raw := requestJSON(t, teacher, http.MethodPost, "/api/teacher/werewolf/tournament", map[string]bool{"allow_system": true})
+	if code != 200 {
+		t.Fatalf("start=%d body=%s", code, raw)
+	}
+	id := started["tournament"].(map[string]any)["id"].(string)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		current, err := st.WerewolfTournament(context.Background(), run.ID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.Status != "running" {
+			if current.Status != "complete" || current.NextMatch != 134 {
+				t.Fatalf("tournament=%#v", current)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %d matches", current.NextMatch)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := st.LatestWerewolfGame(context.Background(), run.ID); err == nil {
+		t.Fatal("tournament match appeared as live classroom game")
+	}
+	code, body, raw := requestJSON(t, teacher, http.MethodGet, "/api/teacher/werewolf/tournament/"+id+"/matches", nil)
+	if code != 200 || len(body["matches"].([]any)) != 134 {
+		t.Fatalf("matches=%d body=%s", code, raw)
+	}
+	code, body, raw = requestJSON(t, teacher, http.MethodGet, "/api/teacher/werewolf/tournament/"+id+"/matches/0", nil)
+	if code != 200 || len(body["events"].([]any)) == 0 {
+		t.Fatalf("replay=%d body=%s", code, raw)
 	}
 	app.Shutdown()
 }

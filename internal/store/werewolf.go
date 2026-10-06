@@ -9,15 +9,16 @@ import (
 )
 
 type WerewolfGame struct {
-	ID        string    `json:"id"`
-	RunID     string    `json:"-"`
-	DemoOwner string    `json:"-"`
-	Status    string    `json:"status"`
-	StateJSON string    `json:"-"`
-	Winner    string    `json:"winner,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	RunID        string    `json:"-"`
+	DemoOwner    string    `json:"-"`
+	TournamentID string    `json:"-"`
+	Status       string    `json:"status"`
+	StateJSON    string    `json:"-"`
+	Winner       string    `json:"winner,omitempty"`
+	Error        string    `json:"error,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (s *Store) migrateWerewolfDemo(ctx context.Context) error {
@@ -49,6 +50,36 @@ func (s *Store) migrateWerewolfDemo(ctx context.Context) error {
 	}
 	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 20`); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) migrateWerewolfParallel(ctx context.Context) error {
+	hasColumn, err := s.tableHasColumn(ctx, "werewolf_games", "tournament_id")
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	queries := []string{}
+	if !hasColumn {
+		queries = append(queries, `ALTER TABLE werewolf_games ADD COLUMN tournament_id TEXT NOT NULL DEFAULT ''`)
+	}
+	queries = append(queries,
+		`UPDATE werewolf_games SET tournament_id=(SELECT tournament_id FROM werewolf_tournament_matches WHERE game_id=werewolf_games.id LIMIT 1) WHERE EXISTS(SELECT 1 FROM werewolf_tournament_matches WHERE game_id=werewolf_games.id)`,
+		`UPDATE werewolf_games SET tournament_id='legacy-tournament' WHERE tournament_id='' AND json_valid(state_json) AND json_extract(state_json,'$.tournament')=1`,
+		`DROP INDEX IF EXISTS werewolf_one_running_per_run`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS werewolf_one_running_per_run ON werewolf_games(run_id) WHERE status='running' AND tournament_id=''`,
+		`CREATE INDEX IF NOT EXISTS werewolf_tournament_games ON werewolf_games(tournament_id,status)`,
+		`PRAGMA user_version = 21`,
+	)
+	for _, query := range queries {
+		if _, err = tx.ExecContext(ctx, query); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -156,6 +187,16 @@ func (s *Store) CreateWerewolfGame(ctx context.Context, id, runID, stateJSON str
 	return s.WerewolfGame(ctx, runID, id)
 }
 
+func (s *Store) CreateWerewolfTournamentGame(ctx context.Context, id, runID, tournamentID, stateJSON string) (WerewolfGame, error) {
+	now := formatTime(time.Now().UTC())
+	_, err := s.db.ExecContext(ctx, `INSERT INTO werewolf_games(id,run_id,tournament_id,status,state_json,created_at,updated_at)
+ VALUES(?,?,?,'running',?,?,?)`, id, runID, tournamentID, stateJSON, now, now)
+	if err != nil {
+		return WerewolfGame{}, err
+	}
+	return s.WerewolfGame(ctx, runID, id)
+}
+
 func (s *Store) CreateWerewolfDemo(ctx context.Context, id, runID, owner, stateJSON string) (WerewolfGame, error) {
 	now := formatTime(time.Now().UTC())
 	_, err := s.db.ExecContext(ctx, `INSERT INTO werewolf_games(id,run_id,demo_owner,status,state_json,created_at,updated_at)
@@ -169,9 +210,9 @@ func (s *Store) CreateWerewolfDemo(ctx context.Context, id, runID, owner, stateJ
 func (s *Store) WerewolfGame(ctx context.Context, runID, id string) (WerewolfGame, error) {
 	var game WerewolfGame
 	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT id,run_id,demo_owner,status,state_json,winner,error,created_at,updated_at
+	err := s.db.QueryRowContext(ctx, `SELECT id,run_id,demo_owner,tournament_id,status,state_json,winner,error,created_at,updated_at
  FROM werewolf_games WHERE run_id=? AND id=?`, runID, id).Scan(
-		&game.ID, &game.RunID, &game.DemoOwner, &game.Status, &game.StateJSON, &game.Winner, &game.Error, &created, &updated)
+		&game.ID, &game.RunID, &game.DemoOwner, &game.TournamentID, &game.Status, &game.StateJSON, &game.Winner, &game.Error, &created, &updated)
 	if err != nil {
 		return WerewolfGame{}, err
 	}
@@ -182,7 +223,16 @@ func (s *Store) WerewolfGame(ctx context.Context, runID, id string) (WerewolfGam
 
 func (s *Store) LatestWerewolfGame(ctx context.Context, runID string) (WerewolfGame, error) {
 	var id string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM werewolf_games WHERE run_id=? AND demo_owner='' ORDER BY created_at DESC,id DESC LIMIT 1`, runID).Scan(&id)
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM werewolf_games WHERE run_id=? AND demo_owner='' AND tournament_id='' ORDER BY created_at DESC,id DESC LIMIT 1`, runID).Scan(&id)
+	if err != nil {
+		return WerewolfGame{}, err
+	}
+	return s.WerewolfGame(ctx, runID, id)
+}
+
+func (s *Store) RunningWerewolfInteractiveGame(ctx context.Context, runID string) (WerewolfGame, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM werewolf_games WHERE run_id=? AND tournament_id='' AND status='running' LIMIT 1`, runID).Scan(&id)
 	if err != nil {
 		return WerewolfGame{}, err
 	}
@@ -274,4 +324,10 @@ func (s *Store) StopWerewolfGame(ctx context.Context, runID, id string) error {
 		return fmt.Errorf("game is %s", game.Status)
 	}
 	return s.UpdateWerewolfGame(ctx, runID, id, "stopped", game.StateJSON, "", "教师已结束对局")
+}
+
+func (s *Store) StopWerewolfTournamentGames(ctx context.Context, runID, tournamentID, message string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE werewolf_games SET status='stopped',error=?,updated_at=? WHERE run_id=? AND tournament_id=? AND status='running'`,
+		message, formatTime(time.Now().UTC()), runID, tournamentID)
+	return err
 }
