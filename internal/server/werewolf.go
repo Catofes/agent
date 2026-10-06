@@ -122,7 +122,7 @@ func decodeWerewolfState(game store.WerewolfGame) (werewolfState, error) {
 func (s *Server) getWerewolfPrompts(w http.ResponseWriter, r *http.Request) {
 	p := principalOf(r)
 	policy, err := s.Store.RunPolicy(r.Context(), p.Session.RunID)
-	if err != nil || !policy.WerewolfEnabled {
+	if err != nil || (!policy.WerewolfEnabled && !canManageWerewolf(p.Session)) {
 		writeError(w, http.StatusForbidden, "WEREWOLF_DISABLED", "老师尚未开启狼人杀环节")
 		return
 	}
@@ -147,11 +147,11 @@ func (s *Server) saveWerewolfPrompts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy, err := s.Store.RunPolicy(r.Context(), run.ID)
-	if err != nil || !policy.WerewolfEnabled {
+	if err != nil || (!policy.WerewolfEnabled && !canManageWerewolf(p.Session)) {
 		writeError(w, 403, "WEREWOLF_DISABLED", "老师尚未开启狼人杀环节")
 		return
 	}
-	if run.Locked {
+	if run.Locked && !canManageWerewolf(p.Session) {
 		writeError(w, http.StatusLocked, "CLASS_LOCKED", "老师已暂停课堂操作")
 		return
 	}
@@ -288,6 +288,10 @@ func (s *Server) werewolfEvents(w http.ResponseWriter, r *http.Request, runID, v
 		writeError(w, 404, "GAME_NOT_FOUND", "未找到这局游戏")
 		return
 	}
+	if game.DemoOwner != "" && (!teacher || !principalOf(r).Session.IsTeacher) {
+		writeError(w, 404, "GAME_NOT_FOUND", "未找到这局游戏")
+		return
+	}
 	state, err := decodeWerewolfState(game)
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "对局数据损坏")
@@ -313,19 +317,65 @@ func (s *Server) werewolfEvents(w http.ResponseWriter, r *http.Request, runID, v
 		if !visible {
 			continue
 		}
-		item := map[string]any{"id": event.ID, "phase": event.Phase, "type": event.Type,
-			"text": event.Text, "channel": event.Visibility, "created_at": event.CreatedAt}
-		if actor := state.player(event.ActorID); actor != nil {
-			item["actor_seat"] = actor.Seat
-			item["actor_name"] = actor.Name
-		}
-		if teacher || event.ActorID == viewerID && viewerID != "" {
-			item["prompt"] = event.Prompt
-			item["response"] = event.Response
-		}
-		items = append(items, item)
+		items = append(items, werewolfEventItem(event, state, teacher || event.ActorID == viewerID && viewerID != ""))
 	}
 	writeJSON(w, 200, map[string]any{"events": items, "next": next})
+}
+
+func werewolfEventItem(event store.WerewolfEvent, state werewolfState, showPrompt bool) map[string]any {
+	item := map[string]any{"id": event.ID, "phase": event.Phase, "type": event.Type,
+		"text": event.Text, "channel": event.Visibility, "created_at": event.CreatedAt}
+	if actor := state.player(event.ActorID); actor != nil {
+		item["actor_seat"] = actor.Seat
+		item["actor_name"] = actor.Name
+		item["actor_system"] = actor.System
+		if showPrompt {
+			item["actor_role"] = actor.Role
+		}
+		if showPrompt && event.Prompt != "" {
+			action := werewolfActionForEvent(event.Type)
+			item["workshop_soul"] = actor.Persona
+			item["werewolf_soul"] = actor.Prompts.General
+			item["base_skills"] = actor.Skills
+			item["action_skill"] = werewolfPromptForAction(*actor, action)
+			item["action_skill_name"] = werewolfSkillName(actor.Role, action)
+		}
+	}
+	if showPrompt {
+		item["prompt"] = event.Prompt
+		item["response"] = event.Response
+	}
+	return item
+}
+
+func werewolfActionForEvent(eventType string) string {
+	switch eventType {
+	case "wolf_message":
+		return "discuss"
+	case "wolf_kill":
+		return "kill"
+	case "seer_check":
+		return "check"
+	case "witch_action":
+		return "witch"
+	case "speech":
+		return "speak"
+	case "vote":
+		return "vote"
+	case "last_words":
+		return "last_words"
+	}
+	return ""
+}
+
+func werewolfSkillName(role, action string) string {
+	roleName := map[string]string{"wolf": "狼人", "villager": "平民", "seer": "预言家", "witch": "女巫"}[role]
+	actionName := map[string]string{"discuss": "夜间商议", "kill": "夜间选择目标", "check": "夜间查验",
+		"witch": "夜间用药", "speak": "白天发言", "vote": "白天投票", "last_words": "遗言"}[action]
+	if action == "last_words" {
+		return "通用 · 遗言 Skill"
+	}
+	return roleName + " · " + actionName + " Skill"
 }
 
 func (s *Server) startWerewolfGame(w http.ResponseWriter, r *http.Request) {
@@ -468,7 +518,7 @@ func (s *Server) stopWerewolfGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	game, err := s.Store.WerewolfGame(r.Context(), run.ID, chi.URLParam(r, "id"))
-	if err != nil || game.Status != "running" {
+	if err != nil || game.Status != "running" || game.DemoOwner != "" {
 		writeError(w, 404, "GAME_NOT_RUNNING", "对局未在进行")
 		return
 	}

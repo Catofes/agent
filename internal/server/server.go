@@ -239,32 +239,43 @@ func (s *Server) Routes() http.Handler {
 				r.Get("/werewolf/current", s.studentWerewolfCurrent)
 				r.Get("/werewolf/games/{id}/events", s.studentWerewolfEvents)
 				r.Get("/werewolf/tournament", s.studentWerewolfTournament)
+				r.Get("/werewolf/control", s.getWerewolfControl)
+				r.Put("/werewolf/control", s.setWerewolfControl)
+				r.Get("/werewolf/demo", s.getWerewolfDemo)
+				r.Post("/werewolf/demo", s.startWerewolfDemo)
+				r.Post("/werewolf/demo/stop", s.stopWerewolfDemo)
+				r.Get("/werewolf/demo/events", s.getWerewolfDemoEvents)
 			})
 			r.Route("/teacher", func(r chi.Router) {
-				r.Use(s.requireTeacher)
-				r.Get("/me", s.me)
-				r.Post("/logout", s.logout)
-				r.Get("/wall", s.wallEvents)
-				r.Get("/policy", s.getTeacherPolicy)
-				r.Put("/policy", s.setTeacherPolicy)
-				r.Get("/student/{id}", s.teacherStudent)
-				r.Post("/student/{id}/usage/reset", s.resetStudentUsage)
-				r.Post("/lock", s.lock)
-				r.Post("/run", s.createRun)
-				r.Post("/spotlight", s.spotlight)
-				r.Get("/screen-demo", s.getScreenDemo)
-				r.Post("/screen-demo", s.startScreenDemo)
-				r.Post("/screen-demo/chat", s.chatScreenDemo)
-				r.Get("/werewolf/roster", s.teacherWerewolfRoster)
-				r.Get("/werewolf/current", s.teacherWerewolfCurrent)
-				r.Get("/werewolf/games/{id}/events", s.teacherWerewolfEvents)
-				r.Post("/werewolf/games", s.startWerewolfGame)
-				r.Post("/werewolf/games/{id}/stop", s.stopWerewolfGame)
-				r.Get("/werewolf/tournament", s.teacherWerewolfTournament)
-				r.Post("/werewolf/tournament", s.startWerewolfTournament)
-				r.Post("/werewolf/tournament/{id}/stop", s.stopWerewolfTournament)
-				r.Post("/werewolf/tournament/{id}/resume", s.resumeWerewolfTournament)
-				r.Delete("/screen-demo", s.stopScreenDemo)
+				r.Group(func(r chi.Router) {
+					r.Use(s.requireTeacher)
+					r.Get("/me", s.me)
+					r.Post("/logout", s.logout)
+					r.Get("/wall", s.wallEvents)
+					r.Get("/policy", s.getTeacherPolicy)
+					r.Put("/policy", s.setTeacherPolicy)
+					r.Get("/student/{id}", s.teacherStudent)
+					r.Post("/student/{id}/usage/reset", s.resetStudentUsage)
+					r.Post("/lock", s.lock)
+					r.Post("/run", s.createRun)
+					r.Post("/spotlight", s.spotlight)
+					r.Get("/screen-demo", s.getScreenDemo)
+					r.Post("/screen-demo", s.startScreenDemo)
+					r.Post("/screen-demo/chat", s.chatScreenDemo)
+					r.Delete("/screen-demo", s.stopScreenDemo)
+				})
+				r.Route("/werewolf", func(r chi.Router) {
+					r.Use(s.requireWerewolfTeacher)
+					r.Get("/roster", s.teacherWerewolfRoster)
+					r.Get("/current", s.teacherWerewolfCurrent)
+					r.Get("/games/{id}/events", s.teacherWerewolfEvents)
+					r.Post("/games", s.startWerewolfGame)
+					r.Post("/games/{id}/stop", s.stopWerewolfGame)
+					r.Get("/tournament", s.teacherWerewolfTournament)
+					r.Post("/tournament", s.startWerewolfTournament)
+					r.Post("/tournament/{id}/stop", s.stopWerewolfTournament)
+					r.Post("/tournament/{id}/resume", s.resumeWerewolfTournament)
+				})
 			})
 		})
 		r.Get("/screen/events", s.screenEvents)
@@ -317,8 +328,9 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ID          string `json:"id"`
-		NameInitial string `json:"name_initial"` // Accepted but ignored for older clients.
+		ID              string `json:"id"`
+		NameInitial     string `json:"name_initial"` // Accepted but ignored for older clients.
+		TeacherPassword string `json:"teacher_password"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -347,12 +359,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	managerAuthorized := false
+	if isWerewolfManager(st.ID) {
+		a, b := []byte(in.TeacherPassword), []byte(s.Config.AdminPassword)
+		if len(a) != len(b) || subtle.ConstantTimeCompare(a, b) != 1 {
+			writeError(w, 401, "INVALID_LOGIN", "A01、A02 需要输入教师口令")
+			return
+		}
+		managerAuthorized = true
+	}
 	raw, hash, err := newToken()
 	if err != nil {
 		writeError(w, 500, "INTERNAL_ERROR", "无法创建会话")
 		return
 	}
-	if err = s.Store.CreateSession(r.Context(), store.Session{TokenHash: hash, RunID: run.ID, StudentID: st.ID, ExpiresAt: time.Now().UTC().Add(s.Config.SessionTTL)}); err != nil {
+	if err = s.Store.CreateSession(r.Context(), store.Session{TokenHash: hash, RunID: run.ID, StudentID: st.ID, ManagerAuthorized: managerAuthorized, ExpiresAt: time.Now().UTC().Add(s.Config.SessionTTL)}); err != nil {
 		writeError(w, 500, "INTERNAL_ERROR", "登录失败")
 		return
 	}
@@ -475,7 +496,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "RUN_ENDED", "课堂场次已结束")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"role": "student", "student": p.Student, "run": run})
+	writeJSON(w, http.StatusOK, map[string]any{"role": "student", "student": p.Student, "run": run, "werewolf_manager": canManageWerewolf(p.Session)})
 }
 func (s *Server) setCookie(w http.ResponseWriter, raw string, teacher bool) {
 	name := studentSessionCookie

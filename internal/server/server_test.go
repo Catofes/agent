@@ -371,8 +371,11 @@ func TestStudentLoginIgnoresNameInitialAndIDCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	student := newClient(handler)
+	if status, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "a01"}); status != http.StatusUnauthorized {
+		t.Fatalf("manager without teacher password=%d", status)
+	}
 	status, login, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{
-		"id": "a01", "name_initial": "完全不匹配",
+		"id": "a01", "name_initial": "完全不匹配", "teacher_password": "teacher-secret",
 	})
 	if status != http.StatusOK {
 		t.Fatalf("login status=%d body=%v", status, login)

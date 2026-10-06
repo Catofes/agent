@@ -9,7 +9,7 @@
 <body data-mode="teacher">
   <main class="shell">
     <header class="hero">
-      <div><a href="/teacher" class="back">← 返回教师管理台</a><p class="eyebrow">课堂控制台 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>选择 6 名学生 Agent，观察主持人如何将 Prompt、私密信息、发言和投票传递给每位 Agent。</p></div>
+      <div><a id="teacherBack" href="/teacher" class="back">← 返回教师管理台</a><p class="eyebrow">课堂控制台 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>选择 6 名学生 Agent，观察主持人如何将规则、Soul、身份 Skill、发言和投票传递给每位 Agent。</p></div>
       <div class="hero-note">固定六人局 · 最多四轮 · 使用 DeepSeek 官方 API</div>
     </header>
     <p id="status" class="status" role="status">正在读取课堂状态…</p>
@@ -22,8 +22,8 @@
       <div class="score-scroll"><table class="score-table"><thead><tr><th>排名</th><th>学生</th><th>场次</th><th>胜 / 负 / 平</th><th>积分</th></tr></thead><tbody id="standings"></tbody></table></div>
     </section>
     <section id="teacherControls" class="card hidden">
-      <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。标记“已写 Prompt”的学生已经保存了角色策略；未写的学生使用默认 Prompt。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
-      <p id="teacherDisabled" class="notice hidden">狼人杀环节尚未开启。请在<a href="/teacher">课堂能力</a>中打开开关并保存。</p>
+      <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。标记“已写狼人杀 Skill”的学生已保存 Soul 与角色策略；其他学生使用默认内容。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
+      <p id="teacherDisabled" class="notice hidden">狼人杀环节尚未开启。请在<a id="enableLink" href="/teacher">课堂能力</a>中打开开关并保存。</p>
       <div id="roster" class="roster"></div>
       <div class="actions"><button id="startGame" type="button">开始一局狼人杀</button><button id="stopGame" class="secondary hidden" type="button">结束当前对局</button><span id="actionStatus" class="status" role="status"></span></div>
     </section>
@@ -31,7 +31,7 @@
       <div class="section-heading"><div><p class="eyebrow">主持人视角</p><h2>当前对局</h2><p id="gameMeta">尚无对局。</p></div><span id="gameBadge" class="badge">待开局</span></div>
       <div id="roleNotice" class="role-notice"></div>
       <div id="players" class="players"></div>
-      <div class="timeline-heading"><h3>Prompt 交流流程</h3><p>展开每一步可查看送给 Agent 的完整 Prompt 与 Agent 的原始回复。私密夜间消息不会送给其他学生。</p></div>
+      <div class="timeline-heading"><h3>Soul · Skill · Prompt 交流流程</h3><p>每一步都标明所用 Soul 与身份 Skill；展开可查看主持人完整提示和 Agent 原始回复。私密夜间消息不会送给其他学生。</p></div>
       <div id="timeline" class="timeline" aria-live="polite"></div>
     </section>
   </main>

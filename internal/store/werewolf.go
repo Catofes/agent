@@ -11,12 +11,46 @@ import (
 type WerewolfGame struct {
 	ID        string    `json:"id"`
 	RunID     string    `json:"-"`
+	DemoOwner string    `json:"-"`
 	Status    string    `json:"status"`
 	StateJSON string    `json:"-"`
 	Winner    string    `json:"winner,omitempty"`
 	Error     string    `json:"error,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (s *Store) migrateWerewolfDemo(ctx context.Context) error {
+	hasColumn, err := s.tableHasColumn(ctx, "werewolf_games", "demo_owner")
+	if err != nil {
+		return err
+	}
+	hasManagerColumn, err := s.tableHasColumn(ctx, "sessions", "manager_authorized")
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if !hasColumn {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE werewolf_games ADD COLUMN demo_owner TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if !hasManagerColumn {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN manager_authorized INTEGER NOT NULL DEFAULT 0 CHECK(manager_authorized IN (0,1))`); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS werewolf_demo_recent ON werewolf_games(run_id,demo_owner,created_at DESC)`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 20`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type WerewolfEvent struct {
@@ -122,12 +156,22 @@ func (s *Store) CreateWerewolfGame(ctx context.Context, id, runID, stateJSON str
 	return s.WerewolfGame(ctx, runID, id)
 }
 
+func (s *Store) CreateWerewolfDemo(ctx context.Context, id, runID, owner, stateJSON string) (WerewolfGame, error) {
+	now := formatTime(time.Now().UTC())
+	_, err := s.db.ExecContext(ctx, `INSERT INTO werewolf_games(id,run_id,demo_owner,status,state_json,created_at,updated_at)
+ VALUES(?,?,?,'running',?,?,?)`, id, runID, owner, stateJSON, now, now)
+	if err != nil {
+		return WerewolfGame{}, err
+	}
+	return s.WerewolfGame(ctx, runID, id)
+}
+
 func (s *Store) WerewolfGame(ctx context.Context, runID, id string) (WerewolfGame, error) {
 	var game WerewolfGame
 	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT id,run_id,status,state_json,winner,error,created_at,updated_at
+	err := s.db.QueryRowContext(ctx, `SELECT id,run_id,demo_owner,status,state_json,winner,error,created_at,updated_at
  FROM werewolf_games WHERE run_id=? AND id=?`, runID, id).Scan(
-		&game.ID, &game.RunID, &game.Status, &game.StateJSON, &game.Winner, &game.Error, &created, &updated)
+		&game.ID, &game.RunID, &game.DemoOwner, &game.Status, &game.StateJSON, &game.Winner, &game.Error, &created, &updated)
 	if err != nil {
 		return WerewolfGame{}, err
 	}
@@ -138,7 +182,16 @@ func (s *Store) WerewolfGame(ctx context.Context, runID, id string) (WerewolfGam
 
 func (s *Store) LatestWerewolfGame(ctx context.Context, runID string) (WerewolfGame, error) {
 	var id string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM werewolf_games WHERE run_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, runID).Scan(&id)
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM werewolf_games WHERE run_id=? AND demo_owner='' ORDER BY created_at DESC,id DESC LIMIT 1`, runID).Scan(&id)
+	if err != nil {
+		return WerewolfGame{}, err
+	}
+	return s.WerewolfGame(ctx, runID, id)
+}
+
+func (s *Store) LatestWerewolfDemo(ctx context.Context, runID, owner string) (WerewolfGame, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM werewolf_games WHERE run_id=? AND demo_owner=? ORDER BY created_at DESC,id DESC LIMIT 1`, runID, owner).Scan(&id)
 	if err != nil {
 		return WerewolfGame{}, err
 	}

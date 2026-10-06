@@ -25,6 +25,22 @@ func testStore(t *testing.T) (*Store, string) {
 	return st, csvPath
 }
 
+func TestCurrentDatabaseVersionReopens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "current.db")
+	first, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+}
+
 func TestStoreRunIsolationAndSessionReplacement(t *testing.T) {
 	ctx := context.Background()
 	st, csvPath := testStore(t)
@@ -637,7 +653,7 @@ func TestVersionTwelveAddsPresetPolicyAndRemovesCalculator(t *testing.T) {
 		t.Fatalf("design=%#v err=%v", design, err)
 	}
 	var version int
-	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 19 {
+	if err = migrated.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 20 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 }
