@@ -267,6 +267,7 @@ func TestWerewolfTournamentPauseAndResumeKeepsProgress(t *testing.T) {
 
 func TestWerewolfTournamentFortyStudentsCanReplaySavedMatch(t *testing.T) {
 	app, st := testServerWithRoster(t, directClient{}, 40)
+	t.Cleanup(app.Shutdown)
 	app.WerewolfClient = &scriptedWerewolfClient{}
 	teacher := newClient(app.Routes())
 	if code, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"}); code != 200 {
@@ -283,7 +284,9 @@ func TestWerewolfTournamentFortyStudentsCanReplaySavedMatch(t *testing.T) {
 		t.Fatalf("start=%d body=%s", code, raw)
 	}
 	id := started["tournament"].(map[string]any)["id"].(string)
-	deadline := time.Now().Add(30 * time.Second)
+	// Race instrumentation makes this SQLite-heavy integration test much slower
+	// on shared CI runners; this verifies completion, not a response-time SLA.
+	deadline := time.Now().Add(90 * time.Second)
 	for {
 		current, err := st.WerewolfTournament(context.Background(), run.ID, id)
 		if err != nil {
@@ -302,6 +305,15 @@ func TestWerewolfTournamentFortyStudentsCanReplaySavedMatch(t *testing.T) {
 	}
 	if _, err := st.LatestWerewolfGame(context.Background(), run.ID); err == nil {
 		t.Fatal("tournament match appeared as live classroom game")
+	}
+	standings, err := st.WerewolfTournamentStandings(context.Background(), run.ID, id)
+	if err != nil || len(standings) != 40 {
+		t.Fatalf("standings count=%d err=%v", len(standings), err)
+	}
+	for _, row := range standings {
+		if row.Played != 20 || row.Wins+row.Losses+row.Draws != 20 {
+			t.Fatalf("incomplete student standing=%#v", row)
+		}
 	}
 	code, body, raw := requestJSON(t, teacher, http.MethodGet, "/api/teacher/werewolf/tournament/"+id+"/matches", nil)
 	if code != 200 || len(body["matches"].([]any)) != 134 {
