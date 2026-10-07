@@ -294,6 +294,9 @@ func TestWerewolfTournamentPauseAndResumeKeepsProgress(t *testing.T) {
 }
 
 func TestWerewolfTournamentFortyStudentsCanReplaySavedMatch(t *testing.T) {
+	// The scripted model replies immediately; limit simultaneous SQLite writes
+	// while keeping the full 40-student, 134-match integration path covered.
+	t.Setenv("WEREWOLF_TOURNAMENT_WORKERS", "8")
 	app, st := testServerWithRoster(t, directClient{}, 40)
 	t.Cleanup(app.Shutdown)
 	app.WerewolfClient = &scriptedWerewolfClient{}
@@ -322,7 +325,7 @@ func TestWerewolfTournamentFortyStudentsCanReplaySavedMatch(t *testing.T) {
 		}
 		if current.Status != "running" {
 			if current.Status != "complete" || current.NextMatch != 134 {
-				t.Fatalf("tournament=%#v", current)
+				t.Fatalf("tournament status=%s progress=%d/%d error=%s", current.Status, current.NextMatch, current.TotalMatches, current.Error)
 			}
 			break
 		}
