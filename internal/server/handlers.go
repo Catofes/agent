@@ -58,6 +58,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		"memory_mode":           policy.MemoryMode,
 		"skills_enabled":        policy.SkillsEnabled,
 		"werewolf_enabled":      policy.WerewolfEnabled,
+		"werewolf_manager":      canManageWerewolf(p.Session),
 		"preset_skills":         policy.PresetSkills,
 		"allowed_tools":         policy.AllowedTools,
 		"available_tools":       availableTools,

@@ -9,14 +9,24 @@
 <body data-mode="student">
   <main class="shell">
     <header class="hero">
-      <div><a href="/" class="back">← 返回工作坊</a><p class="eyebrow">第二步 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>为不同身份和行动设计 Prompt，观察你的 Agent 如何与同学的 Agent 交流、推理和行动。</p></div>
+      <div><a href="/" class="back">← 返回工作坊</a><p class="eyebrow">第二步 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>先设定 Agent 的 Soul，再为不同身份编写行动 Skill，观察它如何交流、推理和行动。</p></div>
       <div class="hero-note">6 名 Agent · 2 狼人 · 2 平民 · 1 预言家 · 1 女巫</div>
     </header>
     <p id="status" class="status" role="status">正在读取课堂状态…</p>
-    <section id="disabled" class="card hidden"><h2>老师尚未开启本环节</h2><p>开启后即可编辑 Prompt，观看课堂对局。</p></section>
+    <section id="managerCard" class="card manager-card hidden">
+      <div class="section-heading"><div><p class="eyebrow">A01 / A02 · 课堂控制</p><h2>学生端狼人杀开关</h2><p>关闭时，其他学生看不到入口，也不能编辑或观看；你的设置与现场演示仍可使用。</p></div><span id="controlBadge" class="badge">读取中</span></div>
+      <div class="actions"><button id="toggleWerewolf" type="button">读取中…</button><a href="/teacher/werewolf" class="button-link">进入六人课堂控制台</a><span id="controlStatus" class="status" role="status"></span></div>
+    </section>
+    <section id="disabled" class="card hidden"><h2>老师尚未开启本环节</h2><p>开启后即可设计 Soul 和 Skill，观看课堂对局。</p></section>
     <section id="promptsCard" class="card hidden">
-      <div class="section-heading"><div><p class="eyebrow">设计</p><h2>我的狼人杀 Prompt</h2><p>你的 Soul 和已启用的 Skill 会随当前设计一起使用；下面为各身份、各行动设置策略。身份由开局时随机分配。</p></div><span id="saveBadge" class="badge">尚未保存</span></div>
-      <form id="promptForm"><div id="promptFields"></div><div class="actions"><button id="savePrompts" type="submit">保存我的 Prompt</button><span id="saveStatus" class="status" role="status"></span></div></form>
+      <div class="section-heading"><div><p class="eyebrow">Agent 设计</p><h2>我的狼人杀 Soul 与 Skill</h2><p>沿用工作坊已有的 Soul 和已启用 Skill；这里再设置狼人杀 Soul，以及各身份执行行动时才调用的 Skill。课堂对局会随机分配身份。</p></div><span id="saveBadge" class="badge">尚未保存</span></div>
+      <form id="promptForm"><div id="promptFields"></div><div class="actions"><button id="savePrompts" type="submit">保存 Soul 与 Skill</button><span id="saveStatus" class="status" role="status"></span></div></form>
+    </section>
+    <section id="demoCard" class="card demo-card hidden">
+      <div class="section-heading"><div><p class="eyebrow">现场演示 · 仅 A01 / A02</p><h2>我的 Agent 对战 5 个系统 Agent</h2><p>选择自己的身份后开局。演示会保存上方 Soul 与 Skill，展示主持人和 Agent 的完整信息流。每局调用 DeepSeek 并消耗 API 额度；演示与课堂对局不可同时进行。</p></div><span id="demoBadge" class="badge">待演示</span></div>
+      <div class="demo-controls"><label>我的身份<select id="demoRole"><option value="villager">平民</option><option value="wolf">狼人</option><option value="seer">预言家</option><option value="witch">女巫</option></select></label><button id="startDemo" type="button">▶ 开始演示</button><button id="stopDemo" class="secondary hidden" type="button">停止演示</button><button id="demoMusic" class="secondary" type="button" aria-pressed="false">♫ 开启氛围音乐</button></div>
+      <p id="demoStatus" class="status" role="status">选择身份并开始一局演示。</p>
+      <div id="demoStage" class="demo-stage hidden"><div class="demo-stage-head"><div><span class="demo-overline">LIVE · AGENT FLOW</span><h3 id="demoPhase">等待开局</h3><p id="demoMeta">六个 Agent 将在这里依次行动</p></div><div id="demoProgress" class="demo-progress">0 / 0 步</div></div><div id="demoPlayers" class="demo-players"></div><div class="demo-flow-guide"><span>主持人规则</span><b>→</b><span>Soul</span><b>→</b><span>身份行动 Skill</span><b>→</b><span>Agent 回复</span></div><div class="playback-controls"><button id="demoRestart" class="secondary" type="button">回到开头</button><button id="demoPrev" class="secondary" type="button">上一步</button><button id="demoPlayPause" type="button">▶ 播放</button><button id="demoNext" class="secondary" type="button">下一步</button><span id="demoPlaybackStatus">0 / 0 步</span></div><p class="playback-hint">暂停控制的是画面；Agent 会继续生成对局记录，方便现场讲解和回看。</p><div id="demoTimeline" class="timeline" aria-live="polite"></div></div>
     </section>
     <section id="tournamentCard" class="card hidden">
       <div class="section-heading"><div><p class="eyebrow">全班比赛</p><h2>20 局积分榜</h2><p>每位同学的 Agent 参加 20 局。老师开始比赛后，这里会显示进度和所有人的得分。</p></div><span id="tournamentBadge" class="badge">尚未开赛</span></div>
@@ -27,7 +37,7 @@
       <div class="section-heading"><div><p class="eyebrow">观战 · 协作</p><h2>课堂对局</h2><p id="gameMeta">等待老师选出 6 名 Agent。</p></div><span id="gameBadge" class="badge">待开局</span></div>
       <div id="roleNotice" class="role-notice"></div>
       <div id="players" class="players"></div>
-      <div class="timeline-heading"><h3>Prompt 交流流程</h3><p>主持人按阶段把可见消息交给各 Agent；夜间身份信息只对相关玩家可见。</p></div>
+      <div class="timeline-heading"><h3>Soul · Skill · Prompt 交流流程</h3><p>主持人按阶段把消息交给各 Agent；夜间身份信息只对相关玩家可见。</p></div>
       <div id="timeline" class="timeline" aria-live="polite"></div>
     </section>
   </main>

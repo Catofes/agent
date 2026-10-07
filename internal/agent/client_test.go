@@ -86,6 +86,27 @@ func TestDeepSeekClientEnablesThinkingAndStreamsSeparateDeltas(t *testing.T) {
 	}
 }
 
+func TestDeepSeekClientFastModeDisablesThinking(t *testing.T) {
+	var requestBody map[string]any
+	client := &DeepSeekClient{BaseURL: "https://api.deepseek.com", APIKey: "secret", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &requestBody); err != nil {
+			t.Fatal(err)
+		}
+		stream := "data: {\"choices\":[{\"delta\":{\"content\":\"3\"}}]}\n\ndata: [DONE]\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil
+	})}}
+	got, err := client.Complete(context.Background(), CompletionRequest{Model: "deepseek-flash", UserID: "tournament", FastMode: true,
+		Messages: []Message{{Role: "user", Content: "请选择座位"}}})
+	if err != nil || got.Content != "3" {
+		t.Fatalf("completion=%#v err=%v", got, err)
+	}
+	thinking, _ := requestBody["thinking"].(map[string]any)
+	if thinking["type"] != "disabled" || requestBody["reasoning_effort"] != nil {
+		t.Fatalf("fast request=%#v", requestBody)
+	}
+}
+
 func TestQwenClientUsesCompatibleStreamingReasoningAndTools(t *testing.T) {
 	var requestBody map[string]any
 	client := &QwenClient{BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", APIKey: "qwen-secret", ReasoningEffort: "low", HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

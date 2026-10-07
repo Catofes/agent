@@ -60,14 +60,15 @@ type Student struct {
 }
 
 type Session struct {
-	TokenHash  string
-	RunID      string
-	StudentID  string
-	IsTeacher  bool
-	ExpiresAt  time.Time
-	CreatedAt  time.Time
-	LastSeenAt time.Time
-	RevokedAt  *time.Time
+	TokenHash         string
+	RunID             string
+	StudentID         string
+	IsTeacher         bool
+	ManagerAuthorized bool
+	ExpiresAt         time.Time
+	CreatedAt         time.Time
+	LastSeenAt        time.Time
+	RevokedAt         *time.Time
 }
 
 type Design struct {
@@ -211,8 +212,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database version: %w", err)
 	}
-	if version > 19 {
-		return fmt.Errorf("database version %d is newer than supported version 19", version)
+	if version > 21 {
+		return fmt.Errorf("database version %d is newer than supported version 21", version)
 	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS runs(
@@ -342,6 +343,16 @@ PRAGMA user_version = 1;`
 	if version < 19 {
 		if err := s.migrateWerewolfTournament(ctx); err != nil {
 			return fmt.Errorf("migrate werewolf tournament: %w", err)
+		}
+	}
+	if version < 20 {
+		if err := s.migrateWerewolfDemo(ctx); err != nil {
+			return fmt.Errorf("migrate werewolf demo: %w", err)
+		}
+	}
+	if version < 21 {
+		if err := s.migrateWerewolfParallel(ctx); err != nil {
+			return fmt.Errorf("migrate parallel werewolf tournament: %w", err)
 		}
 	}
 	return nil
@@ -1149,7 +1160,7 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) error {
 		run = sess.RunID
 		student = sess.StudentID
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO sessions(token,run_id,student_id,is_teacher,expires_at,created_at,last_seen_at) VALUES(?,?,?,?,?,?,?)`, sess.TokenHash, run, student, sess.IsTeacher, formatTime(sess.ExpiresAt), formatTime(now), formatTime(now))
+	_, err = tx.ExecContext(ctx, `INSERT INTO sessions(token,run_id,student_id,is_teacher,manager_authorized,expires_at,created_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?)`, sess.TokenHash, run, student, sess.IsTeacher, sess.ManagerAuthorized, formatTime(sess.ExpiresAt), formatTime(now), formatTime(now))
 	if err != nil {
 		return err
 	}
@@ -1160,7 +1171,7 @@ func (s *Store) Session(ctx context.Context, tokenHash string) (Session, error) 
 	var x Session
 	var run, student, revoked sql.NullString
 	var exp, created, last string
-	err := s.db.QueryRowContext(ctx, `SELECT token,run_id,student_id,is_teacher,expires_at,created_at,last_seen_at,revoked_at FROM sessions WHERE token=?`, tokenHash).Scan(&x.TokenHash, &run, &student, &x.IsTeacher, &exp, &created, &last, &revoked)
+	err := s.db.QueryRowContext(ctx, `SELECT token,run_id,student_id,is_teacher,manager_authorized,expires_at,created_at,last_seen_at,revoked_at FROM sessions WHERE token=?`, tokenHash).Scan(&x.TokenHash, &run, &student, &x.IsTeacher, &x.ManagerAuthorized, &exp, &created, &last, &revoked)
 	if err != nil {
 		return Session{}, err
 	}

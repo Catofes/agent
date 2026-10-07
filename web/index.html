@@ -311,6 +311,7 @@
             <label for="studentId">学号</label
             ><input id="studentId" required autocomplete="username" />
           </div>
+          <div id="managerPasswordField" class="field hidden"><label for="managerPassword">教师口令（A01 / A02）</label><input id="managerPassword" type="password" autocomplete="current-password" /></div>
           <button>进入工作台</button>
           <p id="loginError" class="status"></p>
         </form>
@@ -614,6 +615,7 @@
             method: "POST",
             body: JSON.stringify({
               id: $("studentId").value,
+              teacher_password: $("managerPassword").value,
             }),
           });
           student = d.student;
@@ -628,6 +630,12 @@
           $("loginError").textContent = err.message;
         }
       };
+      $("studentId").addEventListener("input", () => {
+        const managerID = /^A0[12]$/i.test($("studentId").value.trim());
+        $("managerPasswordField").classList.toggle("hidden", !managerID);
+        $("managerPassword").required = managerID;
+        if (!managerID) $("managerPassword").value = "";
+      });
       async function resume() {
         try {
           const d = await api("/api/me");
@@ -1645,7 +1653,7 @@
       }
       function renderCapabilities(changed = false) {
         if (!capabilities) return;
-        $("werewolfLink").classList.toggle("hidden", !capabilities.werewolf_enabled);
+        $("werewolfLink").classList.toggle("hidden", !capabilities.werewolf_enabled && !capabilities.werewolf_manager);
         renderTokenQuota();
         const available = new Set(capabilities.available_tools || []),
           allowed = new Set(capabilities.allowed_tools || []),

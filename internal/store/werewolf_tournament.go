@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"time"
 )
 
@@ -39,6 +38,16 @@ type TournamentStanding struct {
 	Losses    int    `json:"losses"`
 	Draws     int    `json:"draws"`
 	Points    int    `json:"points"`
+}
+
+type TournamentMatch struct {
+	Index     int                `json:"index"`
+	GameID    string             `json:"game_id"`
+	Status    string             `json:"status"`
+	Winner    string             `json:"winner,omitempty"`
+	Players   []TournamentPlayer `json:"players"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
 }
 
 func (s *Store) migrateWerewolfTournament(ctx context.Context) error {
@@ -173,25 +182,61 @@ func (s *Store) WerewolfTournamentMatchGame(ctx context.Context, tournamentID st
 	return id, err
 }
 
+func (s *Store) WerewolfTournamentScoredMatches(ctx context.Context, tournamentID string) (map[int]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT match_index FROM werewolf_tournament_results WHERE tournament_id=?`, tournamentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	completed := map[int]bool{}
+	for rows.Next() {
+		var index int
+		if err = rows.Scan(&index); err != nil {
+			return nil, err
+		}
+		completed[index] = true
+	}
+	return completed, rows.Err()
+}
+
+func (s *Store) WerewolfTournamentMatches(ctx context.Context, runID, id string) ([]TournamentMatch, error) {
+	if _, err := s.WerewolfTournament(ctx, runID, id); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT m.match_index,g.id,g.status,g.winner,g.created_at,g.updated_at
+ FROM werewolf_tournament_matches m JOIN werewolf_games g ON g.id=m.game_id
+ WHERE m.tournament_id=? ORDER BY m.match_index`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	matches := []TournamentMatch{}
+	for rows.Next() {
+		var item TournamentMatch
+		var created, updated string
+		if err = rows.Scan(&item.Index, &item.GameID, &item.Status, &item.Winner, &created, &updated); err != nil {
+			return nil, err
+		}
+		item.CreatedAt, _ = parseTime(created)
+		item.UpdatedAt, _ = parseTime(updated)
+		matches = append(matches, item)
+	}
+	return matches, rows.Err()
+}
+
 func (s *Store) CompleteWerewolfTournamentMatch(ctx context.Context, runID, id string, index int, gameID string, results []TournamentResult) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var status string
-	err = tx.QueryRowContext(ctx, `SELECT status FROM werewolf_games WHERE id=? AND run_id=?`, gameID, runID).Scan(&status)
-	if err != nil {
-		return err
-	}
-	if status != "complete" {
-		return errors.New("match game is not complete")
-	}
 	res, err := tx.ExecContext(ctx, `UPDATE werewolf_tournaments SET next_match=next_match+1,
  status=CASE WHEN next_match+1=total_matches THEN 'complete' ELSE status END,updated_at=?
- WHERE id=? AND run_id=? AND status='running' AND next_match=? AND EXISTS(
- SELECT 1 FROM werewolf_tournament_matches WHERE tournament_id=? AND match_index=? AND game_id=?)`,
-		formatTime(time.Now().UTC()), id, runID, index, id, index, gameID)
+ WHERE id=? AND run_id=? AND status='running' AND next_match<total_matches AND NOT EXISTS(
+ SELECT 1 FROM werewolf_tournament_results WHERE tournament_id=? AND match_index=?) AND EXISTS(
+ SELECT 1 FROM werewolf_tournament_matches m JOIN werewolf_games g ON g.id=m.game_id
+ WHERE m.tournament_id=? AND m.match_index=? AND m.game_id=? AND g.run_id=? AND g.status='complete')`,
+		formatTime(time.Now().UTC()), id, runID, id, index, id, index, gameID, runID)
 	if err != nil {
 		return err
 	}

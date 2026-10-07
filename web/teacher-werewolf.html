@@ -9,21 +9,23 @@
 <body data-mode="teacher">
   <main class="shell">
     <header class="hero">
-      <div><a href="/teacher" class="back">← 返回教师管理台</a><p class="eyebrow">课堂控制台 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>选择 6 名学生 Agent，观察主持人如何将 Prompt、私密信息、发言和投票传递给每位 Agent。</p></div>
+      <div><a id="teacherBack" href="/teacher" class="back">← 返回教师管理台</a><p class="eyebrow">课堂控制台 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>选择 6 名学生 Agent，观察主持人如何将规则、Soul、身份 Skill、发言和投票传递给每位 Agent。</p></div>
       <div class="hero-note">固定六人局 · 最多四轮 · 使用 DeepSeek 官方 API</div>
     </header>
     <p id="status" class="status" role="status">正在读取课堂状态…</p>
     <section id="tournamentCard" class="card hidden">
-      <div class="section-heading"><div><p class="eyebrow">全班比赛</p><h2>每位学生的 Agent 打 20 局</h2><p>从当前课堂名单自动排成六人局，逐局运行并累计积分。比赛开始时固定各 Agent 的设计；进行中的这一局会显示在下方。</p></div><span id="tournamentBadge" class="badge">尚未开赛</span></div>
+      <div class="section-heading"><div><p class="eyebrow">全班比赛</p><h2>每位学生的 Agent 打 20 局</h2><p>随机排成六人局，并行计算并累计积分。页面只显示进度和成绩；每场交流记录会保存，点开后可逐步回放。</p></div><span id="tournamentBadge" class="badge">尚未开赛</span></div>
       <p id="tournamentProgress" class="status">等待开赛。</p>
       <label class="tournament-option"><input id="allowSystem" type="checkbox" checked /><span>人数无法刚好排满六人局时，允许系统 Agent 补位。系统 Agent 不计入积分榜。</span></label>
       <div class="actions"><button id="startTournament" type="button">开始全班比赛</button><button id="pauseTournament" class="secondary hidden" type="button">暂停比赛</button><button id="resumeTournament" class="secondary hidden" type="button">继续比赛</button><span id="tournamentActionStatus" class="status" role="status"></span></div>
       <div class="score-heading"><h3>积分榜</h3><p>狼人胜：狼人 +6、其他人 −3；好人胜：狼人 −6、其他人 +3；平局 0 分。并列按胜局数排序。</p></div>
       <div class="score-scroll"><table class="score-table"><thead><tr><th>排名</th><th>学生</th><th>场次</th><th>胜 / 负 / 平</th><th>积分</th></tr></thead><tbody id="standings"></tbody></table></div>
+      <div class="score-heading"><h3>对局记录</h3><p>选择已完成的对局，按步骤查看每位 Agent 使用的 Soul、Skill 和 Prompt。</p></div>
+      <div id="matchList" class="match-list"><p>开赛后显示对局记录。</p></div>
     </section>
     <section id="teacherControls" class="card hidden">
-      <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。标记“已写 Prompt”的学生已经保存了角色策略；未写的学生使用默认 Prompt。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
-      <p id="teacherDisabled" class="notice hidden">狼人杀环节尚未开启。请在<a href="/teacher">课堂能力</a>中打开开关并保存。</p>
+      <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。标记“已写狼人杀 Skill”的学生已保存 Soul 与角色策略；其他学生使用默认内容。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
+      <p id="teacherDisabled" class="notice hidden">狼人杀环节尚未开启。请在<a id="enableLink" href="/teacher">课堂能力</a>中打开开关并保存。</p>
       <div id="roster" class="roster"></div>
       <div class="actions"><button id="startGame" type="button">开始一局狼人杀</button><button id="stopGame" class="secondary hidden" type="button">结束当前对局</button><span id="actionStatus" class="status" role="status"></span></div>
     </section>
@@ -31,8 +33,16 @@
       <div class="section-heading"><div><p class="eyebrow">主持人视角</p><h2>当前对局</h2><p id="gameMeta">尚无对局。</p></div><span id="gameBadge" class="badge">待开局</span></div>
       <div id="roleNotice" class="role-notice"></div>
       <div id="players" class="players"></div>
-      <div class="timeline-heading"><h3>Prompt 交流流程</h3><p>展开每一步可查看送给 Agent 的完整 Prompt 与 Agent 的原始回复。私密夜间消息不会送给其他学生。</p></div>
+      <div class="timeline-heading"><h3>Soul · Skill · Prompt 交流流程</h3><p>每一步都标明所用 Soul 与身份 Skill；展开可查看主持人完整提示和 Agent 原始回复。私密夜间消息不会送给其他学生。</p></div>
+      <div id="livePlaybackControls" class="playback-controls"><button id="liveRestart" class="secondary" type="button">回到开头</button><button id="livePrev" class="secondary" type="button">上一步</button><button id="livePlayPause" type="button">▶ 播放</button><button id="liveNext" class="secondary" type="button">下一步</button><span id="livePlaybackStatus">0 / 0 步</span></div>
       <div id="timeline" class="timeline" aria-live="polite"></div>
+    </section>
+    <section id="replayCard" class="card hidden">
+      <div class="section-heading"><div><p class="eyebrow">赛后回放</p><h2 id="replayTitle">对局回放</h2><p id="replayMeta">选择上方对局。</p></div><button id="closeReplay" class="secondary" type="button">关闭回放</button></div>
+      <div id="replayPlayers" class="players"></div>
+      <div class="timeline-heading"><h3>Soul · Skill · Prompt 交流流程</h3><p>回放已保存的记录，不会再次调用模型。</p></div>
+      <div class="playback-controls"><button id="replayRestart" class="secondary" type="button">回到开头</button><button id="replayPrev" class="secondary" type="button">上一步</button><button id="replayPlayPause" type="button">▶ 播放</button><button id="replayNext" class="secondary" type="button">下一步</button><span id="replayPlaybackStatus">0 / 0 步</span></div>
+      <div id="replayTimeline" class="timeline" aria-live="polite"></div>
     </section>
   </main>
   <script src="/assets/werewolf.js"></script>

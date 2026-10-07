@@ -40,6 +40,7 @@ type CompletionRequest struct {
 	Messages         []Message
 	Tools            []tools.Definition
 	EnableWebSearch  bool
+	FastMode         bool
 	BeforeCall       func(context.Context) error
 	OnDelta          func(string) error
 	OnReasoningDelta func(string) error
@@ -288,6 +289,10 @@ func (c *DeepSeekClient) Complete(ctx context.Context, in CompletionRequest) (Co
 
 func (c *DeepSeekClient) completeChat(ctx context.Context, in CompletionRequest) (Completion, error) {
 	body := map[string]any{"model": in.Model, "messages": in.Messages, "stream": true, "stream_options": map[string]any{"include_usage": true}, "user": in.UserID, "thinking": map[string]string{"type": "enabled"}, "reasoning_effort": "high"}
+	if in.FastMode {
+		body["thinking"] = map[string]string{"type": "disabled"}
+		delete(body, "reasoning_effort")
+	}
 	body["user_id"] = in.UserID
 	delete(body, "user")
 	if len(in.Tools) > 0 {
@@ -324,6 +329,9 @@ func (c *DeepSeekClient) completeResponses(ctx context.Context, in CompletionReq
 		"stream":    true,
 		"user":      in.UserID,
 		"reasoning": map[string]string{"effort": "high"},
+	}
+	if in.FastMode {
+		body["reasoning"] = map[string]string{"effort": "none"}
 	}
 	responseTools := make([]map[string]any, 0, len(in.Tools)+1)
 	for _, definition := range in.Tools {
