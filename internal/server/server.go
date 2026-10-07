@@ -275,6 +275,7 @@ func (s *Server) Routes() http.Handler {
 					r.Get("/tournament/{id}/matches", s.teacherWerewolfTournamentMatches)
 					r.Get("/tournament/{id}/matches/{index}", s.teacherWerewolfTournamentMatch)
 					r.Post("/tournament", s.startWerewolfTournament)
+					r.Delete("/tournament", s.clearWerewolfTournaments)
 					r.Post("/tournament/{id}/stop", s.stopWerewolfTournament)
 					r.Post("/tournament/{id}/resume", s.resumeWerewolfTournament)
 				})

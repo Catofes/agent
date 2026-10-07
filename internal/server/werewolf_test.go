@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"classroom-agent/internal/agent"
+	"classroom-agent/internal/store"
 )
 
 type scriptedWerewolfClient struct {
@@ -39,6 +41,67 @@ func (c *scriptedWerewolfClient) Complete(_ context.Context, request agent.Compl
 		}
 	}
 	return agent.Completion{Content: answer, TokensIn: 3, TokensOut: 2}, nil
+}
+
+func TestWerewolfAgentUsesOnlyItsOwnSoulAndSkills(t *testing.T) {
+	model := &scriptedWerewolfClient{}
+	app, st := testServerWithRoster(t, directClient{}, 6)
+	app.WerewolfClient = model
+	ctx := context.Background()
+	run, err := st.ActiveRun(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := st.RunPolicy(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.WerewolfEnabled = true
+	if _, err := st.SetRunPolicy(ctx, run.ID, policy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SaveDesign(ctx, store.Design{RunID: run.ID, StudentID: "2101", Persona: "WORKSHOP-SOUL", SkillMD: "WORKSHOP-LEGACY-SKILL"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateSkill(ctx, store.Skill{ID: "workshop-only", RunID: run.ID, StudentID: "2101", Name: "工作坊 Skill", Content: "WORKSHOP-SKILL", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveWerewolfPrompts(ctx, run.ID, "2101", `{"general":"WEREWOLF-SOUL","last_words":"WEREWOLF-SKILL"}`); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"2101", "2102", "2103", "2104", "2105", "2106"}
+	state, err := app.newWerewolfState(ctx, run.ID, ids, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "WORKSHOP-") {
+		t.Fatalf("workshop design leaked into game snapshot: %s", raw)
+	}
+	game, err := st.CreateWerewolfGame(ctx, "separate-designs", run.ID, string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.askWerewolf(ctx, game, &state, *state.player("2101"), "last_words", "简短发言。", "public", "last_words"); err != nil {
+		t.Fatal(err)
+	}
+	model.mu.Lock()
+	prompt := model.prompts[len(model.prompts)-1]
+	model.mu.Unlock()
+	if !strings.Contains(prompt, "WEREWOLF-SOUL") || !strings.Contains(prompt, "WEREWOLF-SKILL") || strings.Contains(prompt, "WORKSHOP-") || strings.Contains(prompt, "工作坊") {
+		t.Fatalf("werewolf prompt mixed designs: %q", prompt)
+	}
+	events, err := st.WerewolfEvents(ctx, run.ID, game.ID, 0)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("game events: %v, %d", err, len(events))
+	}
+	item := werewolfEventItem(events[0], state, true)
+	if item["werewolf_soul"] != "WEREWOLF-SOUL" || item["action_skill"] != "WEREWOLF-SKILL" || item["workshop_soul"] != nil || item["base_skills"] != nil {
+		t.Fatalf("replay mixed designs: %#v", item)
+	}
 }
 
 func TestWerewolfRulesAndChoiceValidation(t *testing.T) {
@@ -260,8 +323,7 @@ func TestWerewolfRosterExcludesTemporaryAccounts(t *testing.T) {
 			t.Fatal("temporary account included in tournament headcount")
 		}
 	}
-	policy, _ := st.RunPolicy(ctx, run.ID)
-	if _, err := app.newWerewolfState(ctx, run.ID, policy, []string{"2101", "2102", "2103", "2104", "2105", "test_temporary"}, false); err == nil {
+	if _, err := app.newWerewolfState(ctx, run.ID, []string{"2101", "2102", "2103", "2104", "2105", "test_temporary"}, false); err == nil {
 		t.Fatal("temporary account accepted in a single game")
 	}
 }

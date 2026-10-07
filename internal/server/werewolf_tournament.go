@@ -255,7 +255,7 @@ func (s *Server) startWerewolfTournament(w http.ResponseWriter, r *http.Request)
 	}
 	plan := werewolfTournamentPlan{Matches: matches, Agents: map[string]werewolfPlayer{}}
 	for _, student := range students {
-		player, snapshotErr := s.werewolfPlayerSnapshot(r.Context(), run.ID, policy, student.ID)
+		player, snapshotErr := s.werewolfPlayerSnapshot(r.Context(), run.ID, student.ID)
 		if snapshotErr != nil {
 			writeError(w, 500, "DATABASE_ERROR", "读取学生 Agent 设计失败")
 			return
@@ -335,6 +335,24 @@ func (s *Server) stopWerewolfTournament(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := s.cancelCurrentTournament(run.ID, "stopped", "教师暂停了比赛"); err != nil {
 		writeError(w, 503, "DATABASE_BUSY", "比赛暂停未能保存，请重试")
+		return
+	}
+	s.werewolfTournament(w, r, run.ID, true)
+}
+
+func (s *Server) clearWerewolfTournaments(w http.ResponseWriter, r *http.Request) {
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+	run, err := s.Store.ActiveRun(r.Context())
+	if err != nil {
+		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
+		return
+	}
+	if err = s.Store.ClearWerewolfTournaments(r.Context(), run.ID); errors.Is(err, store.ErrWerewolfTournamentRunning) {
+		writeError(w, 409, "TOURNAMENT_RUNNING", "请先暂停比赛，再清空记录")
+		return
+	} else if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "清空比赛记录失败")
 		return
 	}
 	s.werewolfTournament(w, r, run.ID, true)
@@ -537,7 +555,7 @@ func stateForTournamentMatch(plan werewolfTournamentPlan, ids []string) (werewol
 	for i, id := range ids {
 		if strings.HasPrefix(id, "bot:") {
 			players = append(players, werewolfPlayer{StudentID: id, Name: fmt.Sprintf("系统补位 %d", i+1),
-				System: true, Alive: true, Seat: i + 1, Persona: "依据可见信息参与游戏。", Prompts: defaultWerewolfPrompts()})
+				System: true, Alive: true, Seat: i + 1, Prompts: defaultWerewolfPrompts()})
 			continue
 		}
 		player, ok := plan.Agents[id]

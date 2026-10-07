@@ -118,7 +118,7 @@
       };
       const copy = node("span", "");
       copy.append(node("strong", `${student.id} · ${student.name}`),
-          node("small", `${student.has_persona ? "已设计 Soul" : "尚未设计 Soul"} · ${student.prompts_saved ? "已写狼人杀 Skill" : "默认 Skill"}`));
+          node("small", student.prompts_saved ? "已保存狼人杀 Soul / Skill" : "使用默认狼人杀 Soul / Skill"));
       label.append(input, copy);
       label.classList.toggle("selected", input.checked);
       root.append(label);
@@ -136,6 +136,12 @@
     const tournament = data.tournament;
     const enabled = data.enabled;
     $("tournamentCard").classList.toggle("hidden", !teacher && !enabled);
+    if (teacher && !tournament && currentTournamentID) {
+      matchListKey = "";
+      renderMatchList([]);
+      replayPlayback?.reset();
+      $("replayCard").classList.add("hidden");
+    }
     currentTournamentID = tournament?.id || "";
     tournamentRunning = tournament?.status === "running";
     const labels = { running: "进行中", complete: "已完成", stopped: "已暂停", failed: "需检查", interrupted: "已中断" };
@@ -167,6 +173,8 @@
       $("pauseTournament").classList.toggle("hidden", !tournamentRunning);
       $("resumeTournament").classList.toggle("hidden", !tournament || !["stopped", "failed", "interrupted"].includes(tournament.status));
       $("resumeTournament").disabled = tournamentActionBusy || !enabled;
+      $("clearTournament").classList.toggle("hidden", !tournament);
+      $("clearTournament").disabled = tournamentRunning || tournamentActionBusy;
       $("stopGame").classList.toggle("hidden", tournamentRunning || $("startGame").dataset.running !== "true");
       updateSelection();
     }
@@ -274,8 +282,7 @@
       card.append(node("div", event.text || "", "message"));
       if (event.prompt) {
         const ingredients = node("div", "", "prompt-ingredients");
-        [["工作坊 Soul", event.workshop_soul], ["狼人杀 Soul", event.werewolf_soul], ["工作坊 Skill", event.base_skills],
-          [event.action_skill_name || "行动 Skill", event.action_skill]].forEach(([label, value]) => {
+        [["狼人杀 Soul", event.werewolf_soul], [event.action_skill_name || "行动 Skill", event.action_skill]].forEach(([label, value]) => {
           if (!value) return;
           const part = node("div", "", "ingredient");
           part.append(node("b", label), node("span", value));
@@ -650,6 +657,24 @@
       } catch (error) {
         $("tournamentActionStatus").textContent = `继续失败：${error.message}`;
       } finally { tournamentActionBusy = false; }
+    };
+    $("clearTournament").onclick = async () => {
+      if (!currentTournamentID || tournamentRunning || tournamentActionBusy) return;
+      if (!confirm("清空当前课堂的全部比赛记录？积分榜、所有比赛对局和回放都会删除，无法恢复。学生的狼人杀 Soul 与 Skill 会保留。")) return;
+      tournamentActionBusy = true;
+      $("clearTournament").disabled = true;
+      try {
+        const cleared = await api("/api/teacher/werewolf/tournament", { method: "DELETE" });
+        tournamentActionBusy = false;
+        renderTournament(cleared);
+        $("tournamentActionStatus").textContent = "比赛积分与对局记录已清空，可以重新开赛。";
+        await refresh();
+      } catch (error) {
+        $("tournamentActionStatus").textContent = `清空失败：${error.message}`;
+      } finally {
+        tournamentActionBusy = false;
+        $("clearTournament").disabled = tournamentRunning;
+      }
     };
     $("startGame").onclick = async () => {
       if (selected.size !== 6) return;
