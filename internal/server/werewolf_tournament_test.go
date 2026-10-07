@@ -173,6 +173,31 @@ func TestWerewolfTournamentCompletesAndShowsEveryStudentScore(t *testing.T) {
 	if err != nil || usage.TokensIn+usage.TokensOut != 0 {
 		t.Fatalf("tournament changed student workbench quota: %#v, %v", usage, err)
 	}
+	if code, _, _ := requestJSON(t, student, http.MethodDelete, "/api/teacher/werewolf/tournament", nil); code != 403 {
+		t.Fatalf("student cleared tournament: %d", code)
+	}
+	if err := st.SaveWerewolfPrompts(context.Background(), run.ID, "2101", `{"general":"独立狼人杀 Soul"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateWerewolfGame(context.Background(), "ordinary-game", run.ID, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	id := tournament["id"].(string)
+	if code, body, raw := requestJSON(t, teacher, http.MethodDelete, "/api/teacher/werewolf/tournament", nil); code != 200 || body["tournament"] != nil {
+		t.Fatalf("clear=%d body=%s", code, raw)
+	}
+	if code, body, _ := requestJSON(t, student, http.MethodGet, "/api/werewolf/tournament", nil); code != 200 || body["tournament"] != nil || len(body["standings"].([]any)) != 0 {
+		t.Fatalf("student board after clear=%d %#v", code, body)
+	}
+	if code, _, _ := requestJSON(t, teacher, http.MethodGet, "/api/teacher/werewolf/tournament/"+id+"/matches", nil); code != 404 {
+		t.Fatalf("deleted replays still accessible: %d", code)
+	}
+	if _, err := st.WerewolfGame(context.Background(), run.ID, "ordinary-game"); err != nil {
+		t.Fatalf("interactive game was cleared: %v", err)
+	}
+	if raw, saved, err := st.WerewolfPrompts(context.Background(), run.ID, "2101"); err != nil || !saved || raw != `{"general":"独立狼人杀 Soul"}` {
+		t.Fatalf("werewolf design was cleared: %q %v %v", raw, saved, err)
+	}
 	app.Shutdown()
 }
 
@@ -205,6 +230,9 @@ func TestWerewolfTournamentPauseAndResumeKeepsProgress(t *testing.T) {
 	case <-startedModel:
 	case <-time.After(3 * time.Second):
 		t.Fatal("tournament model did not start")
+	}
+	if code, _, _ := requestJSON(t, teacher, http.MethodDelete, "/api/teacher/werewolf/tournament", nil); code != 409 {
+		t.Fatalf("running tournament cleared: %d", code)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -266,6 +294,9 @@ func TestWerewolfTournamentPauseAndResumeKeepsProgress(t *testing.T) {
 }
 
 func TestWerewolfTournamentFortyStudentsCanReplaySavedMatch(t *testing.T) {
+	// The scripted model replies immediately; limit simultaneous SQLite writes
+	// while keeping the full 40-student, 134-match integration path covered.
+	t.Setenv("WEREWOLF_TOURNAMENT_WORKERS", "8")
 	app, st := testServerWithRoster(t, directClient{}, 40)
 	t.Cleanup(app.Shutdown)
 	app.WerewolfClient = &scriptedWerewolfClient{}
@@ -294,7 +325,7 @@ func TestWerewolfTournamentFortyStudentsCanReplaySavedMatch(t *testing.T) {
 		}
 		if current.Status != "running" {
 			if current.Status != "complete" || current.NextMatch != 134 {
-				t.Fatalf("tournament=%#v", current)
+				t.Fatalf("tournament status=%s progress=%d/%d error=%s", current.Status, current.NextMatch, current.TotalMatches, current.Error)
 			}
 			break
 		}

@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+var ErrWerewolfTournamentRunning = errors.New("werewolf tournament is running")
 
 type WerewolfTournament struct {
 	ID           string    `json:"id"`
@@ -149,6 +152,37 @@ func (s *Store) LatestWerewolfTournament(ctx context.Context, runID string) (Wer
 		return WerewolfTournament{}, err
 	}
 	return s.WerewolfTournament(ctx, runID, id)
+}
+
+// ClearWerewolfTournaments removes every tournament, score and replay in one
+// classroom run. Student Agent designs and interactive games are kept.
+func (s *Store) ClearWerewolfTournaments(ctx context.Context, runID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var running int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM werewolf_tournaments WHERE run_id=? AND status='running'`, runID).Scan(&running); err != nil {
+		return err
+	}
+	if running != 0 {
+		return ErrWerewolfTournamentRunning
+	}
+	queries := []string{
+		`DELETE FROM werewolf_tournament_results WHERE tournament_id IN (SELECT id FROM werewolf_tournaments WHERE run_id=?)`,
+		`DELETE FROM werewolf_events WHERE game_id IN (SELECT g.id FROM werewolf_games g JOIN werewolf_tournaments t ON g.tournament_id=t.id WHERE t.run_id=?)`,
+		`DELETE FROM werewolf_tournament_matches WHERE tournament_id IN (SELECT id FROM werewolf_tournaments WHERE run_id=?)`,
+		`DELETE FROM werewolf_tournament_players WHERE tournament_id IN (SELECT id FROM werewolf_tournaments WHERE run_id=?)`,
+		`DELETE FROM werewolf_games WHERE tournament_id IN (SELECT id FROM werewolf_tournaments WHERE run_id=?)`,
+		`DELETE FROM werewolf_tournaments WHERE run_id=?`,
+	}
+	for _, query := range queries {
+		if _, err = tx.ExecContext(ctx, query, runID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetWerewolfTournamentStatus(ctx context.Context, runID, id, from, to, message string) error {

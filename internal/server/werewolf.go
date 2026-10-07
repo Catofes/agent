@@ -80,8 +80,6 @@ type werewolfPlayer struct {
 	Role      string          `json:"role"`
 	System    bool            `json:"system,omitempty"`
 	Alive     bool            `json:"alive"`
-	Persona   string          `json:"persona"`
-	Skills    string          `json:"skills"`
 	Prompts   werewolfPrompts `json:"prompts"`
 }
 
@@ -215,7 +213,7 @@ func (s *Server) teacherWerewolfRoster(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		items = append(items, map[string]any{"id": student.ID, "name": student.Name,
-			"has_persona": student.HasPersona, "prompts_saved": ready[student.ID]})
+			"prompts_saved": ready[student.ID]})
 	}
 	policy, _ := s.Store.RunPolicy(r.Context(), run.ID)
 	writeJSON(w, 200, map[string]any{"students": items, "enabled": policy.WerewolfEnabled, "run": run})
@@ -346,9 +344,7 @@ func werewolfEventItem(event store.WerewolfEvent, state werewolfState, showPromp
 		}
 		if showPrompt && event.Prompt != "" {
 			action := werewolfActionForEvent(event.Type)
-			item["workshop_soul"] = actor.Persona
 			item["werewolf_soul"] = actor.Prompts.General
-			item["base_skills"] = actor.Skills
 			item["action_skill"] = werewolfPromptForAction(*actor, action)
 			item["action_skill_name"] = werewolfSkillName(actor.Role, action)
 		}
@@ -421,7 +417,7 @@ func (s *Server) startWerewolfGame(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "TOURNAMENT_RUNNING", "班级比赛正在进行，请先结束比赛")
 		return
 	}
-	state, err := s.newWerewolfState(r.Context(), run.ID, policy, in.StudentIDs, false)
+	state, err := s.newWerewolfState(r.Context(), run.ID, in.StudentIDs, false)
 	if err != nil {
 		writeError(w, 400, "INVALID_PLAYERS", err.Error())
 		return
@@ -441,7 +437,7 @@ func (s *Server) startWerewolfGame(w http.ResponseWriter, r *http.Request) {
 	s.werewolfCurrent(w, r, run.ID, "", true)
 }
 
-func (s *Server) newWerewolfState(ctx context.Context, runID string, policy store.RunPolicy, ids []string, allowSystem bool) (werewolfState, error) {
+func (s *Server) newWerewolfState(ctx context.Context, runID string, ids []string, allowSystem bool) (werewolfState, error) {
 	if len(ids) != 6 {
 		return werewolfState{}, errors.New("每局需要 6 名 Agent")
 	}
@@ -466,13 +462,13 @@ func (s *Server) newWerewolfState(ctx context.Context, runID string, policy stor
 				return werewolfState{}, errors.New("不能手动选择系统补位 Agent")
 			}
 			players = append(players, werewolfPlayer{StudentID: id, Name: "系统补位 Agent", Seat: i + 1,
-				System: true, Alive: true, Persona: "遵守主持人规则，按公开与本人私密信息参与游戏。", Prompts: defaultWerewolfPrompts()})
+				System: true, Alive: true, Prompts: defaultWerewolfPrompts()})
 			continue
 		}
 		if !eligible[id] {
 			return werewolfState{}, errors.New("请选择当前名单中的学生，不能使用临时测试账号")
 		}
-		player, err := s.werewolfPlayerSnapshot(ctx, runID, policy, id)
+		player, err := s.werewolfPlayerSnapshot(ctx, runID, id)
 		if err != nil {
 			return werewolfState{}, err
 		}
@@ -482,14 +478,10 @@ func (s *Server) newWerewolfState(ctx context.Context, runID string, policy stor
 	return makeWerewolfState(players)
 }
 
-func (s *Server) werewolfPlayerSnapshot(ctx context.Context, runID string, policy store.RunPolicy, id string) (werewolfPlayer, error) {
+func (s *Server) werewolfPlayerSnapshot(ctx context.Context, runID string, id string) (werewolfPlayer, error) {
 	student, err := s.Store.Student(ctx, runID, id)
 	if err != nil {
 		return werewolfPlayer{}, errors.New("名单中有当前场次不存在的学生")
-	}
-	design, err := s.Store.Design(ctx, runID, id)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return werewolfPlayer{}, err
 	}
 	raw, _, err := s.Store.WerewolfPrompts(ctx, runID, id)
 	if err != nil {
@@ -499,16 +491,8 @@ func (s *Server) werewolfPlayerSnapshot(ctx context.Context, runID string, polic
 	if raw != "" && json.Unmarshal([]byte(raw), &prompts) != nil {
 		return werewolfPlayer{}, errors.New("学生 Prompt 数据损坏")
 	}
-	skills, _ := s.Store.Skills(ctx, runID, id)
-	skillText := ""
-	if policy.SkillsEnabled {
-		skillText = formatSkillsForDisplay(skills)
-	}
-	if utf8.RuneCountInString(skillText) > 1600 {
-		skillText = string([]rune(skillText)[:1600])
-	}
 	return werewolfPlayer{StudentID: id, Name: student.Name, Alive: true,
-		Persona: design.Persona, Skills: skillText, Prompts: normalizeWerewolfPrompts(prompts)}, nil
+		Prompts: normalizeWerewolfPrompts(prompts)}, nil
 }
 
 func makeWerewolfState(players []werewolfPlayer) (werewolfState, error) {

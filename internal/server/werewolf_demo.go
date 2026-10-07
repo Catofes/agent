@@ -160,13 +160,8 @@ func (s *Server) startWerewolfDemo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "TOURNAMENT_RUNNING", "班级比赛进行中，请结束后再演示")
 		return
 	}
-	policy, err := s.Store.RunPolicy(r.Context(), run.ID)
-	if err != nil {
-		writeError(w, 500, "DATABASE_ERROR", "读取课堂设置失败")
-		return
-	}
 	ids := []string{p.Session.StudentID, "bot:demo:2", "bot:demo:3", "bot:demo:4", "bot:demo:5", "bot:demo:6"}
-	state, err := s.newWerewolfState(r.Context(), run.ID, policy, ids, true)
+	state, err := s.newWerewolfState(r.Context(), run.ID, ids, true)
 	if err != nil {
 		writeError(w, 400, "INVALID_DEMO", err.Error())
 		return

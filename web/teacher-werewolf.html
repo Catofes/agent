@@ -17,14 +17,14 @@
       <div class="section-heading"><div><p class="eyebrow">全班比赛</p><h2>每位学生的 Agent 打 20 局</h2><p>随机排成六人局，并行计算并累计积分。页面只显示进度和成绩；每场交流记录会保存，点开后可逐步回放。</p></div><span id="tournamentBadge" class="badge">尚未开赛</span></div>
       <p id="tournamentProgress" class="status">等待开赛。</p>
       <label class="tournament-option"><input id="allowSystem" type="checkbox" checked /><span>人数无法刚好排满六人局时，允许系统 Agent 补位。系统 Agent 不计入积分榜。</span></label>
-      <div class="actions"><button id="startTournament" type="button">开始全班比赛</button><button id="pauseTournament" class="secondary hidden" type="button">暂停比赛</button><button id="resumeTournament" class="secondary hidden" type="button">继续比赛</button><span id="tournamentActionStatus" class="status" role="status"></span></div>
+      <div class="actions"><button id="startTournament" type="button">开始全班比赛</button><button id="pauseTournament" class="secondary hidden" type="button">暂停比赛</button><button id="resumeTournament" class="secondary hidden" type="button">继续比赛</button><button id="clearTournament" class="danger hidden" type="button">清空比赛记录</button><span id="tournamentActionStatus" class="status" role="status"></span></div>
       <div class="score-heading"><h3>积分榜</h3><p>狼人胜：狼人 +6、其他人 −3；好人胜：狼人 −6、其他人 +3；平局 0 分。并列按胜局数排序。</p></div>
       <div class="score-scroll"><table class="score-table"><thead><tr><th>排名</th><th>学生</th><th>场次</th><th>胜 / 负 / 平</th><th>积分</th></tr></thead><tbody id="standings"></tbody></table></div>
       <div class="score-heading"><h3>对局记录</h3><p>选择已完成的对局，按步骤查看每位 Agent 使用的 Soul、Skill 和 Prompt。</p></div>
       <div id="matchList" class="match-list"><p>开赛后显示对局记录。</p></div>
     </section>
     <section id="teacherControls" class="card hidden">
-      <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。标记“已写狼人杀 Skill”的学生已保存 Soul 与角色策略；其他学生使用默认内容。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
+      <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。标记“已保存狼人杀设计”的学生已保存 Soul 与角色策略；其他学生使用默认内容。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
       <p id="teacherDisabled" class="notice hidden">狼人杀环节尚未开启。请在<a id="enableLink" href="/teacher">课堂能力</a>中打开开关并保存。</p>
       <div id="roster" class="roster"></div>
       <div class="actions"><button id="startGame" type="button">开始一局狼人杀</button><button id="stopGame" class="secondary hidden" type="button">结束当前对局</button><span id="actionStatus" class="status" role="status"></span></div>
