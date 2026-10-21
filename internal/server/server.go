@@ -267,6 +267,7 @@ func (s *Server) Routes() http.Handler {
 				r.Route("/werewolf", func(r chi.Router) {
 					r.Use(s.requireWerewolfTeacher)
 					r.Get("/roster", s.teacherWerewolfRoster)
+					r.Get("/students/{id}/design", s.teacherWerewolfStudentDesign)
 					r.Get("/current", s.teacherWerewolfCurrent)
 					r.Get("/games/{id}/events", s.teacherWerewolfEvents)
 					r.Post("/games", s.startWerewolfGame)

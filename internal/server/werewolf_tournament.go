@@ -212,7 +212,8 @@ func (s *Server) teacherWerewolfTournamentMatch(w http.ResponseWriter, r *http.R
 
 func (s *Server) startWerewolfTournament(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		AllowSystem bool `json:"allow_system"`
+		AllowSystem bool      `json:"allow_system"`
+		StudentIDs  *[]string `json:"student_ids"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -247,6 +248,28 @@ func (s *Server) startWerewolfTournament(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "读取参赛名单失败")
 		return
+	}
+	if in.StudentIDs != nil {
+		eligible := make(map[string]store.TournamentPlayer, len(students))
+		for _, student := range students {
+			eligible[student.ID] = student
+		}
+		selected := make([]store.TournamentPlayer, 0, len(*in.StudentIDs))
+		seen := make(map[string]bool, len(*in.StudentIDs))
+		for _, id := range *in.StudentIDs {
+			if seen[id] {
+				writeError(w, 400, "INVALID_PLAYERS", "参赛名单不能包含重复学生")
+				return
+			}
+			student, ok := eligible[id]
+			if !ok {
+				writeError(w, 400, "INVALID_PLAYERS", "参赛名单包含当前课堂以外的学生")
+				return
+			}
+			seen[id] = true
+			selected = append(selected, student)
+		}
+		students = selected
 	}
 	matches, err := buildWerewolfSchedule(students, tournamentGamesPerStudent, in.AllowSystem)
 	if err != nil {
