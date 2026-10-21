@@ -4,15 +4,11 @@
   const roles = { wolf: "狼人", villager: "平民", seer: "预言家", witch: "女巫" };
   const phases = { night: "夜间", day: "白天", finished: "结局" };
   const channels = { public: "全体可见", wolves: "狼人私聊", private: "个人私密", teacher: "教师记录" };
-  const groups = [
-    ["平民", [["villager_speak", "白天发言 Skill"], ["villager_vote", "白天投票 Skill"]]],
-    ["狼人", [["wolf_discuss", "夜间商议 Skill"], ["wolf_kill", "夜间选择目标 Skill"], ["wolf_speak", "白天发言 Skill"], ["wolf_vote", "白天投票 Skill"]]],
-    ["预言家", [["seer_check", "夜间查验 Skill"], ["seer_speak", "白天发言 Skill"], ["seer_vote", "白天投票 Skill"]]],
-    ["女巫", [["witch_action", "夜间用药 Skill"], ["witch_speak", "白天发言 Skill"], ["witch_vote", "白天投票 Skill"]]],
-    ["通用行动", [["last_words", "遗言 Skill"]]],
-  ];
+  const roleOptions = [["", "所有身份"], ["villager", "平民"], ["wolf", "狼人"], ["seer", "预言家"], ["witch", "女巫"]];
+  const actionOptions = [["", "所有环节"], ["discuss", "夜间商议"], ["kill", "狼人选择目标"],
+    ["check", "预言家查验"], ["witch", "女巫用药"], ["speak", "白天发言"], ["vote", "白天投票"], ["last_words", "遗言"]];
   let me = null, currentGameID = "", cursor = 0, polling = false, rosterSignature = "", selected = new Set();
-  let currentTournamentID = "", tournamentRunning = false, tournamentActionBusy = false, rosterCount = 0;
+  let currentTournamentID = "", tournamentRunning = false, tournamentActionBusy = false, rosterCount = 0, tournamentSelected = null;
   let manager = false, classroomEnabled = false, demoGameID = "", demoCursor = 0, demoBusy = false;
   let demoPlayback = null, livePlayback = null, replayPlayback = null, matchListKey = "";
   let demoGame = null, teacherGame = null, replayGame = null, replayMatchIndex = 0;
@@ -35,69 +31,110 @@
   function renderPromptFields(prompts) {
     const root = $("promptFields");
     root.replaceChildren();
-    const field = (key, title, group) => {
+    const soul = node("section", "", "soul-panel");
+    const soulField = node("label", "", "prompt-field");
+    const soulInput = document.createElement("textarea");
+    soulInput.id = "werewolfSoul";
+    soulInput.maxLength = 800;
+    soulInput.value = prompts.general || "";
+    soulInput.placeholder = "写下你的 Agent 在整局游戏中的性格、判断原则和表达方式";
+    soulField.append(node("span", "我的 Soul"), soulInput, node("small", "最多 800 字；留空也可以参加对局"));
+    soul.append(node("span", "01 · 所有身份都会使用", "design-kicker"), node("h3", "狼人杀 Soul"),
+      node("p", "由你自己写，不预设身份或策略。"), soulField);
+    const skillsHead = node("div", "", "skill-editor-head");
+    const skillsTitle = node("div", "");
+    skillsTitle.append(node("span", "02 · 自己创建", "design-kicker"), node("h3", "我的 Skill"),
+      node("p", "自行命名并填写使用条件与内容。身份和环节只是可选的使用范围，不会替你创建 Skill。"));
+    const add = node("button", "＋ 新建 Skill", "secondary");
+    add.type = "button";
+    add.id = "addWerewolfSkill";
+    skillsHead.append(skillsTitle, add);
+    const list = node("div", "", "skill-editor-list");
+    list.id = "werewolfSkillList";
+    const empty = node("p", "还没有创建 Skill。可以只保存 Soul，之后再添加。", "skill-empty");
+    empty.id = "werewolfSkillEmpty";
+    root.append(soul, skillsHead, empty, list);
+    add.onclick = () => {
+      if (list.children.length >= 16) { $("saveStatus").textContent = "最多创建 16 个 Skill。"; return; }
+      list.append(createSkillCard({ enabled: true }));
+      empty.classList.add("hidden");
+      list.lastElementChild.querySelector("[data-field=name]").focus();
+    };
+    (prompts.skills || []).forEach((skill) => list.append(createSkillCard(skill)));
+    empty.classList.toggle("hidden", list.children.length > 0);
+  }
+
+  function createSkillCard(skill) {
+    const card = node("section", "", "skill-card");
+    const heading = node("div", "", "skill-card-head");
+    const title = node("h4", skill.name || "新 Skill");
+    const remove = node("button", "删除", "secondary");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `删除 ${skill.name || "新 Skill"}`);
+    remove.onclick = () => {
+      card.remove();
+      $("werewolfSkillEmpty").classList.toggle("hidden", $("werewolfSkillList").children.length > 0);
+    };
+    heading.append(title, remove);
+    const field = (labelText, fieldName, tag, value, max) => {
       const label = node("label", "", "prompt-field");
-      const input = document.createElement("textarea");
-      input.name = key;
-      input.id = `prompt-${key}`;
-      input.maxLength = 800;
-      input.value = prompts[key] || "";
-      input.setAttribute("aria-label", `${group}：${title}`);
-      label.append(node("span", title), input, node("small", "最多 800 字；留空使用课堂默认内容"));
+      const input = document.createElement(tag);
+      input.dataset.field = fieldName;
+      input.maxLength = max;
+      input.required = true;
+      input.value = value || "";
+      label.append(node("span", labelText), input);
       return label;
     };
-    const soul = node("section", "", "soul-panel");
-    soul.append(node("span", "01 · 所有身份都会使用", "design-kicker"), node("h3", "狼人杀 Soul"),
-      node("p", "写你的 Agent 在整局游戏中坚持的判断方式、表达风格和原则。"), field("general", "狼人杀 Soul", "狼人杀 Soul"));
-    root.append(soul, node("div", "02 · 按身份调用的行动 Skill", "design-kicker role-heading"));
-    const tabs = node("div", "", "role-tabs"), panels = node("div", "", "role-panels");
-    tabs.setAttribute("role", "tablist");
-    groups.forEach(([name, fields], index) => {
-      const tab = node("button", name, "role-tab");
-      tab.type = "button";
-      tab.id = `role-tab-${index}`;
-      tab.setAttribute("role", "tab");
-      tab.setAttribute("aria-controls", `role-panel-${index}`);
-      tab.setAttribute("aria-selected", String(index === 0));
-      const panel = node("section", "", "role-panel");
-      panel.id = `role-panel-${index}`;
-      panel.setAttribute("role", "tabpanel");
-      panel.setAttribute("aria-labelledby", tab.id);
-      panel.hidden = index !== 0;
-      panel.append(node("h3", `${name} · Skill`), node("p", "只有 Agent 获得这一身份并执行对应行动时，才会使用本组 Skill。"));
-      const grid = node("div", "", "prompt-grid");
-      fields.forEach(([key, label]) => grid.append(field(key, label, name)));
-      panel.append(grid);
-      tab.onclick = () => {
-        tabs.querySelectorAll("[role=tab]").forEach((item) => item.setAttribute("aria-selected", String(item === tab)));
-        panels.querySelectorAll("[role=tabpanel]").forEach((item) => { item.hidden = item !== panel; });
-        tab.focus();
-      };
-      tab.onkeydown = (event) => {
-        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-        event.preventDefault();
-        const all = [...tabs.querySelectorAll("[role=tab]")];
-        const position = all.indexOf(tab);
-        const next = event.key === "Home" ? 0 : event.key === "End" ? all.length - 1
-          : (position + (event.key === "ArrowRight" ? 1 : -1) + all.length) % all.length;
-        all[next].click();
-      };
-      tabs.append(tab);
-      panels.append(panel);
+    const name = field("Skill 名称", "name", "input", skill.name, 60);
+    name.querySelector("input").placeholder = "自己给这个能力起名";
+    name.querySelector("input").oninput = (event) => { title.textContent = event.target.value || "新 Skill"; };
+    const summary = field("能力说明（可选）", "summary", "input", skill.summary, 200);
+    summary.querySelector("input").required = false;
+    summary.querySelector("input").placeholder = "简要说明这个 Skill 能帮 Agent 做什么";
+    const when = field("何时使用", "when_to_use", "input", skill.when_to_use, 200);
+    when.querySelector("input").placeholder = "写下 Agent 应在什么情况下使用";
+    const content = field("Skill 内容", "content", "textarea", skill.content, 800);
+    content.querySelector("textarea").placeholder = "写下具体的分析步骤或行动方法";
+    const scope = node("div", "", "skill-scope");
+    [["role", "适用身份", roleOptions, skill.role], ["action", "适用环节", actionOptions, skill.action]].forEach(([key, labelText, options, selectedValue]) => {
+      const label = node("label", "", "prompt-field");
+      const select = document.createElement("select");
+      select.dataset.field = key;
+      options.forEach(([value, name]) => { const option = new Option(name, value); select.append(option); });
+      select.value = selectedValue || "";
+      label.append(node("span", labelText), select);
+      scope.append(label);
     });
-    root.append(tabs, panels);
+    const enabled = node("label", "", "skill-enabled");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.dataset.field = "enabled";
+    check.checked = skill.enabled !== false;
+    enabled.append(check, node("span", "本 Skill 已启用"));
+    card.append(heading, name, summary, when, scope, content, enabled);
+    return card;
   }
 
   async function loadPrompts() {
     const data = await api("/api/werewolf/prompts");
     renderPromptFields(data.prompts || {});
-    $("saveBadge").textContent = data.saved ? "已保存" : "使用默认 Soul / Skill";
+    $("saveBadge").textContent = data.saved ? "已保存" : "尚未保存";
     $("promptsCard").classList.remove("hidden");
   }
 
   function renderRoster(students) {
+    const previousRoster = rosterSignature ? JSON.parse(rosterSignature) : [];
     rosterSignature = JSON.stringify(students);
     rosterCount = students.length;
+    const validIDs = new Set(students.map((student) => student.id));
+    selected = new Set([...selected].filter((id) => validIDs.has(id)));
+    if (tournamentSelected === null) tournamentSelected = new Set(validIDs);
+    else {
+      const previous = new Set(previousRoster.map((student) => student.id));
+      tournamentSelected = new Set([...tournamentSelected].filter((id) => validIDs.has(id)));
+      students.forEach((student) => { if (!previous.has(student.id)) tournamentSelected.add(student.id); });
+    }
     const root = $("roster");
     root.replaceChildren();
     students.forEach((student) => {
@@ -118,12 +155,82 @@
       };
       const copy = node("span", "");
       copy.append(node("strong", `${student.id} · ${student.name}`),
-          node("small", student.prompts_saved ? "已保存狼人杀 Soul / Skill" : "使用默认狼人杀 Soul / Skill"));
+          node("small", student.prompts_saved ? "已保存狼人杀设计" : "尚未保存狼人杀设计"));
       label.append(input, copy);
       label.classList.toggle("selected", input.checked);
       root.append(label);
     });
+    const tournamentRoster = $("tournamentRoster");
+    tournamentRoster.replaceChildren();
+    students.forEach((student) => {
+      const label = node("label", "");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = student.id;
+      input.checked = tournamentSelected.has(student.id);
+      input.disabled = tournamentRunning || tournamentActionBusy;
+      input.onchange = () => {
+        if (input.checked) tournamentSelected.add(student.id);
+        else tournamentSelected.delete(student.id);
+        updateTournamentSelection();
+      };
+      const copy = node("span", "");
+      copy.append(node("strong", `${student.id} · ${student.name}`),
+        node("small", student.prompts_saved ? "已写 Agent 设计" : "尚未写 Agent 设计"));
+      label.append(input, copy);
+      tournamentRoster.append(label);
+    });
+    const designSelect = $("studentDesignSelect");
+    const previousDesign = designSelect.value;
+    designSelect.replaceChildren();
+    students.forEach((student) => designSelect.append(new Option(`${student.id} · ${student.name}`, student.id)));
+    if (validIDs.has(previousDesign)) designSelect.value = previousDesign;
+    if (designSelect.value) loadStudentDesign(designSelect.value);
     updateSelection();
+    updateTournamentSelection();
+  }
+
+  function updateTournamentSelection() {
+    const count = tournamentSelected?.size || 0;
+    $("tournamentSelectedCount").textContent = `已选 ${count} / ${rosterCount} 人`;
+    $("tournamentRoster").querySelectorAll("label").forEach((label) => {
+      label.classList.toggle("selected", label.querySelector("input").checked);
+      label.querySelector("input").disabled = tournamentRunning || tournamentActionBusy;
+    });
+    $("startTournament").disabled = count < 6 || tournamentRunning || tournamentActionBusy || !$("teacherDisabled").classList.contains("hidden");
+    $("selectAllTournament").disabled = tournamentRunning || tournamentActionBusy;
+    $("selectNoneTournament").disabled = tournamentRunning || tournamentActionBusy;
+  }
+
+  async function loadStudentDesign(id) {
+    const root = $("studentDesignView");
+    root.replaceChildren(node("p", "正在读取设计…"));
+    try {
+      const data = await api(`/api/teacher/werewolf/students/${encodeURIComponent(id)}/design`);
+      if ($("studentDesignSelect").value !== id) return;
+      root.replaceChildren();
+      if (!data.saved) {
+        root.append(node("p", "这位学生尚未保存狼人杀 Soul 或 Skill。"));
+        return;
+      }
+      const soul = node("section", "", "student-design-soul");
+      soul.append(node("h4", "Soul"), node("p", data.prompts.general || "（未填写）"));
+      root.append(soul);
+      const skills = data.prompts.skills || [];
+      root.append(node("h4", `Skill · ${skills.length} 个`));
+      if (!skills.length) root.append(node("p", "尚未创建 Skill。"));
+      skills.forEach((skill) => {
+        const card = node("section", "", "student-design-skill");
+        const scope = [roleOptions.find(([value]) => value === (skill.role || ""))?.[1] || "所有身份",
+          actionOptions.find(([value]) => value === (skill.action || ""))?.[1] || "所有环节"].join(" · ");
+        card.append(node("h5", `${skill.name} · ${skill.enabled ? "已启用" : "未启用"}`),
+          node("small", scope), ...(skill.summary ? [node("p", `能力：${skill.summary}`)] : []),
+          node("p", `何时使用：${skill.when_to_use}`), node("pre", skill.content));
+        root.append(card);
+      });
+    } catch (error) {
+      root.replaceChildren(node("p", `读取失败：${error.message}`));
+    }
   }
 
   function updateSelection() {
@@ -141,6 +248,14 @@
       renderMatchList([]);
       replayPlayback?.reset();
       $("replayCard").classList.add("hidden");
+    }
+    if (teacher && tournament?.id && tournament.id !== currentTournamentID) {
+      tournamentSelected = new Set((data.standings || []).map((entry) => entry.student_id));
+      $("tournamentRoster").querySelectorAll("input").forEach((input) => { input.checked = tournamentSelected.has(input.value); });
+    }
+    if (teacher && !tournament && currentTournamentID) {
+      tournamentSelected = new Set([...$("tournamentRoster").querySelectorAll("input")].map((input) => input.value));
+      $("tournamentRoster").querySelectorAll("input").forEach((input) => { input.checked = true; });
     }
     currentTournamentID = tournament?.id || "";
     tournamentRunning = tournament?.status === "running";
@@ -168,7 +283,7 @@
       });
     }
     if (teacher) {
-      $("startTournament").disabled = !enabled || tournamentRunning || tournamentActionBusy || rosterCount < 6;
+      $("startTournament").disabled = !enabled || tournamentRunning || tournamentActionBusy || (tournamentSelected?.size || 0) < 6;
       $("allowSystem").disabled = tournamentRunning || tournamentActionBusy;
       $("pauseTournament").classList.toggle("hidden", !tournamentRunning);
       $("resumeTournament").classList.toggle("hidden", !tournament || !["stopped", "failed", "interrupted"].includes(tournament.status));
@@ -177,6 +292,7 @@
       $("clearTournament").disabled = tournamentRunning || tournamentActionBusy;
       $("stopGame").classList.toggle("hidden", tournamentRunning || $("startGame").dataset.running !== "true");
       updateSelection();
+      updateTournamentSelection();
     }
   }
 
@@ -282,7 +398,8 @@
       card.append(node("div", event.text || "", "message"));
       if (event.prompt) {
         const ingredients = node("div", "", "prompt-ingredients");
-        [["狼人杀 Soul", event.werewolf_soul], [event.action_skill_name || "行动 Skill", event.action_skill]].forEach(([label, value]) => {
+        [["狼人杀 Soul", event.werewolf_soul], ...(event.action_skills || []).map((skill) =>
+          [`可用 Skill · ${skill.name}`, `${skill.summary ? `${skill.summary}\n` : ""}${skill.when_to_use}\n${skill.content}`])].forEach(([label, value]) => {
           if (!value) return;
           const part = node("div", "", "ingredient");
           part.append(node("b", label), node("span", value));
@@ -474,6 +591,7 @@
           $("enableLink").textContent = "我的狼人杀工作台";
         }
         $("teacherControls").classList.remove("hidden");
+        $("studentDesignCard").classList.remove("hidden");
         const roster = await api("/api/teacher/werewolf/roster");
         renderRoster(roster.students || []);
       } else if (manager) {
@@ -516,11 +634,15 @@
   }
 
   async function savePromptDesign() {
-    const payload = {};
-    $("promptFields").querySelectorAll("textarea").forEach((input) => { payload[input.name] = input.value; });
+    const payload = { general: $("werewolfSoul").value, skills: [] };
+    $("werewolfSkillList").querySelectorAll(".skill-card").forEach((card) => {
+      const value = (field) => card.querySelector(`[data-field=${field}]`).value;
+      payload.skills.push({ name: value("name"), summary: value("summary"), when_to_use: value("when_to_use"), content: value("content"),
+        role: value("role"), action: value("action"), enabled: card.querySelector("[data-field=enabled]").checked });
+    });
     const result = await api("/api/werewolf/prompts", { method: "PUT", body: JSON.stringify(payload) });
     $("saveBadge").textContent = "已保存";
-    $("saveStatus").textContent = "Soul 与各身份 Skill 已保存；下一局将使用最新版本。";
+    $("saveStatus").textContent = "Soul 与自建 Skill 已保存；下一局将使用最新版本。";
     return result;
   }
 
@@ -589,6 +711,7 @@
     };
     $("startDemo").onclick = async () => {
       if (demoBusy) return;
+      if (!$("promptForm").reportValidity()) return;
       demoBusy = true;
       $("startDemo").disabled = true;
       $("demoStatus").textContent = "正在保存 Soul 与 Skill，并为六个 Agent 分配身份…";
@@ -612,28 +735,40 @@
     window.addEventListener("pagehide", () => { if (musicTimer) clearInterval(musicTimer); musicContext?.close(); });
   } else {
     $("closeReplay").onclick = () => { replayPlayback?.close(); $("replayCard").classList.add("hidden"); };
+    $("studentDesignSelect").onchange = (event) => loadStudentDesign(event.target.value);
+    $("selectAllTournament").onclick = () => {
+      tournamentSelected = new Set([...$("tournamentRoster").querySelectorAll("input")].map((input) => input.value));
+      $("tournamentRoster").querySelectorAll("input").forEach((input) => { input.checked = true; });
+      updateTournamentSelection();
+    };
+    $("selectNoneTournament").onclick = () => {
+      tournamentSelected.clear();
+      $("tournamentRoster").querySelectorAll("input").forEach((input) => { input.checked = false; });
+      updateTournamentSelection();
+    };
     $("startTournament").onclick = async () => {
-      if (rosterCount < 6 || tournamentRunning || tournamentActionBusy) return;
-      const matches = Math.ceil(rosterCount * 20 / 6);
-      const fillers = matches * 6 - rosterCount * 20;
+      const ids = [...tournamentSelected];
+      if (ids.length < 6 || tournamentRunning || tournamentActionBusy) return;
+      const matches = Math.ceil(ids.length * 20 / 6);
+      const fillers = matches * 6 - ids.length * 20;
       const systemAllowed = $("allowSystem").checked;
       if (fillers && !systemAllowed) {
         $("tournamentActionStatus").textContent = `当前人数需要 ${fillers} 个系统补位席位，请勾选补位后开赛。`;
         return;
       }
-      if (!confirm(`将为 ${rosterCount} 名学生安排每人 20 局，共 ${matches} 场六人局${fillers ? `，其中 ${fillers} 个席位由系统 Agent 补齐` : ""}。每局会多次调用 DeepSeek，可能持续较长时间并消耗 API 额度。确认开赛？`)) return;
+      if (!confirm(`将为选中的 ${ids.length} 名学生安排每人 20 局，共 ${matches} 场六人局${fillers ? `，其中 ${fillers} 个席位由系统 Agent 补齐` : ""}。每局会多次调用 DeepSeek，可能持续较长时间并消耗 API 额度。确认开赛？`)) return;
       tournamentActionBusy = true;
       $("startTournament").disabled = true;
       $("tournamentActionStatus").textContent = "正在排赛并保存 Agent 设计…";
       try {
-        await api("/api/teacher/werewolf/tournament", { method: "POST", body: JSON.stringify({ allow_system: systemAllowed }) });
+        await api("/api/teacher/werewolf/tournament", { method: "POST", body: JSON.stringify({ allow_system: systemAllowed, student_ids: ids }) });
         $("tournamentActionStatus").textContent = "比赛已开始，积分榜会自动更新。";
         await refresh();
       } catch (error) {
         $("tournamentActionStatus").textContent = `开赛失败：${error.message}`;
       } finally {
         tournamentActionBusy = false;
-        $("startTournament").disabled = tournamentRunning || rosterCount < 6 || !$("teacherDisabled").classList.contains("hidden");
+        updateTournamentSelection();
       }
     };
     $("pauseTournament").onclick = async () => {

@@ -103,6 +103,70 @@ func TestWerewolfTournamentScoreByRoleAndOutcome(t *testing.T) {
 	}
 }
 
+func TestWerewolfTournamentUsesTeacherSelectedStudents(t *testing.T) {
+	app, st := testServerWithRoster(t, directClient{}, 7)
+	app.WerewolfClient = &scriptedWerewolfClient{}
+	routes := app.Routes()
+	teacher := newClient(routes)
+	if code, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"}); code != 200 {
+		t.Fatalf("teacher login=%d", code)
+	}
+	run, err := st.ActiveRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := st.RunPolicy(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.WerewolfEnabled = true
+	if _, err = st.SetRunPolicy(context.Background(), run.ID, policy); err != nil {
+		t.Fatal(err)
+	}
+	for _, ids := range [][]string{{"2101", "2101", "2102", "2103", "2104", "2105"}, {"2101", "2102", "2103", "2104", "2105", "missing"}, {"2101", "2102"}} {
+		if code, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/werewolf/tournament", map[string]any{"student_ids": ids, "allow_system": true}); code != 400 {
+			t.Fatalf("invalid selection %v returned %d", ids, code)
+		}
+	}
+	ids := []string{"2101", "2102", "2103", "2104", "2105", "2106"}
+	code, body, raw := requestJSON(t, teacher, http.MethodPost, "/api/teacher/werewolf/tournament", map[string]any{"student_ids": ids, "allow_system": false})
+	if code != 200 || body["tournament"].(map[string]any)["total_matches"] != float64(20) {
+		t.Fatalf("selected tournament=%d %s", code, raw)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		current, err := st.LatestWerewolfTournament(context.Background(), run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.Status != "running" {
+			if current.Status != "complete" || current.NextMatch != 20 {
+				t.Fatalf("tournament ended %s at %d: %s", current.Status, current.NextMatch, current.Error)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("selected tournament timed out at %d", current.NextMatch)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	code, body, _ = requestJSON(t, teacher, http.MethodGet, "/api/teacher/werewolf/tournament", nil)
+	if code != 200 {
+		t.Fatalf("standings=%d", code)
+	}
+	standings := body["standings"].([]any)
+	if len(standings) != 6 {
+		t.Fatalf("excluded student remained in standings: %#v", standings)
+	}
+	for _, raw := range standings {
+		entry := raw.(map[string]any)
+		if entry["student_id"] == "2107" || entry["played"] != float64(20) {
+			t.Fatalf("wrong participant or game count: %#v", entry)
+		}
+	}
+	app.Shutdown()
+}
+
 func TestWerewolfTournamentCompletesAndShowsEveryStudentScore(t *testing.T) {
 	app, st := testServerWithRoster(t, directClient{}, 7)
 	app.WerewolfClient = &scriptedWerewolfClient{}

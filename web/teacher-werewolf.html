@@ -9,13 +9,16 @@
 <body data-mode="teacher">
   <main class="shell">
     <header class="hero">
-      <div><a id="teacherBack" href="/teacher" class="back">← 返回教师管理台</a><p class="eyebrow">课堂控制台 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>选择 6 名学生 Agent，观察主持人如何将规则、Soul、身份 Skill、发言和投票传递给每位 Agent。</p></div>
+      <div><a id="teacherBack" href="/teacher" class="back">← 返回教师管理台</a><p class="eyebrow">课堂控制台 · 多 Agent</p><h1>🐺 狼人杀协作</h1><p>选择学生 Agent，查看他们自写的 Soul 与 Skill，并观察主持人如何传递规则、发言和投票。</p></div>
       <div class="hero-note">固定六人局 · 最多四轮 · 使用 DeepSeek 官方 API</div>
     </header>
     <p id="status" class="status" role="status">正在读取课堂状态…</p>
     <section id="tournamentCard" class="card hidden">
       <div class="section-heading"><div><p class="eyebrow">全班比赛</p><h2>每位学生的 Agent 打 20 局</h2><p>随机排成六人局，并行计算并累计积分。页面只显示进度和成绩；每场交流记录会保存，点开后可逐步回放。</p></div><span id="tournamentBadge" class="badge">尚未开赛</span></div>
       <p id="tournamentProgress" class="status">等待开赛。</p>
+      <div class="selection-heading"><div><h3>选择参赛学生</h3><p>默认全选。取消勾选的学生不会排入本届比赛，也不会出现在本届积分榜。</p></div><span id="tournamentSelectedCount" class="badge">已选 0 人</span></div>
+      <div class="selection-actions"><button id="selectAllTournament" class="secondary" type="button">全选</button><button id="selectNoneTournament" class="secondary" type="button">清空选择</button></div>
+      <div id="tournamentRoster" class="roster tournament-roster" aria-label="全班比赛参赛名单"></div>
       <label class="tournament-option"><input id="allowSystem" type="checkbox" checked /><span>人数无法刚好排满六人局时，允许系统 Agent 补位。系统 Agent 不计入积分榜。</span></label>
       <div class="actions"><button id="startTournament" type="button">开始全班比赛</button><button id="pauseTournament" class="secondary hidden" type="button">暂停比赛</button><button id="resumeTournament" class="secondary hidden" type="button">继续比赛</button><button id="clearTournament" class="danger hidden" type="button">清空比赛记录</button><span id="tournamentActionStatus" class="status" role="status"></span></div>
       <div class="score-heading"><h3>积分榜</h3><p>狼人胜：狼人 +6、其他人 −3；好人胜：狼人 −6、其他人 +3；平局 0 分。并列按胜局数排序。</p></div>
@@ -23,8 +26,13 @@
       <div class="score-heading"><h3>对局记录</h3><p>选择已完成的对局，按步骤查看每位 Agent 使用的 Soul、Skill 和 Prompt。</p></div>
       <div id="matchList" class="match-list"><p>开赛后显示对局记录。</p></div>
     </section>
+    <section id="studentDesignCard" class="card hidden">
+      <div class="section-heading"><div><p class="eyebrow">学生作品</p><h2>查看学生狼人杀 Agent 设计</h2><p>选择一名学生，查看其独立编写的 Soul、Skill 名称、使用条件和内容；不会显示工作坊 Skill。</p></div></div>
+      <div class="design-view-picker"><label for="studentDesignSelect">选择学生</label><select id="studentDesignSelect"></select></div>
+      <div id="studentDesignView" class="student-design-view" aria-live="polite"><p>正在读取学生设计…</p></div>
+    </section>
     <section id="teacherControls" class="card hidden">
-      <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。标记“已保存狼人杀设计”的学生已保存 Soul 与角色策略；其他学生使用默认内容。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
+      <div class="section-heading"><div><p class="eyebrow">开局</p><h2>选择 6 名学生</h2><p>名单来自当前课堂场次。学生可自行编写狼人杀 Soul 和 Skill；未编写的 Agent 只遵循主持人规则。</p></div><span id="selectedCount" class="badge">已选 0/6</span></div>
       <p id="teacherDisabled" class="notice hidden">狼人杀环节尚未开启。请在<a id="enableLink" href="/teacher">课堂能力</a>中打开开关并保存。</p>
       <div id="roster" class="roster"></div>
       <div class="actions"><button id="startGame" type="button">开始一局狼人杀</button><button id="stopGame" class="secondary hidden" type="button">结束当前对局</button><span id="actionStatus" class="status" role="status"></span></div>
@@ -33,7 +41,7 @@
       <div class="section-heading"><div><p class="eyebrow">主持人视角</p><h2>当前对局</h2><p id="gameMeta">尚无对局。</p></div><span id="gameBadge" class="badge">待开局</span></div>
       <div id="roleNotice" class="role-notice"></div>
       <div id="players" class="players"></div>
-      <div class="timeline-heading"><h3>Soul · Skill · Prompt 交流流程</h3><p>每一步都标明所用 Soul 与身份 Skill；展开可查看主持人完整提示和 Agent 原始回复。私密夜间消息不会送给其他学生。</p></div>
+      <div class="timeline-heading"><h3>Soul · Skill · Prompt 交流流程</h3><p>每一步都标明发送给 Agent 的 Soul 与可用 Skill；展开可查看主持人完整提示和 Agent 原始回复。私密夜间消息不会送给其他学生。</p></div>
       <div id="livePlaybackControls" class="playback-controls"><button id="liveRestart" class="secondary" type="button">回到开头</button><button id="livePrev" class="secondary" type="button">上一步</button><button id="livePlayPause" type="button">▶ 播放</button><button id="liveNext" class="secondary" type="button">下一步</button><span id="livePlaybackStatus">0 / 0 步</span></div>
       <div id="timeline" class="timeline" aria-live="polite"></div>
     </section>

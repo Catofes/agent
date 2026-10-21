@@ -66,7 +66,7 @@ func TestWerewolfAgentUsesOnlyItsOwnSoulAndSkills(t *testing.T) {
 	if _, err := st.CreateSkill(ctx, store.Skill{ID: "workshop-only", RunID: run.ID, StudentID: "2101", Name: "工作坊 Skill", Content: "WORKSHOP-SKILL", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SaveWerewolfPrompts(ctx, run.ID, "2101", `{"general":"WEREWOLF-SOUL","last_words":"WEREWOLF-SKILL"}`); err != nil {
+	if err := st.SaveWerewolfPrompts(ctx, run.ID, "2101", `{"general":"WEREWOLF-SOUL","skills":[{"name":"复盘线索","when_to_use":"遗言时","content":"WEREWOLF-SKILL","action":"last_words","enabled":true}]}`); err != nil {
 		t.Fatal(err)
 	}
 	ids := []string{"2101", "2102", "2103", "2104", "2105", "2106"}
@@ -99,9 +99,69 @@ func TestWerewolfAgentUsesOnlyItsOwnSoulAndSkills(t *testing.T) {
 		t.Fatalf("game events: %v, %d", err, len(events))
 	}
 	item := werewolfEventItem(events[0], state, true)
-	if item["werewolf_soul"] != "WEREWOLF-SOUL" || item["action_skill"] != "WEREWOLF-SKILL" || item["workshop_soul"] != nil || item["base_skills"] != nil {
+	skills, ok := item["action_skills"].([]werewolfSkill)
+	if item["werewolf_soul"] != "WEREWOLF-SOUL" || !ok || len(skills) != 1 || skills[0].Name != "复盘线索" || skills[0].Content != "WEREWOLF-SKILL" || item["workshop_soul"] != nil || item["base_skills"] != nil {
 		t.Fatalf("replay mixed designs: %#v", item)
 	}
+}
+
+func TestWerewolfDesignStartsEmptyAndLegacySkillsRemainEditable(t *testing.T) {
+	blank := normalizeWerewolfPrompts(werewolfPrompts{})
+	if blank.General != "" || len(blank.Skills) != 0 {
+		t.Fatalf("new student received preset design: %#v", blank)
+	}
+	legacy := normalizeWerewolfPrompts(werewolfPrompts{General: "自写 Soul", WolfKill: "先比较目标的投票关系"})
+	if legacy.General != "自写 Soul" || len(legacy.Skills) != 1 || legacy.Skills[0].Content != "先比较目标的投票关系" || legacy.Skills[0].Action != "kill" {
+		t.Fatalf("legacy student design lost: %#v", legacy)
+	}
+	player := werewolfPlayer{Role: "wolf", Prompts: legacy}
+	if len(werewolfSkillsForAction(player, "kill")) != 1 || len(werewolfSkillsForAction(player, "vote")) != 0 {
+		t.Fatal("custom skill scope was not respected")
+	}
+}
+
+func TestTeacherCanInspectStudentWerewolfSkills(t *testing.T) {
+	app, st := testServerWithRoster(t, directClient{}, 6)
+	routes := app.Routes()
+	teacher, student := newClient(routes), newClient(routes)
+	if code, _, _ := requestJSON(t, teacher, http.MethodPost, "/api/teacher/login", map[string]string{"password": "teacher-secret"}); code != 200 {
+		t.Fatalf("teacher login=%d", code)
+	}
+	if code, _, _ := requestJSON(t, student, http.MethodPost, "/api/login", map[string]string{"id": "2101"}); code != 200 {
+		t.Fatalf("student login=%d", code)
+	}
+	run, err := st.ActiveRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := st.RunPolicy(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.WerewolfEnabled = true
+	if _, err = st.SetRunPolicy(context.Background(), run.ID, policy); err != nil {
+		t.Fatal(err)
+	}
+	if code, body, _ := requestJSON(t, student, http.MethodGet, "/api/werewolf/prompts", nil); code != 200 || body["saved"] != false || len(body["prompts"].(map[string]any)["skills"].([]any)) != 0 {
+		t.Fatalf("new student should have blank design: %d %#v", code, body)
+	}
+	design := map[string]any{"general": "我先核对证据", "skills": []map[string]any{{"name": "比较投票", "when_to_use": "白天投票前", "content": "逐人核对发言与票型", "action": "vote", "enabled": true}}}
+	if code, _, raw := requestJSON(t, student, http.MethodPut, "/api/werewolf/prompts", design); code != 200 {
+		t.Fatalf("save design=%d %s", code, raw)
+	}
+	url := "/api/teacher/werewolf/students/2101/design"
+	if code, _, _ := requestJSON(t, student, http.MethodGet, url, nil); code != 403 {
+		t.Fatalf("student read teacher design=%d", code)
+	}
+	code, body, raw := requestJSON(t, teacher, http.MethodGet, url, nil)
+	if code != 200 || body["saved"] != true {
+		t.Fatalf("teacher read=%d %s", code, raw)
+	}
+	skills := body["prompts"].(map[string]any)["skills"].([]any)
+	if len(skills) != 1 || skills[0].(map[string]any)["name"] != "比较投票" {
+		t.Fatalf("teacher skill view=%#v", body)
+	}
+	app.Shutdown()
 }
 
 func TestWerewolfRulesAndChoiceValidation(t *testing.T) {

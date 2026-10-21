@@ -17,24 +17,35 @@ import (
 	"classroom-agent/internal/store"
 )
 
-// Each field is an instruction written by the student for a specific role and
-// action. Empty fields use the classroom defaults, so a student can iterate on
-// one action without having to write eleven prompts at once.
+// A student's Werewolf design is independent of the ordinary workshop design.
+// The named skills are student-authored; the old action fields are retained only
+// to read designs and replays saved by earlier versions.
+type werewolfSkill struct {
+	Name      string `json:"name"`
+	Summary   string `json:"summary,omitempty"`
+	WhenToUse string `json:"when_to_use"`
+	Content   string `json:"content"`
+	Role      string `json:"role,omitempty"`
+	Action    string `json:"action,omitempty"`
+	Enabled   bool   `json:"enabled"`
+}
+
 type werewolfPrompts struct {
-	General       string `json:"general"`
-	VillagerSpeak string `json:"villager_speak"`
-	VillagerVote  string `json:"villager_vote"`
-	WolfDiscuss   string `json:"wolf_discuss"`
-	WolfKill      string `json:"wolf_kill"`
-	WolfSpeak     string `json:"wolf_speak"`
-	WolfVote      string `json:"wolf_vote"`
-	SeerCheck     string `json:"seer_check"`
-	SeerSpeak     string `json:"seer_speak"`
-	SeerVote      string `json:"seer_vote"`
-	WitchAction   string `json:"witch_action"`
-	WitchSpeak    string `json:"witch_speak"`
-	WitchVote     string `json:"witch_vote"`
-	LastWords     string `json:"last_words"`
+	General       string          `json:"general"`
+	Skills        []werewolfSkill `json:"skills"`
+	VillagerSpeak string          `json:"villager_speak,omitempty"`
+	VillagerVote  string          `json:"villager_vote,omitempty"`
+	WolfDiscuss   string          `json:"wolf_discuss,omitempty"`
+	WolfKill      string          `json:"wolf_kill,omitempty"`
+	WolfSpeak     string          `json:"wolf_speak,omitempty"`
+	WolfVote      string          `json:"wolf_vote,omitempty"`
+	SeerCheck     string          `json:"seer_check,omitempty"`
+	SeerSpeak     string          `json:"seer_speak,omitempty"`
+	SeerVote      string          `json:"seer_vote,omitempty"`
+	WitchAction   string          `json:"witch_action,omitempty"`
+	WitchSpeak    string          `json:"witch_speak,omitempty"`
+	WitchVote     string          `json:"witch_vote,omitempty"`
+	LastWords     string          `json:"last_words,omitempty"`
 }
 
 func defaultWerewolfPrompts() werewolfPrompts {
@@ -57,20 +68,65 @@ func defaultWerewolfPrompts() werewolfPrompts {
 }
 
 func normalizeWerewolfPrompts(in werewolfPrompts) werewolfPrompts {
+	general := strings.TrimSpace(in.General)
+	if general == defaultWerewolfPrompts().General {
+		general = ""
+	}
+	skills := append([]werewolfSkill(nil), in.Skills...)
+	if len(skills) == 0 {
+		skills = legacyWerewolfSkills(in)
+	}
+	for i := range skills {
+		skills[i].Name = strings.TrimSpace(skills[i].Name)
+		skills[i].Summary = strings.TrimSpace(skills[i].Summary)
+		skills[i].WhenToUse = strings.TrimSpace(skills[i].WhenToUse)
+		skills[i].Content = strings.TrimSpace(skills[i].Content)
+	}
+	if skills == nil {
+		skills = []werewolfSkill{}
+	}
+	return werewolfPrompts{General: general, Skills: skills}
+}
+
+func legacyWerewolfSkills(in werewolfPrompts) []werewolfSkill {
 	defaults := defaultWerewolfPrompts()
-	values := []*string{&in.General, &in.VillagerSpeak, &in.VillagerVote, &in.WolfDiscuss,
-		&in.WolfKill, &in.WolfSpeak, &in.WolfVote, &in.SeerCheck, &in.SeerSpeak,
-		&in.SeerVote, &in.WitchAction, &in.WitchSpeak, &in.WitchVote, &in.LastWords}
-	fallback := []string{defaults.General, defaults.VillagerSpeak, defaults.VillagerVote, defaults.WolfDiscuss,
-		defaults.WolfKill, defaults.WolfSpeak, defaults.WolfVote, defaults.SeerCheck, defaults.SeerSpeak,
-		defaults.SeerVote, defaults.WitchAction, defaults.WitchSpeak, defaults.WitchVote, defaults.LastWords}
-	for i, value := range values {
-		*value = strings.TrimSpace(*value)
-		if *value == "" {
-			*value = fallback[i]
+	legacy := []struct{ name, role, action, content, fallback string }{
+		{"平民发言", "villager", "speak", in.VillagerSpeak, defaults.VillagerSpeak},
+		{"平民投票", "villager", "vote", in.VillagerVote, defaults.VillagerVote},
+		{"狼人商议", "wolf", "discuss", in.WolfDiscuss, defaults.WolfDiscuss},
+		{"狼人击杀", "wolf", "kill", in.WolfKill, defaults.WolfKill},
+		{"狼人发言", "wolf", "speak", in.WolfSpeak, defaults.WolfSpeak},
+		{"狼人投票", "wolf", "vote", in.WolfVote, defaults.WolfVote},
+		{"预言家查验", "seer", "check", in.SeerCheck, defaults.SeerCheck},
+		{"预言家发言", "seer", "speak", in.SeerSpeak, defaults.SeerSpeak},
+		{"预言家投票", "seer", "vote", in.SeerVote, defaults.SeerVote},
+		{"女巫用药", "witch", "witch", in.WitchAction, defaults.WitchAction},
+		{"女巫发言", "witch", "speak", in.WitchSpeak, defaults.WitchSpeak},
+		{"女巫投票", "witch", "vote", in.WitchVote, defaults.WitchVote},
+		{"遗言", "", "last_words", in.LastWords, defaults.LastWords},
+	}
+	out := []werewolfSkill{}
+	for _, item := range legacy {
+		if value := strings.TrimSpace(item.content); value != "" && value != item.fallback {
+			out = append(out, werewolfSkill{Name: item.name, WhenToUse: "进行" + item.name + "时", Content: value,
+				Role: item.role, Action: item.action, Enabled: true})
 		}
 	}
-	return in
+	return out
+}
+
+func werewolfSkillsForAction(player werewolfPlayer, action string) []werewolfSkill {
+	skills := player.Prompts.Skills
+	if len(skills) == 0 {
+		skills = legacyWerewolfSkills(player.Prompts)
+	}
+	active := []werewolfSkill{}
+	for _, skill := range skills {
+		if skill.Enabled && (skill.Role == "" || skill.Role == player.Role) && (skill.Action == "" || skill.Action == action) {
+			active = append(active, skill)
+		}
+	}
+	return active
 }
 
 type werewolfPlayer struct {
@@ -157,29 +213,75 @@ func (s *Server) saveWerewolfPrompts(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	fields := []string{in.General, in.VillagerSpeak, in.VillagerVote, in.WolfDiscuss, in.WolfKill,
-		in.WolfSpeak, in.WolfVote, in.SeerCheck, in.SeerSpeak, in.SeerVote,
-		in.WitchAction, in.WitchSpeak, in.WitchVote, in.LastWords}
-	total := 0
-	for _, field := range fields {
-		n := utf8.RuneCountInString(field)
-		if n > 800 {
-			writeError(w, 400, "PROMPT_TOO_LONG", "每项 Prompt 不能超过 800 字")
-			return
-		}
-		total += n
-	}
-	if total > 7000 {
-		writeError(w, 400, "PROMPTS_TOO_LONG", "Prompt 总长度不能超过 7000 字")
+	in = normalizeWerewolfPrompts(in)
+	if utf8.RuneCountInString(in.General) > 800 || len(in.Skills) > 16 {
+		writeError(w, 400, "INVALID_DESIGN", "Soul 最多 800 字，Skill 最多 16 个")
 		return
 	}
-	in = normalizeWerewolfPrompts(in)
+	total := utf8.RuneCountInString(in.General)
+	names := map[string]bool{}
+	validRole := map[string]bool{"": true, "villager": true, "wolf": true, "seer": true, "witch": true}
+	validAction := map[string]bool{"": true, "discuss": true, "kill": true, "check": true,
+		"witch": true, "speak": true, "vote": true, "last_words": true}
+	for _, skill := range in.Skills {
+		name := strings.TrimSpace(skill.Name)
+		when := strings.TrimSpace(skill.WhenToUse)
+		content := strings.TrimSpace(skill.Content)
+		if name == "" || when == "" || content == "" || names[strings.ToLower(name)] ||
+			utf8.RuneCountInString(name) > 60 || utf8.RuneCountInString(skill.Summary) > 200 || utf8.RuneCountInString(when) > 200 ||
+			utf8.RuneCountInString(content) > 800 || !validRole[skill.Role] || !validAction[skill.Action] {
+			writeError(w, 400, "INVALID_SKILL", "请填写不重复的 Skill 名称、使用条件和内容，并检查长度与适用范围")
+			return
+		}
+		names[strings.ToLower(name)] = true
+		total += utf8.RuneCountInString(name) + utf8.RuneCountInString(skill.Summary) + utf8.RuneCountInString(when) + utf8.RuneCountInString(content)
+	}
+	if total > 7000 {
+		writeError(w, 400, "DESIGN_TOO_LONG", "Soul 与 Skill 总长度不能超过 7000 字")
+		return
+	}
 	raw, _ := json.Marshal(in)
 	if err = s.Store.SaveWerewolfPrompts(r.Context(), run.ID, p.Session.StudentID, string(raw)); err != nil {
 		writeError(w, 500, "DATABASE_ERROR", "保存 Prompt 失败")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"prompts": in, "saved": true})
+}
+
+func (s *Server) teacherWerewolfStudentDesign(w http.ResponseWriter, r *http.Request) {
+	run, err := s.Store.ActiveRun(r.Context())
+	if err != nil {
+		writeError(w, 503, "NO_ACTIVE_RUN", "当前没有活动场次")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	roster, err := s.Store.RosterStudents(r.Context(), run.ID)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取名单失败")
+		return
+	}
+	var student *store.TournamentPlayer
+	for i := range roster {
+		if roster[i].ID == id {
+			student = &roster[i]
+			break
+		}
+	}
+	if student == nil {
+		writeError(w, 404, "STUDENT_NOT_FOUND", "学生不在当前名单中")
+		return
+	}
+	raw, saved, err := s.Store.WerewolfPrompts(r.Context(), run.ID, id)
+	if err != nil {
+		writeError(w, 500, "DATABASE_ERROR", "读取狼人杀设计失败")
+		return
+	}
+	var prompts werewolfPrompts
+	if saved && json.Unmarshal([]byte(raw), &prompts) != nil {
+		writeError(w, 500, "DATABASE_ERROR", "狼人杀设计数据损坏")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"student": student, "prompts": normalizeWerewolfPrompts(prompts), "saved": saved})
 }
 
 func (s *Server) teacherWerewolfRoster(w http.ResponseWriter, r *http.Request) {
@@ -345,8 +447,7 @@ func werewolfEventItem(event store.WerewolfEvent, state werewolfState, showPromp
 		if showPrompt && event.Prompt != "" {
 			action := werewolfActionForEvent(event.Type)
 			item["werewolf_soul"] = actor.Prompts.General
-			item["action_skill"] = werewolfPromptForAction(*actor, action)
-			item["action_skill_name"] = werewolfSkillName(actor.Role, action)
+			item["action_skills"] = werewolfSkillsForAction(*actor, action)
 		}
 	}
 	if showPrompt {
@@ -374,16 +475,6 @@ func werewolfActionForEvent(eventType string) string {
 		return "last_words"
 	}
 	return ""
-}
-
-func werewolfSkillName(role, action string) string {
-	roleName := map[string]string{"wolf": "狼人", "villager": "平民", "seer": "预言家", "witch": "女巫"}[role]
-	actionName := map[string]string{"discuss": "夜间商议", "kill": "夜间选择目标", "check": "夜间查验",
-		"witch": "夜间用药", "speak": "白天发言", "vote": "白天投票", "last_words": "遗言"}[action]
-	if action == "last_words" {
-		return "通用 · 遗言 Skill"
-	}
-	return roleName + " · " + actionName + " Skill"
 }
 
 func (s *Server) startWerewolfGame(w http.ResponseWriter, r *http.Request) {
@@ -555,44 +646,6 @@ func (s *Server) clearWerewolfWorker(id string) {
 		s.werewolfCancel = nil
 		s.werewolfGameID = ""
 	}
-}
-
-func werewolfPromptForAction(player werewolfPlayer, action string) string {
-	switch action {
-	case "discuss":
-		return player.Prompts.WolfDiscuss
-	case "kill":
-		return player.Prompts.WolfKill
-	case "check":
-		return player.Prompts.SeerCheck
-	case "witch":
-		return player.Prompts.WitchAction
-	case "last_words":
-		return player.Prompts.LastWords
-	case "speak":
-		switch player.Role {
-		case "wolf":
-			return player.Prompts.WolfSpeak
-		case "seer":
-			return player.Prompts.SeerSpeak
-		case "witch":
-			return player.Prompts.WitchSpeak
-		default:
-			return player.Prompts.VillagerSpeak
-		}
-	case "vote":
-		switch player.Role {
-		case "wolf":
-			return player.Prompts.WolfVote
-		case "seer":
-			return player.Prompts.SeerVote
-		case "witch":
-			return player.Prompts.WitchVote
-		default:
-			return player.Prompts.VillagerVote
-		}
-	}
-	return ""
 }
 
 func shortWerewolfText(value string, max int) string {
