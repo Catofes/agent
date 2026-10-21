@@ -35,17 +35,17 @@ type werewolfPrompts struct {
 	Skills        []werewolfSkill `json:"skills"`
 	VillagerSpeak string          `json:"villager_speak,omitempty"`
 	VillagerVote  string          `json:"villager_vote,omitempty"`
-	WolfDiscuss  string          `json:"wolf_discuss,omitempty"`
-	WolfKill     string          `json:"wolf_kill,omitempty"`
-	WolfSpeak    string          `json:"wolf_speak,omitempty"`
-	WolfVote     string          `json:"wolf_vote,omitempty"`
-	SeerCheck    string          `json:"seer_check,omitempty"`
-	SeerSpeak    string          `json:"seer_speak,omitempty"`
-	SeerVote     string          `json:"seer_vote,omitempty"`
-	WitchAction  string          `json:"witch_action,omitempty"`
-	WitchSpeak   string          `json:"witch_speak,omitempty"`
-	WitchVote    string          `json:"witch_vote,omitempty"`
-	LastWords    string          `json:"last_words,omitempty"`
+	WolfDiscuss   string          `json:"wolf_discuss,omitempty"`
+	WolfKill      string          `json:"wolf_kill,omitempty"`
+	WolfSpeak     string          `json:"wolf_speak,omitempty"`
+	WolfVote      string          `json:"wolf_vote,omitempty"`
+	SeerCheck     string          `json:"seer_check,omitempty"`
+	SeerSpeak     string          `json:"seer_speak,omitempty"`
+	SeerVote      string          `json:"seer_vote,omitempty"`
+	WitchAction   string          `json:"witch_action,omitempty"`
+	WitchSpeak    string          `json:"witch_speak,omitempty"`
+	WitchVote     string          `json:"witch_vote,omitempty"`
+	LastWords     string          `json:"last_words,omitempty"`
 }
 
 func defaultWerewolfPrompts() werewolfPrompts {
