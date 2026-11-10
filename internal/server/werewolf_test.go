@@ -15,8 +15,9 @@ import (
 )
 
 type scriptedWerewolfClient struct {
-	mu      sync.Mutex
-	prompts []string
+	mu           sync.Mutex
+	prompts      []string
+	reportSkills bool
 }
 
 type waitingWerewolfClient struct{}
@@ -40,11 +41,14 @@ func (c *scriptedWerewolfClient) Complete(_ context.Context, request agent.Compl
 			answer = seats
 		}
 	}
+	if c.reportSkills {
+		answer += "\n[[skill:1]]"
+	}
 	return agent.Completion{Content: answer, TokensIn: 3, TokensOut: 2}, nil
 }
 
 func TestWerewolfAgentUsesOnlyItsOwnSoulAndSkills(t *testing.T) {
-	model := &scriptedWerewolfClient{}
+	model := &scriptedWerewolfClient{reportSkills: true}
 	app, st := testServerWithRoster(t, directClient{}, 6)
 	app.WerewolfClient = model
 	ctx := context.Background()
@@ -66,7 +70,7 @@ func TestWerewolfAgentUsesOnlyItsOwnSoulAndSkills(t *testing.T) {
 	if _, err := st.CreateSkill(ctx, store.Skill{ID: "workshop-only", RunID: run.ID, StudentID: "2101", Name: "工作坊 Skill", Content: "WORKSHOP-SKILL", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SaveWerewolfPrompts(ctx, run.ID, "2101", `{"general":"WEREWOLF-SOUL","skills":[{"name":"复盘线索","when_to_use":"遗言时","content":"WEREWOLF-SKILL","action":"last_words","enabled":true}]}`); err != nil {
+	if err := st.SaveWerewolfPrompts(ctx, run.ID, "2101", `{"general":"WEREWOLF-SOUL","skills":[{"name":"复盘线索","when_to_use":"遗言时","content":"WEREWOLF-SKILL","enabled":true}]}`); err != nil {
 		t.Fatal(err)
 	}
 	ids := []string{"2101", "2102", "2103", "2104", "2105", "2106"}
@@ -85,8 +89,12 @@ func TestWerewolfAgentUsesOnlyItsOwnSoulAndSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.askWerewolf(ctx, game, &state, *state.player("2101"), "last_words", "简短发言。", "public", "last_words"); err != nil {
+	answer, err := app.askWerewolf(ctx, game, &state, *state.player("2101"), "last_words", "简短发言。", "public", "last_words")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(answer, "[[skill:") {
+		t.Fatalf("Skill report leaked into gameplay answer: %q", answer)
 	}
 	model.mu.Lock()
 	prompt := model.prompts[len(model.prompts)-1]
@@ -103,6 +111,10 @@ func TestWerewolfAgentUsesOnlyItsOwnSoulAndSkills(t *testing.T) {
 	if item["werewolf_soul"] != "WEREWOLF-SOUL" || !ok || len(skills) != 1 || skills[0].Name != "复盘线索" || skills[0].Content != "WEREWOLF-SKILL" || item["workshop_soul"] != nil || item["base_skills"] != nil {
 		t.Fatalf("replay mixed designs: %#v", item)
 	}
+	used, ok := item["used_skills"].([]werewolfSkill)
+	if !ok || len(used) != 1 || used[0].Name != "复盘线索" || item["skill_selection_reported"] != true || strings.Contains(events[0].Text, "[[skill:") {
+		t.Fatalf("replay did not separate candidate and used Skill: %#v", item)
+	}
 }
 
 func TestWerewolfDesignStartsEmptyAndLegacySkillsRemainEditable(t *testing.T) {
@@ -111,12 +123,32 @@ func TestWerewolfDesignStartsEmptyAndLegacySkillsRemainEditable(t *testing.T) {
 		t.Fatalf("new student received preset design: %#v", blank)
 	}
 	legacy := normalizeWerewolfPrompts(werewolfPrompts{General: "自写 Soul", WolfKill: "先比较目标的投票关系"})
-	if legacy.General != "自写 Soul" || len(legacy.Skills) != 1 || legacy.Skills[0].Content != "先比较目标的投票关系" || legacy.Skills[0].Action != "kill" {
+	if legacy.General != "自写 Soul" || len(legacy.Skills) != 1 || legacy.Skills[0].Content != "先比较目标的投票关系" || legacy.Skills[0].Action != "" || legacy.Skills[0].Role != "" || !strings.Contains(legacy.Skills[0].WhenToUse, "选择击杀目标") {
 		t.Fatalf("legacy student design lost: %#v", legacy)
 	}
 	player := werewolfPlayer{Role: "wolf", Prompts: legacy}
-	if len(werewolfSkillsForAction(player, "kill")) != 1 || len(werewolfSkillsForAction(player, "vote")) != 0 {
-		t.Fatal("custom skill scope was not respected")
+	if len(werewolfSkillsForAction(player, "kill")) != 1 || len(werewolfSkillsForAction(player, "vote")) != 1 {
+		t.Fatal("self-authored Skills should be candidates for Agent choice at every action")
+	}
+	oldSnapshot := werewolfPlayer{Role: "wolf", Prompts: werewolfPrompts{Skills: []werewolfSkill{{Name: "旧版", Role: "wolf", Action: "kill", Enabled: true}}}}
+	if len(werewolfSkillsForAction(oldSnapshot, "kill")) != 1 || len(werewolfSkillsForAction(oldSnapshot, "vote")) != 0 {
+		t.Fatal("historical replay should retain its original candidate scope")
+	}
+}
+
+func TestWerewolfSkillReportParsing(t *testing.T) {
+	skills := []werewolfSkill{{Name: "线索核查"}, {Name: "防止伪装"}}
+	answer, used := parseWerewolfSkillResponse("3\n[[skill:2,1]]", skills)
+	if answer != "3" || len(used) != 2 || used[0].Name != "防止伪装" || used[1].Name != "线索核查" {
+		t.Fatalf("parsed answer=%q used=%#v", answer, used)
+	}
+	answer, used = parseWerewolfSkillResponse("不用\n[[skill:0]]", skills)
+	if answer != "不用" || len(used) != 0 {
+		t.Fatalf("zero-skill answer=%q used=%#v", answer, used)
+	}
+	answer, used = parseWerewolfSkillResponse("5\n[[skill:9,1,1]]", skills)
+	if answer != "5" || len(used) != 1 || used[0].Name != "线索核查" {
+		t.Fatalf("invalid ids answer=%q used=%#v", answer, used)
 	}
 }
 
@@ -145,7 +177,7 @@ func TestTeacherCanInspectStudentWerewolfSkills(t *testing.T) {
 	if code, body, _ := requestJSON(t, student, http.MethodGet, "/api/werewolf/prompts", nil); code != 200 || body["saved"] != false || len(body["prompts"].(map[string]any)["skills"].([]any)) != 0 {
 		t.Fatalf("new student should have blank design: %d %#v", code, body)
 	}
-	design := map[string]any{"general": "我先核对证据", "skills": []map[string]any{{"name": "比较投票", "when_to_use": "白天投票前", "content": "逐人核对发言与票型", "action": "vote", "enabled": true}}}
+	design := map[string]any{"general": "我先核对证据", "skills": []map[string]any{{"name": "比较投票", "when_to_use": "白天投票前", "content": "逐人核对发言与票型", "enabled": true}}}
 	if code, _, raw := requestJSON(t, student, http.MethodPut, "/api/werewolf/prompts", design); code != 200 {
 		t.Fatalf("save design=%d %s", code, raw)
 	}

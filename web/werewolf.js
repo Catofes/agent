@@ -4,9 +4,6 @@
   const roles = { wolf: "狼人", villager: "平民", seer: "预言家", witch: "女巫" };
   const phases = { night: "夜间", day: "白天", finished: "结局" };
   const channels = { public: "全体可见", wolves: "狼人私聊", private: "个人私密", teacher: "教师记录" };
-  const roleOptions = [["", "所有身份"], ["villager", "平民"], ["wolf", "狼人"], ["seer", "预言家"], ["witch", "女巫"]];
-  const actionOptions = [["", "所有环节"], ["discuss", "夜间商议"], ["kill", "狼人选择目标"],
-    ["check", "预言家查验"], ["witch", "女巫用药"], ["speak", "白天发言"], ["vote", "白天投票"], ["last_words", "遗言"]];
   let me = null, currentGameID = "", cursor = 0, polling = false, rosterSignature = "", selected = new Set();
   let currentTournamentID = "", tournamentRunning = false, tournamentActionBusy = false, rosterCount = 0, tournamentSelected = null;
   let manager = false, classroomEnabled = false, demoGameID = "", demoCursor = 0, demoBusy = false;
@@ -44,7 +41,7 @@
     const skillsHead = node("div", "", "skill-editor-head");
     const skillsTitle = node("div", "");
     skillsTitle.append(node("span", "02 · 自己创建", "design-kicker"), node("h3", "我的 Skill"),
-      node("p", "自行命名并填写使用条件与内容。身份和环节只是可选的使用范围，不会替你创建 Skill。"));
+      node("p", "名称要说清这个方法能做什么，再写明何时使用和具体步骤。Agent 会在每次行动时自行判断是否采用。"));
     const add = node("button", "＋ 新建 Skill", "secondary");
     add.type = "button";
     add.id = "addWerewolfSkill";
@@ -87,32 +84,22 @@
       return label;
     };
     const name = field("Skill 名称", "name", "input", skill.name, 60);
-    name.querySelector("input").placeholder = "自己给这个能力起名";
+    name.querySelector("input").placeholder = "用能说明用途的名称命名";
     name.querySelector("input").oninput = (event) => { title.textContent = event.target.value || "新 Skill"; };
     const summary = field("能力说明（可选）", "summary", "input", skill.summary, 200);
     summary.querySelector("input").required = false;
     summary.querySelector("input").placeholder = "简要说明这个 Skill 能帮 Agent 做什么";
-    const when = field("何时使用", "when_to_use", "input", skill.when_to_use, 200);
+    const when = field("何时使用", "when_to_use", "input", skill.when_to_use, 300);
     when.querySelector("input").placeholder = "写下 Agent 应在什么情况下使用";
     const content = field("Skill 内容", "content", "textarea", skill.content, 800);
     content.querySelector("textarea").placeholder = "写下具体的分析步骤或行动方法";
-    const scope = node("div", "", "skill-scope");
-    [["role", "适用身份", roleOptions, skill.role], ["action", "适用环节", actionOptions, skill.action]].forEach(([key, labelText, options, selectedValue]) => {
-      const label = node("label", "", "prompt-field");
-      const select = document.createElement("select");
-      select.dataset.field = key;
-      options.forEach(([value, name]) => { const option = new Option(name, value); select.append(option); });
-      select.value = selectedValue || "";
-      label.append(node("span", labelText), select);
-      scope.append(label);
-    });
     const enabled = node("label", "", "skill-enabled");
     const check = document.createElement("input");
     check.type = "checkbox";
     check.dataset.field = "enabled";
     check.checked = skill.enabled !== false;
     enabled.append(check, node("span", "本 Skill 已启用"));
-    card.append(heading, name, summary, when, scope, content, enabled);
+    card.append(heading, name, summary, when, content, enabled);
     return card;
   }
 
@@ -221,10 +208,8 @@
       if (!skills.length) root.append(node("p", "尚未创建 Skill。"));
       skills.forEach((skill) => {
         const card = node("section", "", "student-design-skill");
-        const scope = [roleOptions.find(([value]) => value === (skill.role || ""))?.[1] || "所有身份",
-          actionOptions.find(([value]) => value === (skill.action || ""))?.[1] || "所有环节"].join(" · ");
         card.append(node("h5", `${skill.name} · ${skill.enabled ? "已启用" : "未启用"}`),
-          node("small", scope), ...(skill.summary ? [node("p", `能力：${skill.summary}`)] : []),
+          ...(skill.summary ? [node("p", `能力：${skill.summary}`)] : []),
           node("p", `何时使用：${skill.when_to_use}`), node("pre", skill.content));
         root.append(card);
       });
@@ -398,8 +383,11 @@
       card.append(node("div", event.text || "", "message"));
       if (event.prompt) {
         const ingredients = node("div", "", "prompt-ingredients");
-        [["狼人杀 Soul", event.werewolf_soul], ...(event.action_skills || []).map((skill) =>
-          [`可用 Skill · ${skill.name}`, `${skill.summary ? `${skill.summary}\n` : ""}${skill.when_to_use}\n${skill.content}`])].forEach(([label, value]) => {
+        [["狼人杀 Soul", event.werewolf_soul],
+          ["候选 Skill", (event.action_skills || []).map((skill) => skill.name).join("、") || "本步没有可用 Skill"],
+          ["Agent 报告采用", (event.used_skills || []).map((skill) => skill.name).join("、") ||
+            (event.skill_selection_reported ? "没有采用 Skill" : "未报告（旧对局或模型未按格式回复）")],
+          ...(event.used_skills || []).map((skill) => [`采用方法 · ${skill.name}`, skill.content])].forEach(([label, value]) => {
           if (!value) return;
           const part = node("div", "", "ingredient");
           part.append(node("b", label), node("span", value));
@@ -638,7 +626,7 @@
     $("werewolfSkillList").querySelectorAll(".skill-card").forEach((card) => {
       const value = (field) => card.querySelector(`[data-field=${field}]`).value;
       payload.skills.push({ name: value("name"), summary: value("summary"), when_to_use: value("when_to_use"), content: value("content"),
-        role: value("role"), action: value("action"), enabled: card.querySelector("[data-field=enabled]").checked });
+        enabled: card.querySelector("[data-field=enabled]").checked });
     });
     const result = await api("/api/werewolf/prompts", { method: "PUT", body: JSON.stringify(payload) });
     $("saveBadge").textContent = "已保存";
