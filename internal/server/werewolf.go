@@ -81,6 +81,19 @@ func normalizeWerewolfPrompts(in werewolfPrompts) werewolfPrompts {
 		skills[i].Summary = strings.TrimSpace(skills[i].Summary)
 		skills[i].WhenToUse = strings.TrimSpace(skills[i].WhenToUse)
 		skills[i].Content = strings.TrimSpace(skills[i].Content)
+		// Old designs used fixed role/action selectors. Preserve their meaning as
+		// an editable usage condition, then use the same decision path as new Skills.
+		conditions := []string{}
+		if role := map[string]string{"villager": "平民", "wolf": "狼人", "seer": "预言家", "witch": "女巫"}[skills[i].Role]; role != "" {
+			conditions = append(conditions, "身份是"+role)
+		}
+		if action := map[string]string{"discuss": "夜间商议", "kill": "选择击杀目标", "check": "查验", "witch": "女巫用药", "speak": "白天发言", "vote": "投票", "last_words": "遗言"}[skills[i].Action]; action != "" {
+			conditions = append(conditions, "正在"+action)
+		}
+		if len(conditions) > 0 {
+			skills[i].WhenToUse = "仅当" + strings.Join(conditions, "且") + "时；" + skills[i].WhenToUse
+		}
+		skills[i].Role, skills[i].Action = "", ""
 	}
 	if skills == nil {
 		skills = []werewolfSkill{}
@@ -220,17 +233,14 @@ func (s *Server) saveWerewolfPrompts(w http.ResponseWriter, r *http.Request) {
 	}
 	total := utf8.RuneCountInString(in.General)
 	names := map[string]bool{}
-	validRole := map[string]bool{"": true, "villager": true, "wolf": true, "seer": true, "witch": true}
-	validAction := map[string]bool{"": true, "discuss": true, "kill": true, "check": true,
-		"witch": true, "speak": true, "vote": true, "last_words": true}
 	for _, skill := range in.Skills {
 		name := strings.TrimSpace(skill.Name)
 		when := strings.TrimSpace(skill.WhenToUse)
 		content := strings.TrimSpace(skill.Content)
 		if name == "" || when == "" || content == "" || names[strings.ToLower(name)] ||
-			utf8.RuneCountInString(name) > 60 || utf8.RuneCountInString(skill.Summary) > 200 || utf8.RuneCountInString(when) > 200 ||
-			utf8.RuneCountInString(content) > 800 || !validRole[skill.Role] || !validAction[skill.Action] {
-			writeError(w, 400, "INVALID_SKILL", "请填写不重复的 Skill 名称、使用条件和内容，并检查长度与适用范围")
+			utf8.RuneCountInString(name) > 60 || utf8.RuneCountInString(skill.Summary) > 200 || utf8.RuneCountInString(when) > 300 ||
+			utf8.RuneCountInString(content) > 800 {
+			writeError(w, 400, "INVALID_SKILL", "请填写不重复的 Skill 名称、使用条件和内容，并检查长度")
 			return
 		}
 		names[strings.ToLower(name)] = true
@@ -447,7 +457,10 @@ func werewolfEventItem(event store.WerewolfEvent, state werewolfState, showPromp
 		if showPrompt && event.Prompt != "" {
 			action := werewolfActionForEvent(event.Type)
 			item["werewolf_soul"] = actor.Prompts.General
-			item["action_skills"] = werewolfSkillsForAction(*actor, action)
+			skills := werewolfSkillsForAction(*actor, action)
+			item["action_skills"] = skills
+			_, item["used_skills"] = parseWerewolfSkillResponse(event.Response, skills)
+			item["skill_selection_reported"] = werewolfSkillMarker.MatchString(event.Response)
 		}
 	}
 	if showPrompt {

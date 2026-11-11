@@ -53,7 +53,7 @@ func TestWerewolfManagersCanControlClassAndRunPrivateDemo(t *testing.T) {
 	if code, body, _ := requestJSON(t, a01, http.MethodGet, "/api/werewolf/prompts", nil); code != 200 || body["prompts"] == nil {
 		t.Fatalf("manager prompts while closed=%d %#v", code, body)
 	}
-	if code, _, raw := requestJSON(t, a01, http.MethodPut, "/api/werewolf/prompts", map[string]any{"general": "演示 Soul：逐条核查证据。", "skills": []map[string]any{{"name": "查验发言强者", "when_to_use": "夜间查验时", "content": "查验 Skill：优先核查发言最强者。", "role": "seer", "action": "check", "enabled": true}}}); code != 200 {
+	if code, _, raw := requestJSON(t, a01, http.MethodPut, "/api/werewolf/prompts", map[string]any{"general": "演示 Soul：逐条核查证据。", "skills": []map[string]any{{"name": "查验发言强者", "when_to_use": "夜间查验时", "content": "查验 Skill：优先核查发言最强者。", "enabled": true}}}); code != 200 {
 		t.Fatalf("save demo design=%d %s", code, raw)
 	}
 	if code, body, _ := requestJSON(t, a01, http.MethodPut, "/api/werewolf/control", map[string]bool{"enabled": true}); code != 200 || body["enabled"] != true {
